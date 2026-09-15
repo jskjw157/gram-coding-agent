@@ -1,0 +1,20 @@
+[Unit]
+Description=Gram Coding Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__GRAM_AGENT_USER__
+WorkingDirectory=__GRAM_AGENT_REPO_ROOT__
+Environment=NODE_ENV=production
+Environment=GRAM_AGENT_STATE_DIR=__GRAM_AGENT_STATE_DIR__
+Environment=GRAM_AGENT_SECRET_DIR=__GRAM_AGENT_SECRET_DIR__
+ExecStart=/usr/bin/env node __GRAM_AGENT_REPO_ROOT__/apps/agent/dist/main.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
