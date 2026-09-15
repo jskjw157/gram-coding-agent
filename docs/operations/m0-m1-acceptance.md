@@ -8,7 +8,7 @@ This record follows the approved M0–M1 implementation plan. It distinguishes a
 
 ## 1. Automated repository verification — PASS
 
-Latest acceptance run: GitHub Actions `34951441568`.
+Latest branch-head acceptance run: GitHub Actions `34951697070`.
 
 The following steps completed successfully on Node 24 with the frozen pnpm lockfile:
 
@@ -26,7 +26,8 @@ Earlier component-level RED→GREEN evidence is recorded on the corresponding Gi
 
 Acceptance test: `tests/ops/m1-security-acceptance.test.ts`.
 
-Verified by GitHub Actions run `34951441568`:
+Dedicated matrix evidence: GitHub Actions run `34951441568`.
+The same test remains in the suite that passed at the final branch head in `34951697070`.
 
 | Invariant | Expected | Result |
 | --- | --- | --- |
