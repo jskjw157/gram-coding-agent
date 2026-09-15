@@ -1,0 +1,26 @@
+name: bootstrap-lockfile
+on:
+  pull_request:
+    paths:
+      - package.json
+      - pnpm-workspace.yaml
+      - .github/workflows/bootstrap-lockfile.yml
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install --lockfile-only --no-frozen-lockfile
+      - name: Emit lockfile for bootstrap recovery
+        run: |
+          echo 'LOCKFILE_BASE64_BEGIN'
+          base64 -w0 pnpm-lock.yaml
+          echo
+          echo 'LOCKFILE_BASE64_END'
