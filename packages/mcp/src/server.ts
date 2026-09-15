@@ -66,12 +66,30 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       response.end('Bad Request');
       return;
     }
+    if (!validateHost(request, response)) return;
+
+    if (request.url === '/healthz') {
+      void Promise.resolve(options.health ? options.health() : { status: 'healthy' })
+        .then((health) => {
+          if (response.writableEnded) return;
+          response.statusCode = 200;
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify(health));
+        })
+        .catch(() => {
+          if (response.writableEnded) return;
+          response.statusCode = 503;
+          response.setHeader('content-type', 'application/json');
+          response.end(JSON.stringify({ status: 'degraded' }));
+        });
+      return;
+    }
+
     if (request.url !== '/mcp') {
       response.statusCode = 404;
       response.end('Not Found');
       return;
     }
-    if (!validateHost(request, response)) return;
 
     const header = request.headers['x-gram-agent-auth'];
     const supplied = typeof header === 'string' ? header : undefined;
