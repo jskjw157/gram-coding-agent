@@ -56,6 +56,11 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       response.end('Not Found');
       return;
     }
+    if (request.method === undefined) {
+      response.statusCode = 400;
+      response.end('Bad Request');
+      return;
+    }
     if (!validateHost(request, response)) return;
 
     const header = request.headers['x-gram-agent-auth'];
@@ -67,17 +72,13 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       return;
     }
 
-    void (async () => {
-      try {
-        await nodeHandler(request, response);
-      } catch {
-        if (!response.headersSent) {
-          response.statusCode = 500;
-          response.setHeader('content-type', 'application/json');
-        }
-        if (!response.writableEnded) response.end(JSON.stringify({ error: 'Internal Server Error' }));
+    void nodeHandler(request, response).catch(() => {
+      if (!response.headersSent) {
+        response.statusCode = 500;
+        response.setHeader('content-type', 'application/json');
       }
-    })();
+      if (!response.writableEnded) response.end(JSON.stringify({ error: 'Internal Server Error' }));
+    });
   });
 
   await new Promise<void>((resolve, reject) => {
