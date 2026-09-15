@@ -3,10 +3,17 @@ set -euo pipefail
 
 PROJECT_TITLE='Gram Coding Agent — Engineering'
 API_VERSION='2026-03-10'
+BACKLOG_FILE="${BACKLOG_FILE:-scripts/github-backlog.json}"
+MODE="${1:---bootstrap}"
 
 log() { printf '[github-backlog] %s\n' "$*" >&2; }
 die() { printf '[github-backlog] ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"; }
+
+case "$MODE" in
+  --bootstrap|--sync-status) ;;
+  *) die "unsupported mode: $MODE (expected --bootstrap or --sync-status)" ;;
+esac
 
 need gh
 need jq
@@ -18,6 +25,69 @@ REPO="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
 OWNER="${REPO%%/*}"
 REPO_NAME="${REPO#*/}"
 [[ -n "$OWNER" && -n "$REPO_NAME" && "$OWNER" != "$REPO_NAME" ]] || die "invalid repository: $REPO"
+[[ -f "$BACKLOG_FILE" ]] || die "approved backlog manifest not found: $BACKLOG_FILE"
+
+python3 - "$BACKLOG_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+data = json.loads(path.read_text())
+if data.get('version') != 1:
+    raise SystemExit('backlog manifest version must be 1')
+issues = data.get('issues')
+if not isinstance(issues, list) or len(issues) != 130:
+    raise SystemExit('backlog manifest must contain exactly 130 issues')
+numbers = [item.get('number') for item in issues]
+if numbers != list(range(1, 131)):
+    raise SystemExit('backlog manifest issue numbers must be contiguous #1-#130')
+titles = [item.get('title') for item in issues]
+if any(not isinstance(title, str) or not title.strip() for title in titles):
+    raise SystemExit('every backlog issue requires a non-empty title')
+if len(set(titles)) != len(titles):
+    raise SystemExit('backlog issue titles must be unique')
+if any(not isinstance(item.get('body'), str) for item in issues):
+    raise SystemExit('every backlog issue requires a string body')
+PY
+
+declare -A ACTUAL_NUMBER
+declare -A ACTUAL_URL
+
+manifest_issue_json() {
+  local logical="$1"
+  jq -c --argjson n "$logical" '.issues[] | select(.number == $n)' "$BACKLOG_FILE"
+}
+
+materialize_issues() {
+  local existing logical item title body matches count url actual
+  existing="$(gh issue list --repo "$REPO" --state all --limit 500 --json number,title,body,url)"
+
+  for logical in $(seq 1 130); do
+    item="$(manifest_issue_json "$logical")"
+    [[ -n "$item" ]] || die "manifest entry #$logical missing"
+    title="$(jq -r .title <<<"$item")"
+    body="$(jq -r .body <<<"$item")"
+    matches="$(jq -c --arg title "$title" '[.[] | select(.title == $title)]' <<<"$existing")"
+    count="$(jq 'length' <<<"$matches")"
+
+    if [[ "$count" == '0' ]]; then
+      url="$(gh issue create --repo "$REPO" --title "$title" --body "$body")"
+      actual="${url##*/}"
+      [[ "$actual" =~ ^[0-9]+$ ]] || die "could not determine created issue number for: $title"
+      existing="$(jq -c --argjson number "$actual" --arg title "$title" --arg body "$body" --arg url "$url" \
+        '. + [{number:$number,title:$title,body:$body,url:$url}]' <<<"$existing")"
+      log "created backlog item $logical as issue #$actual: $title"
+    elif [[ "$count" == '1' ]]; then
+      actual="$(jq -r '.[0].number' <<<"$matches")"
+      url="$(jq -r '.[0].url' <<<"$matches")"
+      log "reused backlog item $logical as issue #$actual: $title"
+    else
+      die "multiple issues have approved backlog title: $title"
+    fi
+
+    ACTUAL_NUMBER[$logical]="$actual"
+    ACTUAL_URL[$logical]="$url"
+  done
+}
 
 ensure_label() {
   local name="$1" color="$2" description="$3"
@@ -36,7 +106,10 @@ ensure_milestone() {
 }
 
 ensure_project() {
-  local number
+  local number output
+  if ! gh project list --owner "$OWNER" --format json --limit 1 >/dev/null 2>&1; then
+    die "GitHub CLI token cannot access Projects; run: gh auth refresh -s project"
+  fi
   number="$(gh project list --owner "$OWNER" --format json --jq ".projects[] | select(.title == \"$PROJECT_TITLE\") | .number" | head -n1)"
   if [[ -z "$number" ]]; then
     number="$(gh project create --owner "$OWNER" --title "$PROJECT_TITLE" --format json --jq .number)"
@@ -94,12 +167,12 @@ PY
 }
 
 issue_milestone_title() {
-  local n="$1"
-  if (( n <= 12 )); then printf '%s\n' 'M0 — Architecture & Repository Foundation'
-  elif (( n <= 36 )); then printf '%s\n' 'M1 — Secure Agent Runtime'
-  elif (( n <= 77 )); then printf '%s\n' 'M2 — First End-to-End Coding Task'
-  elif (( n <= 97 )); then printf '%s\n' 'M3 — Reliability & Recovery'
-  elif (( n <= 112 )); then printf '%s\n' 'M4 — Windows Integration & Developer UX'
+  local logical="$1"
+  if (( logical <= 12 )); then printf '%s\n' 'M0 — Architecture & Repository Foundation'
+  elif (( logical <= 36 )); then printf '%s\n' 'M1 — Secure Agent Runtime'
+  elif (( logical <= 77 )); then printf '%s\n' 'M2 — First End-to-End Coding Task'
+  elif (( logical <= 97 )); then printf '%s\n' 'M3 — Reliability & Recovery'
+  elif (( logical <= 112 )); then printf '%s\n' 'M4 — Windows Integration & Developer UX'
   else printf '%s\n' 'M5 — Hardening & Production Readiness'
   fi
 }
@@ -166,28 +239,40 @@ set_project_field() {
   gh project item-edit "$project_number" --owner "$OWNER" --url "$url" --field "$field" --value "$value" >/dev/null
 }
 
+project_has_url() {
+  local url="$1"
+  jq -e --arg url "$url" '.items[]? | select(.content.url == $url)' <<<"$PROJECT_ITEMS_JSON" >/dev/null
+}
+
 ensure_project_item() {
   local project_number="$1" url="$2" output
-  if ! output="$(gh project item-add "$project_number" --owner "$OWNER" --url "$url" --format json 2>&1)"; then
-    grep -qiE 'already|exists|added' <<<"$output" || die "failed to add project item $url: $output"
+  if project_has_url "$url"; then
+    printf '%s\n' existing
+    return 0
   fi
+  if ! output="$(gh project item-add "$project_number" --owner "$OWNER" --url "$url" --format json 2>&1)"; then
+    die "failed to add project item $url: $output"
+  fi
+  printf '%s\n' new
 }
 
 sync_issue() {
-  local n="$1" json title body url milestone parent deps meta priority area risk milestone_code size
-  json="$(gh api -H "X-GitHub-Api-Version: $API_VERSION" "repos/$REPO/issues/$n")"
-  title="$(jq -r .title <<<"$json")"
-  body="$(jq -r '.body // ""' <<<"$json")"
-  url="$(jq -r .html_url <<<"$json")"
-  milestone="$(issue_milestone_title "$n")"
+  local logical="$1" actual item body url title milestone parent_logical parent_actual deps blocker_logical blocker_actual
+  local meta priority area risk milestone_code size item_state
+  actual="${ACTUAL_NUMBER[$logical]}"
+  item="$(manifest_issue_json "$logical")"
+  title="$(jq -r .title <<<"$item")"
+  body="$(jq -r .body <<<"$item")"
+  url="${ACTUAL_URL[$logical]}"
+  milestone="$(issue_milestone_title "$logical")"
 
-  gh issue edit "$n" --repo "$REPO" --milestone "$milestone" >/dev/null
-  ensure_project_item "$PROJECT_NUMBER" "$url"
+  gh issue edit "$actual" --repo "$REPO" --milestone "$milestone" >/dev/null
+  item_state="$(ensure_project_item "$PROJECT_NUMBER" "$url")"
 
-  if [[ "$n" =~ ^(1|13|37|78|98|113)$ ]]; then
-    gh issue edit "$n" --repo "$REPO" --add-label 'type:epic' >/dev/null
-  elif (( n >= 7 && n <= 12 )); then
-    gh issue edit "$n" --repo "$REPO" --add-label 'type:docs' >/dev/null
+  if [[ "$logical" =~ ^(1|13|37|78|98|113)$ ]]; then
+    gh issue edit "$actual" --repo "$REPO" --add-label 'type:epic' >/dev/null
+  elif (( logical >= 7 && logical <= 12 )); then
+    gh issue edit "$actual" --repo "$REPO" --add-label 'type:docs' >/dev/null
   fi
 
   meta="$(extract_meta "$body")"
@@ -200,22 +285,33 @@ sync_issue() {
     set_project_field "$PROJECT_NUMBER" "$url" 'Size' "$size"
   fi
 
-  if (( n >= 7 && n <= 12 )); then
+  if (( logical >= 7 && logical <= 12 )); then
     set_project_field "$PROJECT_NUMBER" "$url" 'Status' 'Done'
-    gh issue close "$n" --repo "$REPO" --reason completed >/dev/null 2>&1 || true
-  else
+    gh issue close "$actual" --repo "$REPO" --reason completed >/dev/null 2>&1 || true
+  elif [[ "$item_state" == new ]]; then
     set_project_field "$PROJECT_NUMBER" "$url" 'Status' 'Backlog'
   fi
 
-  parent="$(extract_parent "$body")"
-  [[ -z "$parent" ]] || ensure_sub_issue "$parent" "$n"
-  deps="$(extract_dependencies "$body")"
-  for blocker in $deps; do ensure_blocked_by "$n" "$blocker"; done
+  parent_logical="$(extract_parent "$body")"
+  if [[ -n "$parent_logical" ]]; then
+    parent_actual="${ACTUAL_NUMBER[$parent_logical]:-}"
+    [[ -n "$parent_actual" ]] || die "unknown parent backlog item #$parent_logical for logical #$logical"
+    ensure_sub_issue "$parent_actual" "$actual"
+  fi
 
-  log "synced #$n $title"
+  deps="$(extract_dependencies "$body")"
+  for blocker_logical in $deps; do
+    blocker_actual="${ACTUAL_NUMBER[$blocker_logical]:-}"
+    [[ -n "$blocker_actual" ]] || die "unknown dependency backlog item #$blocker_logical for logical #$logical"
+    ensure_blocked_by "$actual" "$blocker_actual"
+  done
+
+  log "synced backlog #$logical -> issue #$actual: $title"
 }
 
 log "repository: $REPO"
+log "mode: $MODE"
+materialize_issues
 
 ensure_label 'type:epic' '5319E7' 'Epic / parent work item'
 ensure_label 'type:feature' '1D76DB' 'Feature implementation'
@@ -242,16 +338,9 @@ ensure_single_select_field "$PROJECT_NUMBER" 'Area' 'Core,MCP,Security,Task,Git,
 ensure_single_select_field "$PROJECT_NUMBER" 'Risk' 'Low,Medium,High,Critical'
 ensure_single_select_field "$PROJECT_NUMBER" 'Milestone' 'M0,M1,M2,M3,M4,M5'
 ensure_single_select_field "$PROJECT_NUMBER" 'Size' 'XS,S,M,L,XL'
+PROJECT_ITEMS_JSON="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 500)"
+readonly PROJECT_ITEMS_JSON
 
-# The approved backlog is materialized as issues #1-#130. Fail loudly rather than
-# silently creating out-of-order issue numbers; missing items must be recreated by title
-# from the approved plan before relationships are synchronized.
-for n in $(seq 1 130); do
-  if ! gh api -H "X-GitHub-Api-Version: $API_VERSION" "repos/$REPO/issues/$n" >/dev/null 2>&1; then
-    die "approved backlog issue #$n is missing; recreate it from the approved implementation plan before rerunning"
-  fi
-done
+for logical in $(seq 1 130); do sync_issue "$logical"; done
 
-for n in $(seq 1 130); do sync_issue "$n"; done
-
-log "synchronized labels, M0-M5 milestones, project fields/items, sub-issues, dependencies, and design Done state"
+log "synchronized manifest-backed issues, labels, M0-M5 milestones, project fields/items, sub-issues, dependencies, and design Done state"
