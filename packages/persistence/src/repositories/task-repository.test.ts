@@ -24,7 +24,10 @@ function openMigrated(path: string) {
 
 afterEach(() => {
   while (openDbs.length) openDbs.pop()?.close();
-  while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  let dir: string | undefined;
+  while ((dir = tempDirs.pop()) !== undefined) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 describe('SQLite persistence foundation', () => {
@@ -42,11 +45,6 @@ describe('SQLite persistence foundation', () => {
       ),
     );
 
-    expect(tables).toEqual(
-      expect.objectContaining({
-        has: expect.any(Function),
-      }),
-    );
     for (const table of [
       'tasks',
       'task_steps',
