@@ -1,0 +1,26 @@
+# Gram Coding Agent secure MCP tunnel configuration.
+# Required runtime references are supplied by /etc/gram-coding-agent/tunnel-runtime.env:
+#   CONTROL_PLANE_TUNNEL_ID
+#   CONTROL_PLANE_API_KEY
+#   GRAM_MCP_INTERNAL_SECRET_FILE
+#
+# CONTROL_PLANE_API_KEY must be a Restricted runtime API key with Tunnels Read + Use.
+# The tunnel ID is intentionally supplied through CONTROL_PLANE_TUNNEL_ID so this file
+# can be rendered once without embedding deployment-specific tunnel metadata.
+config_version: 1
+
+control_plane:
+  api_key: env:CONTROL_PLANE_API_KEY
+
+mcp:
+  server_urls:
+    - channel: main
+      url: http://127.0.0.1:3847/mcp
+  extra_headers:
+    X-Gram-Agent-Auth: file:__GRAM_MCP_INTERNAL_SECRET_FILE__
+
+health:
+  listen_addr: 127.0.0.1:8080
+
+admin_ui:
+  open_browser: false
