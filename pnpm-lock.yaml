@@ -30,6 +30,34 @@ importers:
         specifier: latest
         version: 5.0.0(@types/node@26.5.1)(vite@8.3.0(@types/node@26.5.1))
 
+  apps/agent:
+    dependencies:
+      '@gram/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@gram/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
+      '@gram/observability':
+        specifier: workspace:*
+        version: link:../../packages/observability
+      '@gram/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
+      '@gram/policy':
+        specifier: workspace:*
+        version: link:../../packages/policy
+      '@gram/secrets':
+        specifier: workspace:*
+        version: link:../../packages/secrets
+    devDependencies:
+      typescript:
+        specifier: ^6.0.0
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.0(@types/node@26.5.1)(vite@8.3.0(@types/node@26.5.1))
+
   packages/domain:
     dependencies:
       uuid:
@@ -51,6 +79,19 @@ importers:
       '@modelcontextprotocol/server':
         specifier: ^2.0.0
         version: 2.0.0
+    devDependencies:
+      typescript:
+        specifier: ^6.0.0
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.0(@types/node@26.5.1)(vite@8.3.0(@types/node@26.5.1))
+
+  packages/observability:
+    dependencies:
+      '@gram/secrets':
+        specifier: workspace:*
+        version: link:../secrets
     devDependencies:
       typescript:
         specifier: ^6.0.0
