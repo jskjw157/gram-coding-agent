@@ -1,0 +1,655 @@
+{
+  "version": 1,
+  "issues": [
+    {
+      "number": 1,
+      "title": "M0 Epic — Architecture & Repository Foundation",
+      "body": "Parent epic for M0 — Architecture & Repository Foundation.\n\nSource of truth:\n- `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`\n- `docs/superpowers/plans/2026-09-15-m0-m1-foundation-secure-runtime.md`\n\nScope: repository/project foundation, monorepo baseline, CI baseline, repository operating rules, backlog bootstrap, and synchronization of the already-approved architecture design records.\n\nPlanned child work: #2–#12 once materialized.\n\nProject metadata target: Status=Backlog, Priority=P0, Area=Core, Risk=Medium, Milestone=M0, Size=L."
+    },
+    {
+      "number": 2,
+      "title": "Create private repository and establish default main branch",
+      "body": "M0 implementation record derived from M0–M1 Task 1 Step 1.\n\nParent: #1\nDepends on: none\n\nAcceptance:\n- repository `jskjw157/gram-coding-agent` exists\n- visibility is Private\n- default branch is `main`\n- owner has admin/push access\n\nCurrent evidence: repository exists and is private with default `main`; this issue will be closed after repository bootstrap documentation is committed.\n\nTarget metadata: Priority=P0, Area=GitHub, Risk=Low, Milestone=M0, Size=XS."
+    },
+    {
+      "number": 3,
+      "title": "Bootstrap pnpm TypeScript monorepo baseline",
+      "body": "M0 implementation work derived from M0–M1 Task 1 Steps 2–3.\n\nParent: #1\nDepends on: #2\n\nScope:\n- root `package.json`\n- `pnpm-workspace.yaml`\n- `tsconfig.base.json`\n- `eslint.config.mjs`\n- `prettier.config.mjs`\n- `vitest.workspace.ts`\n\nAcceptance: root workspace exposes `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build` according to the approved implementation plan.\n\nTarget metadata: Priority=P0, Area=Core, Risk=Low, Milestone=M0, Size=S."
+    },
+    {
+      "number": 4,
+      "title": "Add CI baseline for lint, typecheck, test, and build",
+      "body": "M0 implementation work derived from M0–M1 Task 1 Step 4.\n\nParent: #1\nDepends on: #3\n\nScope: `.github/workflows/ci.yml` using Node 24 and pnpm 10, running install with frozen lockfile followed by lint, typecheck, test, and build.\n\nAcceptance: CI workflow is present on pull requests and pushes to `main`.\n\nTarget metadata: Priority=P0, Area=Ops, Risk=Medium, Milestone=M0, Size=XS."
+    },
+    {
+      "number": 5,
+      "title": "Add repository operating instructions and contribution templates",
+      "body": "M0 implementation work derived from M0–M1 Task 1 Step 5 and file map.\n\nParent: #1\nDepends on: #3\n\nScope:\n- `AGENTS.md`\n- `.github/pull_request_template.md`\n- `.github/ISSUE_TEMPLATE/config.yml`\n\nMandatory rules include TDD, approved package boundaries, no generic Windows exec API, loopback-only MCP, OpenAI tunnel-client only, secret isolation, lock-free PR/CI observation, and remote push confirmation before lock release.\n\nTarget metadata: Priority=P0, Area=Core, Risk=Medium, Milestone=M0, Size=XS."
+    },
+    {
+      "number": 6,
+      "title": "Create idempotent GitHub backlog bootstrap tooling",
+      "body": "M0 implementation work derived from M0–M1 Task 1 Step 6.\n\nParent: #1\nDepends on: #2\n\nScope: `scripts/github-backlog.sh` using `gh api`, `gh issue`, `gh project`/GraphQL to synchronize milestones, project fields/items, epic and implementation issues, and architecture design-completion records.\n\nHard requirement: reruns must reuse existing milestones/issues by title and must not duplicate them.\n\nTarget metadata: Priority=P0, Area=GitHub, Risk=Medium, Milestone=M0, Size=M."
+    },
+    {
+      "number": 7,
+      "title": "Write complete architecture specification",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done\n\nThis design work is already complete. Source of truth is the approved architecture specification:\n`docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`\n\nDo not reopen this as a new architecture exercise. Implementation changes are tracked separately."
+    },
+    {
+      "number": 8,
+      "title": "Define SQLite schema and migrations",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done (design)\n\nThe approved architecture specification already defines the SQLite persistence model, WAL/foreign-key requirements, core tables, task identity, and transaction boundaries.\n\nSource of truth: `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`.\n\nImplementation/migration code remains tracked separately in M1."
+    },
+    {
+      "number": 9,
+      "title": "Define MCP tool contracts",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done (design)\n\nThe approved architecture specification already defines the v1 MCP surface and task-scoped API direction.\n\nSource of truth: `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`.\n\nImplementation of concrete MCP tools remains tracked in M1/M2."
+    },
+    {
+      "number": 10,
+      "title": "Define Policy Engine rule specification",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done (design)\n\nThe approved architecture specification already defines ALLOW / NEEDS_APPROVAL / DENY semantics, parsing/normalization requirements, Windows shell policy, protected-branch rules, and approval binding.\n\nSource of truth: `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`.\n\nImplementation remains tracked separately in M1."
+    },
+    {
+      "number": 11,
+      "title": "Define task state machine",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done (design)\n\nThe approved architecture specification already defines the primary and exceptional Task states plus the first vertical-slice logical steps and recovery direction.\n\nSource of truth: `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`.\n\nState-transition implementation remains tracked in later implementation issues."
+    },
+    {
+      "number": 12,
+      "title": "Define vertical-slice acceptance criteria",
+      "body": "M0 design-completion record.\n\nParent: #1\nStatus intent: Done (design)\n\nThe approved architecture specification already defines the v0.1.0 Definition of Done and the critical lock boundary: remote push confirmation before lock release; PR creation and CI observation after release; CI repair reacquires the lock.\n\nSource of truth: `docs/superpowers/specs/2026-09-15-gram-coding-agent-design.md`.\n\nExecutable acceptance implementation remains tracked in M2."
+    },
+    {
+      "number": 13,
+      "title": "M1 Epic — Secure Agent Runtime",
+      "body": "Parent epic for M1 — Secure Agent Runtime.\n\nSource: M0–M1 Foundation & Secure Runtime plan, Tasks 2–9.\n\nChildren: #14–#36 as materialized below.\nTarget: Status=Backlog, Priority=P0, Area=Security/Core, Risk=High, Milestone=M1, Size=XL."
+    },
+    {
+      "number": 14,
+      "title": "Implement domain primitives and Task identity contracts",
+      "body": "M1 implementation issue from M0–M1 Task 2.\nParent: #13\nDepends on: #3\nScope: `@gram/domain` TaskId/TaskStatus/PublishMode, UUIDv7 generation, display sequence formatting, explicit task transition map, PolicyDecision contracts.\nTarget metadata: P0 / Core / Medium / M1 / M."
+    },
+    {
+      "number": 15,
+      "title": "Verify UUIDv7 identity and human display sequence behavior",
+      "body": "M1 test issue derived from Task 2 TDD steps.\nParent: #14\nDepends on: #14\nAcceptance: RFC9562 UUIDv7 format test and stable `TASK-000201` formatting test are written RED first, then pass after implementation.\nTarget metadata: P0 / Task / Low / M1 / S."
+    },
+    {
+      "number": 16,
+      "title": "Enforce explicit Task state transition contracts",
+      "body": "M1 domain sub-issue derived from Task 2.\nParent: #14\nDepends on: #14\nScope: explicit transition map plus `canTransitionTaskStatus`; arbitrary string transitions are forbidden.\nTarget metadata: P0 / Task / Medium / M1 / S."
+    },
+    {
+      "number": 17,
+      "title": "Create SQLite schema, migrator, and persistence repositories",
+      "body": "M1 implementation issue from M0–M1 Task 3.\nParent: #13\nDepends on: #14\nScope: better-sqlite3 open/migrate layer, all approved core tables, task repository, audit repository, WAL and foreign keys.\nTarget metadata: P0 / Core / High / M1 / L."
+    },
+    {
+      "number": 18,
+      "title": "Guarantee atomic Task sequence allocation and guarded transitions",
+      "body": "M1 persistence sub-issue from Task 3.\nParent: #17\nDepends on: #17\nAcceptance: interleaved repository instances allocate unique contiguous sequences; guarded status update throws on concurrent transition mismatch.\nTarget metadata: P0 / Task / High / M1 / M."
+    },
+    {
+      "number": 19,
+      "title": "Add secret providers and in-memory redaction",
+      "body": "M1 implementation issue from M0–M1 Task 4.\nParent: #13\nDepends on: #17\nScope: SecretProvider lease interface, file-backed provider, SecretRedactor, non-secret config example.\nTarget metadata: P0 / Security / High / M1 / M."
+    },
+    {
+      "number": 20,
+      "title": "Enforce strict secret-file permissions and no generic secret read surface",
+      "body": "M1 security sub-issue from Task 4.\nParent: #19\nDepends on: #19\nAcceptance: secrets live below `~/.config/gram-coding-agent/secrets/`, require mode 0600 or stricter, are redacted before all sinks, and no public/MCP secret-read interface exists.\nTarget metadata: P0 / Security / Critical / M1 / S."
+    },
+    {
+      "number": 21,
+      "title": "Implement authenticated loopback-only MCP server",
+      "body": "M1 implementation issue from M0–M1 Task 5.\nParent: #13\nDepends on: #19\nScope: `@gram/mcp` auth/server package, ephemeral-port auth tests, loopback-only HTTP listener, temporary `agent_health` tool.\nTarget metadata: P0 / MCP / Critical / M1 / L."
+    },
+    {
+      "number": 22,
+      "title": "Enforce timing-safe MCP auth and loopback bind restrictions",
+      "body": "M1 security sub-issue from Task 5.\nParent: #21\nDepends on: #21\nAcceptance: missing/wrong secret returns 401, constant-time comparison is used, supplied credentials are never logged, and non-loopback hosts such as `0.0.0.0` are rejected.\nTarget metadata: P0 / Security / Critical / M1 / S."
+    },
+    {
+      "number": 23,
+      "title": "Implement Policy Engine v1 and approval boundary",
+      "body": "M1 implementation issue from M0–M1 Task 6.\nParent: #13\nDepends on: #16, #17\nScope: normalized operations, ALLOW/NEEDS_APPROVAL/DENY evaluation, command parsing, risk classification, approval service.\nTarget metadata: P0 / Security / Critical / M1 / L."
+    },
+    {
+      "number": 24,
+      "title": "Parse shell composition and apply highest-risk classification",
+      "body": "M1 Policy Engine sub-issue from Task 6.\nParent: #23\nDepends on: #23\nAcceptance: pipelines, `&&`, `||`, `;`, subshells and executable invocations are normalized separately; overall decision is the maximum contained risk. Destructive path-resolution uncertainty is never auto-ALLOW.\nTarget metadata: P0 / Security / Critical / M1 / M."
+    },
+    {
+      "number": 25,
+      "title": "Bind approvals to task-scoped SHA-256 operation hashes",
+      "body": "M1 approval security sub-issue from Task 6.\nParent: #23\nDepends on: #24\nAcceptance: approval hash covers normalized operation type, executable, arguments, canonical targets and Task ID; approval reuse with a different hash is rejected.\nTarget metadata: P0 / Security / Critical / M1 / S."
+    },
+    {
+      "number": 26,
+      "title": "Add observability and application composition root",
+      "body": "M1 implementation issue from M0–M1 Task 7.\nParent: #13\nDepends on: #17, #19, #21, #23\nScope: structured logger, health service, `apps/agent` composition root, config/database/repository/policy/MCP wiring.\nTarget metadata: P0 / Ops / Medium / M1 / L."
+    },
+    {
+      "number": 27,
+      "title": "Implement secret-safe logging and graceful runtime shutdown",
+      "body": "M1 runtime sub-issue from Task 7.\nParent: #26\nDepends on: #19, #26\nAcceptance: recursive metadata redaction occurs before serialization; SIGTERM/SIGINT stop MCP intake, timers, HTTP server and SQLite in the approved order.\nTarget metadata: P0 / Ops / High / M1 / M."
+    },
+    {
+      "number": 28,
+      "title": "Install OpenAI tunnel-client as the sole MCP tunnel",
+      "body": "M1 implementation issue from M0–M1 Task 8.\nParent: #13\nDepends on: #21, #26\nScope: tunnel-client example config, operational docs, runtime-only restricted credential model. No alternative ChatGPT MCP tunnel provider.\nTarget metadata: P0 / MCP / Critical / M1 / M."
+    },
+    {
+      "number": 29,
+      "title": "Add systemd units with restricted tunnel runtime credentials",
+      "body": "M1 runtime sub-issue from Task 8.\nParent: #28\nDepends on: #26, #28\nScope: `gram-coding-agent.service`, `openai-mcp-tunnel.service`, restart behavior, service ordering and runtime secret references.\nHard rule: no `OPENAI_ADMIN_KEY` in long-running units.\nTarget metadata: P0 / Ops / Critical / M1 / M."
+    },
+    {
+      "number": 30,
+      "title": "Create idempotent WSL bootstrap for agent runtime",
+      "body": "M1 implementation sub-issue from Task 8.\nParent: #28\nDepends on: #29\nScope: verify WSL/systemd, Node 24 and pnpm; create agent/secrets directories; generate internal MCP secret if absent; install/reload service units without creating or requesting an OpenAI Admin key.\nTarget metadata: P0 / Ops / High / M1 / M."
+    },
+    {
+      "number": 31,
+      "title": "Verify tunnel-client doctor and service startup acceptance",
+      "body": "M1 Task 8 acceptance sub-issue.\nParent: #28\nDepends on: #29, #30\nAcceptance on target Gram: `tunnel-client --version`, `tunnel-client doctor --config ... --explain`, and both systemd service status checks succeed.\nTarget metadata: P0 / MCP / High / M1 / S."
+    },
+    {
+      "number": 32,
+      "title": "Validate M0–M1 acceptance and synchronize backlog status",
+      "body": "M1 implementation issue from M0–M1 Task 9.\nParent: #13\nDepends on: #14–#31\nScope: complete local verification, security acceptance matrix, target WSL runtime checks, acceptance record, evidence-driven backlog synchronization.\nTarget metadata: P0 / Ops / High / M1 / M."
+    },
+    {
+      "number": 33,
+      "title": "Run M1 security acceptance matrix",
+      "body": "M1 acceptance sub-issue from Task 9 Step 2.\nParent: #32\nDepends on: #22, #23, #25\nMust prove: raw PowerShell/pwsh/cmd => NEEDS_APPROVAL; `rm -rf /` and protected force push => DENY; missing/wrong MCP secret => 401; loopback bind => PASS.\nTarget metadata: P0 / Security / Critical / M1 / S."
+    },
+    {
+      "number": 34,
+      "title": "Verify M1 runtime on target WSL2",
+      "body": "M1 acceptance sub-issue from Task 9 Step 3.\nParent: #32\nDepends on: #29, #30, #31\nAcceptance: both systemd services are active and `http://127.0.0.1:3847/healthz` succeeds on the target Gram.\nTarget metadata: P0 / Ops / High / M1 / S."
+    },
+    {
+      "number": 35,
+      "title": "Synchronize M0–M1 backlog state only from recorded evidence",
+      "body": "M1 backlog synchronization sub-issue from Task 9 Step 4.\nParent: #32\nDepends on: #33, #34\nAcceptance: architecture issues #7–#12 are Done; implementation issues are marked Done only when their acceptance checks have evidence.\nTarget metadata: P0 / GitHub / Medium / M1 / S."
+    },
+    {
+      "number": 36,
+      "title": "M1 review gate — verify secure runtime before M2",
+      "body": "M1 review-gate issue derived from the plan index review gates.\nParent: #13\nDepends on: #32–#35\nAcceptance: plan-specific checks plus root lint/typecheck/test/build are evidenced, architecture invariants are explicitly reviewed, acceptance evidence is recorded, and code review is requested before M2 proceeds.\nTarget metadata: P0 / Ops / High / M1 / S."
+    },
+    {
+      "number": 37,
+      "title": "M2 Epic — First End-to-End Coding Task",
+      "body": "Parent epic for M2 — First End-to-End Coding Task.\n\nCritical path: task_create → repo_resolve → repo_lock → fetch → worktree → instructions/analyze/modify → verification → diff/secret scan → commit → push → remote SHA confirm → LOCK RELEASE → PR → CI observe WITHOUT LOCK → COMPLETED.\n\nChildren: #38–#77.\nTarget: P0 / Task / Critical / M2 / XL."
+    },
+    {
+      "number": 38,
+      "title": "Implement task_create application flow",
+      "body": "M2 Task 1 implementation issue.\nParent: #37\nDepends on: #36\nScope: `TaskService.create`, state-machine integration, persistent QUEUED Task with UUIDv7 + display sequence.\nTarget: P0 / Task / High / M2 / M."
+    },
+    {
+      "number": 39,
+      "title": "Expose task_create MCP contract and audit event",
+      "body": "M2 Task 1 sub-issue.\nParent: #38\nDepends on: #38\nAcceptance: strict Zod schema accepts repo/goal/publishMode, defaults to PULL_REQUEST, records `TASK_CREATED` without secrets, and treats DIRECT_MAIN only as a declared request pending policy.\nTarget: P0 / MCP / High / M2 / S."
+    },
+    {
+      "number": 40,
+      "title": "Implement repository registry resolution and onboarding",
+      "body": "M2 Task 2 implementation issue.\nParent: #37\nDepends on: #39\nScope: registry-first `RepoResolver`, GitHub discovery fallback, repository inspection/profile persistence, immutable GitHub repository ID.\nTarget: P0 / GitHub / High / M2 / L."
+    },
+    {
+      "number": 41,
+      "title": "Profile repository toolchain and declared verification commands",
+      "body": "M2 Task 2 sub-issue.\nParent: #40\nDepends on: #40\nAcceptance: detect pnpm/npm/yarn/Gradle/Maven/Python in approved priority order and persist only repo-declared lint/test/build/dev commands; never invent absent commands.\nTarget: P1 / Verify / Medium / M2 / S."
+    },
+    {
+      "number": 42,
+      "title": "Onboard unknown repositories through Git service and canonical base checkout",
+      "body": "M2 Task 2 sub-issue.\nParent: #40\nDepends on: #41\nAcceptance: canonical base path is `~/workspace/github/<owner>/<name>`; missing clones/fetches go through Git service port, not direct shell calls from repo-registry.\nTarget: P1 / Workspace / Medium / M2 / M."
+    },
+    {
+      "number": 43,
+      "title": "Implement exclusive Repo Lock with SQLite lease",
+      "body": "M2 Task 3 implementation issue.\nParent: #37\nDepends on: #42\nScope: `RepoLockService.acquire`, heartbeat/release, unique repo lease, same-repo exclusion and different-repo concurrency.\nDefaults: TTL 60s, heartbeat 15s.\nTarget: P0 / Task / Critical / M2 / L."
+    },
+    {
+      "number": 44,
+      "title": "Pair Repo Lock lease with atomic filesystem lock",
+      "body": "M2 Task 3 safety sub-issue.\nParent: #43\nDepends on: #43\nAcceptance: lock file uses exclusive `wx`, records task UUID/PID/boot ID/timestamp, and acquisition rolls back the other side if either SQLite or filesystem lock fails.\nTarget: P0 / Security / Critical / M2 / M."
+    },
+    {
+      "number": 45,
+      "title": "Implement Repo Lock heartbeat and failure-to-recovery behavior",
+      "body": "M2 Task 3 sub-issue.\nParent: #43\nDepends on: #44\nAcceptance: heartbeat updates every 15s with 60s lease horizon; heartbeat failure moves the task toward recovery instead of silently continuing mutation.\nTarget: P0 / Task / High / M2 / S."
+    },
+    {
+      "number": 46,
+      "title": "Implement task worktree isolation",
+      "body": "M2 Task 4 implementation issue.\nParent: #37\nDepends on: #45\nScope: `WorktreeService.create`, task path `~/.gram-agent/worktrees/<repo-id>/<task-uuid>`, branch naming, persistence only after Git confirms creation.\nTarget: P0 / Workspace / High / M2 / L."
+    },
+    {
+      "number": 47,
+      "title": "Implement dynamic WSL-to-Windows path mapping",
+      "body": "M2 Task 4 sub-issue.\nParent: #46\nDepends on: #46\nAcceptance: path mapping delegates to injected `wslpath`; no hard-coded distro name or username.\nTarget: P1 / Windows / Low / M2 / S."
+    },
+    {
+      "number": 48,
+      "title": "Define task branch naming and worktree persistence rules",
+      "body": "M2 Task 4 sub-issue.\nParent: #46\nDepends on: #46\nAcceptance: `fix|feat|chore/task-<display-seq>-<slug>` is human-readable only; UUID remains identity; base ref is normally `origin/<defaultBranch>`.\nTarget: P1 / Git / Low / M2 / S."
+    },
+    {
+      "number": 49,
+      "title": "Implement policy-gated command execution",
+      "body": "M2 Task 5 implementation issue.\nParent: #37\nDepends on: #23, #48\nScope: `CommandRunner.run`, policy-before-spawn enforcement, task/cwd/category context, approval gating.\nTarget: P0 / Security / Critical / M2 / L."
+    },
+    {
+      "number": 50,
+      "title": "Isolate command environment and capture redacted evidence",
+      "body": "M2 Task 5 security sub-issue.\nParent: #49\nDepends on: #19, #49\nAcceptance: raw commands receive a minimal safe env allowlist; GitHub/tunnel/internal-MCP credentials are excluded; stdout/stderr are redacted before storage.\nTarget: P0 / Security / Critical / M2 / M."
+    },
+    {
+      "number": 51,
+      "title": "Persist command lifecycle without long SQLite transactions",
+      "body": "M2 Task 5 evidence sub-issue.\nParent: #49\nDepends on: #50\nAcceptance: insert RUNNING → commit → spawn → capture logs → persist exit/result; logs stored per task under `~/.gram-agent/logs/tasks/<uuid>/`.\nTarget: P1 / Verify / High / M2 / M."
+    },
+    {
+      "number": 52,
+      "title": "Implement task-scoped code and file operations",
+      "body": "M2 Task 6 implementation issue.\nParent: #37\nDepends on: #46, #49\nScope: workspace path guard, code search, file read/write, exact patch, diff operations, MCP code tools using taskId + relativePath.\nTarget: P0 / Workspace / High / M2 / L."
+    },
+    {
+      "number": 53,
+      "title": "Block path traversal and symlink escape from task worktrees",
+      "body": "M2 Task 6 security sub-issue.\nParent: #52\nDepends on: #52\nAcceptance: reject `../../`, absolute paths, and symlinks escaping the canonical task workspace; nearest existing parent canonicalization protects new-file writes.\nTarget: P0 / Security / Critical / M2 / M."
+    },
+    {
+      "number": 54,
+      "title": "Implement audited code search and exact patch semantics",
+      "body": "M2 Task 6 sub-issue.\nParent: #52\nDepends on: #53\nAcceptance: code search uses `rg --json` through CommandRunner and returns structured matches; patch fails when expected old hunk is absent instead of silently applying elsewhere.\nTarget: P1 / Workspace / Medium / M2 / M."
+    },
+    {
+      "number": 55,
+      "title": "Implement safe local Git operations through CommandRunner",
+      "body": "M2 Task 7 implementation issue.\nParent: #37\nDepends on: #49, #54\nScope: fetch/status/diff/branch/commit/remote operations via CommandRunner only; no direct child_process bypass from `@gram/git`.\nTarget: P0 / Git / High / M2 / L."
+    },
+    {
+      "number": 56,
+      "title": "Stage and commit only explicitly intended paths",
+      "body": "M2 Task 7 Git safety sub-issue.\nParent: #55\nDepends on: #55\nAcceptance: `commitExplicit` stages named paths only; unrelated files remain outside the commit.\nTarget: P0 / Git / High / M2 / S."
+    },
+    {
+      "number": 57,
+      "title": "Confirm remote SHA and enforce protected-branch publishing policy",
+      "body": "M2 Task 7 critical sub-issue.\nParent: #55\nDepends on: #56\nAcceptance: `ls-remote`/ref confirmation must match expected SHA; protected normal direct push without explicit grant is NEEDS_APPROVAL; protected force/force-with-lease is DENY.\nTarget: P0 / Git / Critical / M2 / M."
+    },
+    {
+      "number": 58,
+      "title": "Implement change-aware Verification Engine",
+      "body": "M2 Task 8 implementation issue.\nParent: #37\nDepends on: #41, #51, #54\nScope: change classifier, verification planner/runner, evidence collector and completion evaluator.\nTarget: P0 / Verify / High / M2 / L."
+    },
+    {
+      "number": 59,
+      "title": "Test verification planning matrix and completion gates",
+      "body": "M2 Task 8 test sub-issue.\nParent: #58\nDepends on: #58\nAcceptance: verification depends on change class and repo-declared capabilities; required FAIL/SKIPPED blocks completion; optional NOT_REQUIRED does not.\nTarget: P0 / Verify / High / M2 / M."
+    },
+    {
+      "number": 60,
+      "title": "Persist verification evidence, diff review, and secret scan gates",
+      "body": "M2 Task 8 evidence sub-issue.\nParent: #58\nDepends on: #59\nAcceptance: PASS requires actual command/non-command evidence; secret scan is always required before publishing; diff review confirms changed paths and no unintended staged/untracked files.\nTarget: P0 / Verify / Critical / M2 / M."
+    },
+    {
+      "number": 61,
+      "title": "Implement Publishing Service with confirmed-push lock release",
+      "body": "M2 Task 9 implementation issue.\nParent: #37\nDepends on: #57, #60\nScope: verification gate, explicit commit, push, remote confirmation, persistence and RepoLockLease release.\nTarget: P0 / Git / Critical / M2 / L."
+    },
+    {
+      "number": 62,
+      "title": "Prove remote confirmation precedes Repo Lock release",
+      "body": "M2 Task 9 critical invariant test.\nParent: #61\nDepends on: #61\nRequired exact ordering: `verification.assertPassed`, `commit`, `push`, `remote.confirm`, `lock.release`. Lock release must not occur when confirmation is false.\nTarget: P0 / Security / Critical / M2 / S."
+    },
+    {
+      "number": 63,
+      "title": "Create or reuse GitHub PR without Repo Lock",
+      "body": "M2 Task 10 implementation issue.\nParent: #37\nDepends on: #62\nConstraint: `packages/github/**` must not depend on `@gram/repo-lock`; PR ensure operation is idempotent by head/base.\nTarget: P0 / GitHub / High / M2 / M."
+    },
+    {
+      "number": 64,
+      "title": "Build PR metadata strictly from persisted task evidence",
+      "body": "M2 Task 10 sub-issue.\nParent: #63\nDepends on: #60, #63\nAcceptance: PR body includes summary/root cause when known/changed paths/exact verification statuses and never claims a check passed without persisted PASS evidence; GitHub credential injection remains adapter-scoped.\nTarget: P1 / GitHub / High / M2 / M."
+    },
+    {
+      "number": 65,
+      "title": "Implement lock-free CI Observer",
+      "body": "M2 Task 11 implementation issue.\nParent: #37\nDepends on: #63\nConstraint: ChecksService has no RepoLock dependency and CI observation runs while repository lock remains released.\nTarget: P0 / GitHub / Critical / M2 / M."
+    },
+    {
+      "number": 66,
+      "title": "Persist CI state and complete tasks only after required checks pass",
+      "body": "M2 Task 11 sub-issue.\nParent: #65\nDepends on: #65\nScope: persist provider/check IDs, names, status/conclusion/times/URL; bounded polling may stop/resume; required success transitions task to COMPLETED, failure records outcome without mutation.\nTarget: P0 / Verify / High / M2 / M."
+    },
+    {
+      "number": 67,
+      "title": "Reacquire Repo Lock for CI repair mutation cycles",
+      "body": "M2 Task 12 implementation issue.\nParent: #37\nDepends on: #65, #66\nRequired repair order: ci.failed → lock.acquire → workspace.reuse → repair → verify → push → remote.confirm → lock.release → ci.observe. No code modification before lock reacquisition.\nTarget: P0 / Task / Critical / M2 / M."
+    },
+    {
+      "number": 68,
+      "title": "Wire complete TaskRunner vertical slice",
+      "body": "M2 Task 13 implementation issue.\nParent: #37\nDepends on: #38–#67\nScope: orchestration through ports only from repo.resolve through lock-free CI completion; no direct shell/SQL inside TaskRunner.\nTarget: P0 / Task / Critical / M2 / XL."
+    },
+    {
+      "number": 69,
+      "title": "Test TaskRunner failure behavior at every Repo Lock boundary",
+      "body": "M2 Task 13 test sub-issue.\nParent: #68\nDepends on: #68\nMust prove: verification/push/remote-confirm failure does not prematurely release mutation control; PR failure occurs after release; CI timeout keeps lock released.\nTarget: P0 / Task / Critical / M2 / M."
+    },
+    {
+      "number": 70,
+      "title": "Wire real services into agent scheduler composition root",
+      "body": "M2 Task 13 sub-issue.\nParent: #68\nDepends on: #69\nAcceptance: `apps/agent/src/main.ts` constructs real ports and schedules QUEUED tasks; same-repo serialization is RepoLock-driven, not a global single-task queue.\nTarget: P0 / Core / High / M2 / M."
+    },
+    {
+      "number": 71,
+      "title": "Add deterministic vertical-slice E2E fixture",
+      "body": "M2 Task 14 implementation/test issue.\nParent: #37\nDepends on: #70\nScope: local bare remote, canonical clone, small TypeScript fixture with lint/test/build and a failing target behavior.\nTarget: P0 / Verify / High / M2 / L."
+    },
+    {
+      "number": 72,
+      "title": "Add fake GitHub PR and checks lifecycle for E2E",
+      "body": "M2 Task 14 sub-issue.\nParent: #71\nDepends on: #71\nScope: minimal fake API for find/create PR and required-check transitions pending → success.\nTarget: P1 / GitHub / Medium / M2 / M."
+    },
+    {
+      "number": 73,
+      "title": "Prove full task_create-to-COMPLETED E2E invariants",
+      "body": "M2 Task 14 critical acceptance sub-issue.\nParent: #71\nDepends on: #72\nMust prove UUIDv7+sequence, lock acquisition, isolated worktree, evidence, commit/push/remote confirm, lock absent before PR, lock-free CI observation, final COMPLETED.\nTarget: P0 / Verify / Critical / M2 / M."
+    },
+    {
+      "number": 74,
+      "title": "Document authenticated M2 live GitHub smoke test",
+      "body": "M2 Task 14 sub-issue.\nParent: #71\nDepends on: #73\nScope: `docs/operations/m2-live-smoke.md` procedure against a disposable private repo; credentials must never be committed; required before v0.1.0 tag.\nTarget: P1 / Ops / Medium / M2 / S."
+    },
+    {
+      "number": 75,
+      "title": "Expose complete M2 read/control MCP surface",
+      "body": "M2 Task 15 implementation issue.\nParent: #37\nDepends on: #68\nScope: task/repo/git/verification/github/agent read and status tools needed for ChatGPT-only operation; handlers delegate to application services only.\nTarget: P0 / MCP / High / M2 / L."
+    },
+    {
+      "number": 76,
+      "title": "Verify M2 MCP tool contracts and task-scoped read authorization",
+      "body": "M2 Task 15 test sub-issue.\nParent: #75\nDepends on: #75\nAcceptance: every required tool name is registered with strict schemas; read/status tools require no mutation lock; task logs/evidence cannot cross task boundaries or expose secrets.\nTarget: P0 / MCP / High / M2 / M."
+    },
+    {
+      "number": 77,
+      "title": "M2 live acceptance and v0.1.0 release gate",
+      "body": "M2 Task 16 release-gate issue.\nParent: #37\nDepends on: #73, #74, #76\nAcceptance: one real disposable private-repo task modifies code, verifies, pushes, confirms remote SHA, releases lock before PR, observes CI lock-free, reaches COMPLETED, and records timestamps proving `remote_confirm <= lock_release < pr_create <= ci_observe`.\nTarget: P0 / Ops / Critical / M2 / L."
+    },
+    {
+      "number": 78,
+      "title": "M3 Epic — Reliability & Recovery",
+      "body": "Parent epic for M3 — Reliability & Recovery.\nScope: boot/process lock identity, stale-lock assessment, workspace/task recovery, bounded retry, resumable steps, janitor retention, crash/concurrency tests, task controls, v0.2.0 acceptance.\nChildren: #79–#97.\nTarget: P0 / Task / Critical / M3 / XL."
+    },
+    {
+      "number": 79,
+      "title": "Persist process and boot identity for Repo Lock ownership",
+      "body": "M3 Task 1. Parent: #78. Depends on: #43–#45. Store PID + `/proc/.../boot_id` with lock ownership; fail closed if boot ID unavailable during mutation acquisition. Target: P0 / Task / High / M3 / S."
+    },
+    {
+      "number": 80,
+      "title": "Assess stale Repo Locks without mutating state",
+      "body": "M3 Task 2. Parent: #78. Depends on: #79. Classify ACTIVE, ACTIVE_BUT_HEARTBEAT_LATE, STALE, CONFLICT, STALE_AFTER_REBOOT; assessment itself never deletes lock state. Target: P0 / Task / Critical / M3 / M."
+    },
+    {
+      "number": 81,
+      "title": "Assess interrupted task workspace Git state",
+      "body": "M3 Task 3. Parent: #78. Depends on: #46, #55. Read-only assessment covers existence, branch, HEAD, dirty/unpushed state, index lock, expected task branch match; never auto-reset/clean/delete. Target: P0 / Workspace / High / M3 / M."
+    },
+    {
+      "number": 82,
+      "title": "Recover interrupted tasks before normal scheduling",
+      "body": "M3 Task 4. Parent: #78. Depends on: #80, #81. Boot order: open DB/logging → recovery coordinator → scheduler → mutating MCP. Resume only from consistent durable state; otherwise NEEDS_RECOVERY and repo may be blocked. Target: P0 / Task / Critical / M3 / L."
+    },
+    {
+      "number": 83,
+      "title": "Persist recovery audit events and recovering health state",
+      "body": "M3 Task 4 sub-issue. Parent: #82. Depends on: #82. Emit TASK_RECOVERY_STARTED/TASK_RESUMED/TASK_NEEDS_RECOVERY/STALE_LOCK_RECLAIMED/REPO_RECOVERY_BLOCKED and expose `recovering` health until coordinator finishes. Target: P1 / Ops / High / M3 / S."
+    },
+    {
+      "number": 84,
+      "title": "Classify task failures for deterministic recovery policy",
+      "body": "M3 Task 5. Parent: #78. Depends on: #68. Implement TRANSIENT / CODE_FAILURE / ENVIRONMENT_FAILURE / POLICY_BLOCK / EXTERNAL_FAILURE / UNKNOWN classification for GitHub/network/compiler/test/tool/policy/CI failures. Target: P0 / Task / High / M3 / M."
+    },
+    {
+      "number": 85,
+      "title": "Implement bounded automatic retry policy for transient failures",
+      "body": "M3 Task 5 sub-issue. Parent: #84. Depends on: #84. Default transient schedule: 1s, 3s, 10s, then stop; CODE_FAILURE never blindly reruns identical work. Scheduler owns delays outside DB transactions. Target: P0 / Task / High / M3 / S."
+    },
+    {
+      "number": 86,
+      "title": "Implement resumable Step execution from durable outputs",
+      "body": "M3 Task 6. Parent: #78. Depends on: #82, #85. Reuse proven worktrees/PRs/remote SHA/verification PASS for unchanged HEAD; resume is based on durable artifacts, not step number alone. Target: P0 / Task / Critical / M3 / L."
+    },
+    {
+      "number": 87,
+      "title": "Persist resume tokens from branch, SHA, PR, and verification evidence",
+      "body": "M3 Task 6 sub-issue. Parent: #86. Depends on: #86. Validate durable branch/HEAD/remote SHA/PR/evidence before skipping completed work during recovery. Target: P1 / Task / High / M3 / M."
+    },
+    {
+      "number": 88,
+      "title": "Fail unsafe or ambiguous resumes into NEEDS_RECOVERY",
+      "body": "M3 Task 6 safety sub-issue. Parent: #86. Depends on: #87. Unexpected HEAD, unknown non-idempotent command outcome, or stale approval hash must become NEEDS_RECOVERY instead of guessing. Target: P0 / Security / Critical / M3 / S."
+    },
+    {
+      "number": 89,
+      "title": "Implement Workspace Janitor with retention safeguards",
+      "body": "M3 Task 7. Parent: #78. Depends on: #81, #82. Retention: COMPLETED clean worktrees 24h; FAILED/CANCELLED clean worktrees 7d; NEEDS_APPROVAL, NEEDS_RECOVERY, dirty, or unpushed worktrees are protected from auto-delete. Target: P0 / Workspace / High / M3 / M."
+    },
+    {
+      "number": 90,
+      "title": "Apply disk-pressure cleanup with immediate safety revalidation",
+      "body": "M3 Task 7 sub-issue. Parent: #89. Depends on: #89. At <80% no early cleanup; 80–89% prioritize oldest eligible completed worktrees; >=90% clear eligible completed worktrees/safe caches aggressively. Re-run git status, unpushed-commit and task-state checks immediately before removal. Target: P1 / Workspace / High / M3 / M."
+    },
+    {
+      "number": 91,
+      "title": "Prove different repositories mutate concurrently",
+      "body": "M3 Task 8 concurrency test. Parent: #78. Depends on: #43, #68. Use barriers in two fake mutation tasks and prove both may enter RUNNING simultaneously when immutable GitHub repo IDs differ. Target: P0 / Task / High / M3 / S."
+    },
+    {
+      "number": 92,
+      "title": "Prove same-repository mutations serialize",
+      "body": "M3 Task 8 concurrency test. Parent: #78. Depends on: #43, #62, #68. Start two tasks for one repo and prove the second remains WAITING_REPO_LOCK until the first task's remote-confirmed push causes lock release. Target: P0 / Task / Critical / M3 / S."
+    },
+    {
+      "number": 93,
+      "title": "Recover safely after process death while Repo Lock is held",
+      "body": "M3 Task 8 crash integration test. Parent: #78. Depends on: #79, #80, #82. Persist active task+lease, simulate worker death/new boot identity, run recovery, and prove stale-lock reconciliation never creates conflicting same-repo mutation. Target: P0 / Task / Critical / M3 / M."
+    },
+    {
+      "number": 94,
+      "title": "Recover after confirmed push without reacquiring lock for PR or CI",
+      "body": "M3 Task 8 restart integration test. Parent: #78. Depends on: #62, #63, #65, #82. Simulate restart after remote SHA confirmation but before PR creation; recovery must create/reuse PR and observe CI without reacquiring the repository mutation lock. Target: P0 / Task / Critical / M3 / M."
+    },
+    {
+      "number": 95,
+      "title": "Expose safe task cancellation over MCP",
+      "body": "M3 Task 9. Parent: #78. Depends on: #86. Implement `task_cancel` SAFE/CLEANUP modes. SAFE stops task-owned active process and preserves worktree/logs/dirty/unpushed state; CLEANUP refuses dirty, unpushed, NEEDS_RECOVERY, or otherwise unsafe removal. Target: P0 / MCP / High / M3 / M."
+    },
+    {
+      "number": 96,
+      "title": "Expose task resume, retry, and approval controls",
+      "body": "M3 Task 9. Parent: #78. Depends on: #85, #86, #95. Implement `task_resume`, `task_retry`, `task_approve` with strict schemas. Resume delegates to durable Step recovery; retry follows RetryPolicy; approval succeeds only when taskId, approvalId, and recomputed operationHash all match. Target: P0 / MCP / Critical / M3 / M."
+    },
+    {
+      "number": 97,
+      "title": "M3 acceptance and v0.2.0 release gate",
+      "body": "M3 Task 10 release gate. Parent: #78. Depends on: #89–#96. Run lint/typecheck/test/build/test:e2e/test:concurrency; perform one target-WSL restart acceptance proving safe resume or NEEDS_RECOVERY without conflicting same-repo mutation; record evidence before tagging v0.2.0. Target: P0 / Ops / Critical / M3 / L."
+    },
+    {
+      "number": 98,
+      "title": "M4 Epic — Windows Integration & Developer UX",
+      "body": "Parent epic for M4 — Windows Integration & Developer UX.\nScope: typed Windows path/open/reveal/clipboard, Windows escape security, typed WSL system operations, GitHub conveniences, explicit direct-main grants, target Windows/WSL acceptance.\nNo generic `windows_exec` API; raw Windows executables remain approval-gated.\nChildren: #99–#112.\nTarget: P1 / Windows / High / M4 / XL."
+    },
+    {
+      "number": 99,
+      "title": "Implement Windows path conversion service",
+      "body": "M4 Task 1. Parent: #98. Depends on: #47. `windows_path` delegates to `wslpath` with direct argv, rejects NUL/unbounded paths, and never hard-codes distro or username. Typed operation is ALLOW. Target: P1 / Windows / Medium / M4 / S."
+    },
+    {
+      "number": 100,
+      "title": "Implement typed Windows open and reveal operations",
+      "body": "M4 Task 2. Parent: #98. Depends on: #99. Expose fixed `windows_open`/`windows_reveal` operations for validated paths and http/https URLs only; user input cannot select executable, script, or arbitrary switches. Target: P1 / Windows / High / M4 / M."
+    },
+    {
+      "number": 101,
+      "title": "Implement text-only secret-redacted Windows clipboard operations",
+      "body": "M4 Task 3. Parent: #98. Depends on: #100, #19. Expose text-only read/write with 1 MiB maximum, secret-redacted MCP output, audit metadata containing counts/results but not clipboard body; any PowerShell adapter uses fixed code and data via stdin/safe channel. Target: P1 / Windows / High / M4 / M."
+    },
+    {
+      "number": 102,
+      "title": "Add Windows escape security regression suite",
+      "body": "M4 Task 4. Parent: #98. Depends on: #99–#101. Test quotes, semicolons, newlines, ampersands, pipes, PowerShell subexpressions, `%COMSPEC%`, `$(...)`, UNC paths and disallowed URI schemes; strict schemas reject command/executable/args/script fields. Target: P0 / Security / Critical / M4 / M."
+    },
+    {
+      "number": 103,
+      "title": "Keep raw Windows executables approval-gated",
+      "body": "M4 security invariant from Tasks 3–4. Parent: #98. Depends on: #23, #102. Regression: `powershell.exe`, `pwsh.exe`, `cmd.exe`, and arbitrary Windows executables such as `notepad.exe` remain NEEDS_APPROVAL while typed path/open/reveal/clipboard tools remain constrained ALLOW operations. Target: P0 / Security / Critical / M4 / S."
+    },
+    {
+      "number": 104,
+      "title": "Implement typed WSL package operations",
+      "body": "M4 Task 5. Parent: #98. Depends on: #49, #103. `PackageService.installApt` validates Debian package names and uses direct argv through Policy; apt install may ALLOW while purge/removal remains NEEDS_APPROVAL. Target: P1 / Ops / High / M4 / M."
+    },
+    {
+      "number": 105,
+      "title": "Implement task-owned process management",
+      "body": "M4 Task 5 sub-issue. Parent: #98. Depends on: #49, #104. Expose typed process status/start/stop only for task-owned processes; use explicit service APIs rather than broad privileged shell shortcuts. Target: P1 / Ops / Medium / M4 / S."
+    },
+    {
+      "number": 106,
+      "title": "Implement typed systemd service operations",
+      "body": "M4 Task 5 sub-issue. Parent: #98. Depends on: #49, #104. Typed status/start/stop/restart for known services; systemctl enable/disable remains NEEDS_APPROVAL and unit-file editing is not hidden by this service. Target: P1 / Ops / High / M4 / M."
+    },
+    {
+      "number": 107,
+      "title": "Extend GitHub issue and PR convenience operations",
+      "body": "M4 Task 6. Parent: #98. Depends on: #63, #75. Add issue read/search and PR get/update/comment with adapter-scoped GitHub credentials, structured results, idempotency where possible, and audit events. Target: P1 / GitHub / Medium / M4 / M."
+    },
+    {
+      "number": 108,
+      "title": "Add lock-free GitHub Actions and check-log retrieval",
+      "body": "M4 Task 6 sub-issue. Parent: #98. Depends on: #65, #107. Actions/check log retrieval is read-only, uses scoped GitHub credentials, and has no repository mutation lock dependency. Target: P1 / GitHub / Medium / M4 / S."
+    },
+    {
+      "number": 109,
+      "title": "Implement explicit task-scoped direct-main grants",
+      "body": "M4 Task 7. Parent: #98. Depends on: #38, #57, #61. Persist an explicit task capability derived from the user's DIRECT_MAIN request; never infer it from agent preference. Default PULL_REQUEST tasks still require approval for normal protected-main push. Target: P1 / Git / Critical / M4 / M."
+    },
+    {
+      "number": 110,
+      "title": "Verify direct-main policy and remote-confirm lock-release invariant",
+      "body": "M4 Task 7 policy test. Parent: #98. Depends on: #109. PULL_REQUEST task → normal push main NEEDS_APPROVAL; DIRECT_MAIN with explicit grant → normal push main ALLOW; either mode force push or protected-branch delete DENY. Direct-main still follows verify → commit → push → remote confirm → lock release. Target: P0 / Security / Critical / M4 / S."
+    },
+    {
+      "number": 111,
+      "title": "Run M4 target Windows and WSL acceptance",
+      "body": "M4 Task 8 acceptance. Parent: #98. Depends on: #102–#110. Run lint/typecheck/test/build/test:security, then on target machine verify live worktree path conversion, approved open/reveal, non-secret clipboard round trip, and raw PowerShell still pauses for approval. Target: P0 / Windows / High / M4 / M."
+    },
+    {
+      "number": 112,
+      "title": "M4 review gate and Windows integration acceptance record",
+      "body": "M4 review gate. Parent: #98. Depends on: #111. Record `docs/operations/m4-windows-acceptance.md`, explicitly review no-windows_exec/raw-shell approval invariants and complete code review before M5 work is treated as accepted. Target: P1 / Ops / High / M4 / S."
+    },
+    {
+      "number": 113,
+      "title": "M5 Epic — Hardening & Production Readiness",
+      "body": "Parent epic for M5 — Hardening & Production Readiness.\nScope: explicit threat model, security invariant suite, parser/path/symlink/secret/MCP hardening, bounded logging, SQLite integrity/backup, diagnostics, upgrade/rollback, operator runbooks, full v1.0 acceptance.\nChildren: #114–#130.\nTarget: P0 / Security / Critical / M5 / XL."
+    },
+    {
+      "number": 114,
+      "title": "Write explicit threat model",
+      "body": "M5 Task 1. Parent: #113. Depends on: #112. Document trust boundaries across ChatGPT/connector, OpenAI tunnel, local tunnel-client, loopback MCP, Task/Policy Engines, process boundary, WSL/Windows, GitHub and secret store, including accidental/malicious command, path escape, repo-script, secret, crash and corruption cases. Target: P0 / Security / High / M5 / M."
+    },
+    {
+      "number": 115,
+      "title": "Define testable security invariant IDs",
+      "body": "M5 Task 1 sub-issue. Parent: #114. Depends on: #114. Convert design invariants into SEC-* identifiers such as SEC-MCP-001 loopback-only, SEC-TUN-001 no runtime admin key, SEC-POL-001 protected force push denied, SEC-WIN-001 raw PowerShell approval, SEC-LOCK-001 lock-free CI. Target: P0 / Security / High / M5 / S."
+    },
+    {
+      "number": 116,
+      "title": "Harden shell parser against command-composition bypass",
+      "body": "M5 Task 2. Parent: #113. Depends on: #24, #115. Test nested/wrapped dangerous commands via `&&`, `;`, `||`, pipelines, subshells, `sh -c`, `bash -c`, `env`, and `sudo`; recursively analyze known wrappers and default unknown command-string wrappers to NEEDS_APPROVAL. Target: P0 / Security / Critical / M5 / M."
+    },
+    {
+      "number": 117,
+      "title": "Harden task filesystem against path traversal",
+      "body": "M5 Task 3. Parent: #113. Depends on: #53, #115. Cover POSIX `..`, repeated separators, absolute paths, `/proc`, `/etc`, `/mnt/c`, and new-file targets whose nearest existing parent leaves the canonical worktree. Target: P0 / Security / Critical / M5 / M."
+    },
+    {
+      "number": 118,
+      "title": "Harden task filesystem against symlink escape",
+      "body": "M5 Task 3 sub-issue. Parent: #113. Depends on: #117. Test symlinks inside worktrees targeting `/etc`, agent secret/config directories, `/mnt/c/Users`, and other task worktrees; task-scoped APIs must deny these escapes. Target: P0 / Security / Critical / M5 / M."
+    },
+    {
+      "number": 119,
+      "title": "Harden raw command environment against credential injection",
+      "body": "M5 Task 4. Parent: #113. Depends on: #50, #115. Seed fake GITHUB_TOKEN, CONTROL_PLANE_API_KEY, GRAM_MCP_INTERNAL_SECRET and OPENAI_ADMIN_KEY and prove raw CommandRunner children exclude them unless a specialized adapter leases a credential; OPENAI_ADMIN_KEY must never exist in the long-running app. Target: P0 / Security / Critical / M5 / M."
+    },
+    {
+      "number": 120,
+      "title": "Prove secrets cannot escape through logs, SQLite, clipboard, GitHub, or MCP",
+      "body": "M5 Task 4 sub-issue. Parent: #113. Depends on: #19, #50, #101, #107, #119. Fake command/clipboard/adapter outputs containing registered secrets must be redacted or omitted before log files, SQLite metadata, audit events and MCP results. Target: P0 / Security / Critical / M5 / M."
+    },
+    {
+      "number": 121,
+      "title": "Harden MCP authentication and tunnel transport configuration",
+      "body": "M5 Task 5. Parent: #113. Depends on: #22, #28–#31, #115. Reject non-loopback hosts and missing/wrong secrets without logging credentials; service/config/bootstrap must contain no OPENAI_ADMIN_KEY; official tunnel-client doctor procedure uses restricted Tunnels Read + Use runtime credentials. Target: P0 / MCP / Critical / M5 / M."
+    },
+    {
+      "number": 122,
+      "title": "Add bounded structured logging and rotation",
+      "body": "M5 Task 6. Parent: #113. Depends on: #27, #120. Redact before write; production defaults: agent log max 25 MiB, retain 10 files; command output max 100 MiB with redacted diagnostic samples and `truncated=true` when bounded. Target: P1 / Ops / High / M5 / M."
+    },
+    {
+      "number": 123,
+      "title": "Add SQLite integrity checking",
+      "body": "M5 Task 7. Parent: #113. Depends on: #17. Healthy database reports ok; corrupted copied fixture reports unhealthy and must prevent normal task scheduling until recovered. Target: P0 / Core / High / M5 / M."
+    },
+    {
+      "number": 124,
+      "title": "Add online-safe state backup and restore",
+      "body": "M5 Task 7 sub-issue. Parent: #113. Depends on: #123. Use SQLite-supported consistent online backup, not an unsafe live `.db` copy; restore stops services, snapshots current state, restores to a new file, runs migrations/integrity, atomically swaps and restarts. Target: P0 / Ops / Critical / M5 / L."
+    },
+    {
+      "number": 125,
+      "title": "Add secret-safe self-diagnostics",
+      "body": "M5 Task 8. Parent: #113. Depends on: #120–#124. Add read-only `agent_diagnostics` covering SQLite integrity, disk/worktree usage, stale locks, loopback MCP, secret configured status, Git/GitHub auth status without tokens, tunnel/systemd status and NEEDS_RECOVERY; never acquire mutation locks or return secret values. Target: P1 / Ops / High / M5 / M."
+    },
+    {
+      "number": 126,
+      "title": "Implement versioned upgrade workflow",
+      "body": "M5 Task 9. Parent: #113. Depends on: #124, #125. Upgrade sequence: verify clean source checkout → backup DB → fetch target tag → frozen install → build/test smoke → stop services → migrations → switch release → start agent → diagnostics → start/confirm tunnel. Preserve failure evidence; no destructive cleanup. Target: P1 / Ops / High / M5 / L."
+    },
+    {
+      "number": 127,
+      "title": "Implement rollback workflow with compatible state backup",
+      "body": "M5 Task 9 sub-issue. Parent: #113. Depends on: #126. Rollback restores the prior source tag and, when migration compatibility requires it, a compatible pre-upgrade state backup; scripts use `set -euo pipefail`, traps and testable dry-run/injected command boundaries. Target: P1 / Ops / Critical / M5 / M."
+    },
+    {
+      "number": 128,
+      "title": "Finish idempotent one-command WSL bootstrap and installation docs",
+      "body": "M5 Task 10. Parent: #113. Depends on: #30, #121, #125. Running bootstrap twice must not rotate existing secrets, duplicate services, destroy state, or unexpectedly reclone repos. Installation docs cover WSL/systemd, Node24/pnpm, build, permissions, GitHub auth, restricted OpenAI tunnel key, internal secret, service startup, tunnel doctor, connector setup and diagnostics. Target: P1 / Ops / High / M5 / L."
+    },
+    {
+      "number": 129,
+      "title": "Document operator and disaster-recovery runbooks",
+      "body": "M5 Task 10 sub-issue. Parent: #113. Depends on: #124–#128. Document Tailscale as administration network only (never ChatGPT MCP transport) plus recovery for agent/tunnel failures, SQLite integrity, stale lock, NEEDS_RECOVERY, credential rotation, broken upgrade and disk/worktree pressure. Target: P1 / Ops / High / M5 / M."
+    },
+    {
+      "number": 130,
+      "title": "Full v1.0 security and production acceptance",
+      "body": "M5 Task 11 final release gate. Parent: #113. Depends on: #114–#129. Run frozen install, lint, typecheck, test, build, e2e, concurrency, security, shellcheck; record every SEC-* invariant, one real E2E task, restart recovery and backup/restore validation, and final diagnostics. Any unresolved High/Critical invariant blocks v1.0.0. Target: P0 / Security / Critical / M5 / XL."
+    }
+  ]
+}
