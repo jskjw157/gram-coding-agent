@@ -1,14 +1,14 @@
 {
   "name": "gram-coding-agent",
   "private": true,
-  "packageManager": "pnpm@10",
+  "packageManager": "pnpm@10.34.5",
   "engines": { "node": ">=24 <25" },
   "scripts": {
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
-    "test": "vitest run --workspace vitest.workspace.ts",
-    "test:watch": "vitest --workspace vitest.workspace.ts"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
