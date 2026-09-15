@@ -1,6 +1,10 @@
-import { createServer, type Server as HttpServer } from 'node:http';
+import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { localhostHostValidation, toNodeHandler } from '@modelcontextprotocol/node';
+import {
+  localhostHostValidation,
+  toNodeHandler,
+  type NodeIncomingMessageLike,
+} from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
 
@@ -16,6 +20,12 @@ export interface RunningMcpServer {
   port: number;
   url: string;
   close(): Promise<void>;
+}
+
+type McpNodeRequest = IncomingMessage & NodeIncomingMessageLike;
+
+function isMcpNodeRequest(request: IncomingMessage): request is McpNodeRequest {
+  return typeof request.method === 'string' && typeof request.url === 'string';
 }
 
 function closeHttpServer(server: HttpServer): Promise<void> {
@@ -51,14 +61,14 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
   const validateHost = localhostHostValidation();
 
   const httpServer = createServer((request, response) => {
+    if (!isMcpNodeRequest(request)) {
+      response.statusCode = 400;
+      response.end('Bad Request');
+      return;
+    }
     if (request.url !== '/mcp') {
       response.statusCode = 404;
       response.end('Not Found');
-      return;
-    }
-    if (request.method === undefined) {
-      response.statusCode = 400;
-      response.end('Bad Request');
       return;
     }
     if (!validateHost(request, response)) return;
