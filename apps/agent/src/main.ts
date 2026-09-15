@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createMcpHttpServer } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
 import { AuditRepository, openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
@@ -106,4 +107,26 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   } finally {
     secretLease.dispose();
   }
+}
+
+function requiredRuntimePath(name: 'GRAM_AGENT_STATE_DIR' | 'GRAM_AGENT_SECRET_DIR'): string {
+  const value = process.env[name];
+  if (value === undefined || value.length === 0) {
+    throw new Error(`${name} must be configured for the agent service`);
+  }
+  return value;
+}
+
+const entryPath = process.argv[1];
+const isDirectExecution = entryPath !== undefined && fileURLToPath(import.meta.url) === resolve(entryPath);
+
+if (isDirectExecution) {
+  void startAgent({
+    stateDirectory: requiredRuntimePath('GRAM_AGENT_STATE_DIR'),
+    secretDirectory: requiredRuntimePath('GRAM_AGENT_SECRET_DIR'),
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : 'unknown startup error';
+    process.stderr.write(`[gram-coding-agent] startup failed: ${message}\n`);
+    process.exitCode = 1;
+  });
 }
