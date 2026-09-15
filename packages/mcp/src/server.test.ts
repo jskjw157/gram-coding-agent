@@ -3,6 +3,18 @@ import { createMcpHttpServer, type RunningMcpServer } from './server.js';
 
 const running: RunningMcpServer[] = [];
 
+function probe(url: string, secret?: string): Promise<Response> {
+  return fetch(`${url}/mcp`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(secret === undefined ? {} : { 'x-gram-agent-auth': secret }),
+    },
+    body: '{}',
+  });
+}
+
 afterEach(async () => {
   while (running.length) await running.pop()?.close();
 });
@@ -22,17 +34,8 @@ describe('authenticated loopback MCP server', () => {
     });
     running.push(server);
 
-    const missing = await fetch(`${server.url}/mcp`);
-    expect(missing.status).toBe(401);
-
-    const wrong = await fetch(`${server.url}/mcp`, {
-      headers: { 'x-gram-agent-auth': 'wrong-secret' },
-    });
-    expect(wrong.status).toBe(401);
-
-    const accepted = await fetch(`${server.url}/mcp`, {
-      headers: { 'x-gram-agent-auth': 'correct-secret' },
-    });
-    expect(accepted.status).not.toBe(401);
+    expect((await probe(server.url)).status).toBe(401);
+    expect((await probe(server.url, 'wrong-secret')).status).toBe(401);
+    expect((await probe(server.url, 'correct-secret')).status).not.toBe(401);
   });
 });
