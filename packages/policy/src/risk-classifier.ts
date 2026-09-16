@@ -23,9 +23,36 @@ function isProtected(branch: string | undefined, context: PolicyContext): boolea
   return protectedBranches.includes(branch);
 }
 
-function gitPushTarget(args: readonly string[]): string | undefined {
+interface GitPushRefspec {
+  raw: string;
+  destination: string | undefined;
+  force: boolean;
+  delete: boolean;
+}
+
+function stripHeadsPrefix(ref: string): string {
+  return ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+}
+
+function parseGitPushRefspec(rawRefspec: string): GitPushRefspec {
+  const force = rawRefspec.startsWith('+');
+  const withoutForce = force ? rawRefspec.slice(1) : rawRefspec;
+  const separator = withoutForce.lastIndexOf(':');
+  const source = separator >= 0 ? withoutForce.slice(0, separator) : withoutForce;
+  const destinationRef = separator >= 0 ? withoutForce.slice(separator + 1) : withoutForce;
+  const destination = destinationRef.length > 0 ? stripHeadsPrefix(destinationRef) : undefined;
+
+  return {
+    raw: rawRefspec,
+    destination,
+    force,
+    delete: separator >= 0 && source.length === 0,
+  };
+}
+
+function gitPushRefspecs(args: readonly string[]): GitPushRefspec[] {
   const positional = args.filter((argument) => !argument.startsWith('-'));
-  return positional[2] ?? positional[1];
+  return positional.slice(2).map(parseGitPushRefspec);
 }
 
 function classifyGit(args: readonly string[], context: PolicyContext): ClassifiedRisk {
@@ -39,21 +66,45 @@ function classifyGit(args: readonly string[], context: PolicyContext): Classifie
     return approve('POL-GIT-CLEAN', 'git clean can irreversibly delete untracked files');
   }
   if (subcommand === 'push') {
-    const target = gitPushTarget(args);
-    const force = args.some((argument) => argument === '-f' || argument === '--force' || argument.startsWith('--force-with-lease'));
-    const deletes = args.includes('--delete') || target?.startsWith(':') === true;
-    const normalizedTarget = target?.startsWith(':') === true ? target.slice(1) : target;
+    const refspecs = gitPushRefspecs(args);
+    const forceByFlag = args.some(
+      (argument) => argument === '-f' || argument === '--force' || argument.startsWith('--force-with-lease'),
+    );
+    const deleteByFlag = args.includes('--delete') || args.includes('-d');
+    const broadPush = args.includes('--all') || args.includes('--mirror');
 
-    if (force && isProtected(normalizedTarget, context)) {
-      return deny('POL-GIT-PROTECTED-FORCE', 'force-pushing a protected branch is forbidden');
+    if (args.includes('--mirror')) {
+      return deny('POL-GIT-MIRROR', 'git push --mirror can overwrite or delete protected branches');
     }
-    if (deletes && isProtected(normalizedTarget, context)) {
-      return deny('POL-GIT-PROTECTED-DELETE', 'deleting a protected branch is forbidden');
+    if (broadPush && forceByFlag) {
+      return deny('POL-GIT-BROAD-FORCE', 'forced broad push can overwrite protected branches');
     }
-    if (isProtected(normalizedTarget, context) && context.directMainGranted !== true) {
+    if (broadPush) {
+      return approve('POL-GIT-BROAD-PUSH', 'broad branch publishing requires approval');
+    }
+    if (refspecs.length === 0) {
+      return approve('POL-GIT-PUSH-UNRESOLVED', 'push destination is not explicit enough to prove it is non-protected');
+    }
+
+    for (const refspec of refspecs) {
+      const protectedDestination = isProtected(refspec.destination, context);
+      if (protectedDestination && (forceByFlag || refspec.force)) {
+        return deny('POL-GIT-PROTECTED-FORCE', 'force-pushing a protected branch is forbidden');
+      }
+      if (protectedDestination && (deleteByFlag || refspec.delete)) {
+        return deny('POL-GIT-PROTECTED-DELETE', 'deleting a protected branch is forbidden');
+      }
+    }
+
+    if (refspecs.some((refspec) => isProtected(refspec.destination, context)) && context.directMainGranted !== true) {
       return approve('POL-GIT-PROTECTED-PUSH', 'protected-branch push needs an explicit task grant');
     }
-    return allow('POL-GIT-PUSH', 'normal non-protected branch publishing is allowed');
+
+    if (deleteByFlag || refspecs.some((refspec) => refspec.delete)) {
+      return approve('POL-GIT-DELETE', 'non-protected branch deletion requires approval');
+    }
+
+    return allow('POL-GIT-PUSH', 'normal explicit non-protected branch publishing is allowed');
   }
 
   if (['status', 'diff', 'log', 'blame', 'fetch', 'pull', 'branch', 'show', 'rev-parse'].includes(subcommand)) {
