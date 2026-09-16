@@ -38,8 +38,21 @@ describe('Policy Engine v1 rule matrix', () => {
     ['rm -rf /', 'DENY'],
     ['git push --force origin main', 'DENY'],
     ['git push --force-with-lease origin main', 'DENY'],
+    ['git push --force origin HEAD:main', 'DENY'],
+    ['git push --force origin HEAD:refs/heads/main', 'DENY'],
+    ['git push origin +HEAD:main', 'DENY'],
   ] as const)('%s -> %s', (command, expected) => {
     expect(decide(command).kind).toBe(expected);
+  });
+
+  it('requires the direct-main grant for protected destinations expressed as refspecs', () => {
+    expect(decide('git push origin HEAD:main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin HEAD:refs/heads/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin HEAD:main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: true,
+    }).kind).toBe('ALLOW');
   });
 
   it('uses the highest risk decision across composed commands', () => {
