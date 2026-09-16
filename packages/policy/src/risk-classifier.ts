@@ -86,6 +86,16 @@ function classifyGit(args: readonly string[], context: PolicyContext): Classifie
       return approve('POL-GIT-PUSH-UNRESOLVED', 'push destination is not explicit enough to prove it is non-protected');
     }
 
+    const wildcardRefspec = refspecs.some((refspec) => refspec.destination?.includes('*') === true);
+    const forceByRefspec = refspecs.some((refspec) => refspec.force);
+    const deleteByRefspec = refspecs.some((refspec) => refspec.delete);
+    if (wildcardRefspec && (forceByFlag || forceByRefspec || deleteByFlag || deleteByRefspec)) {
+      return deny('POL-GIT-WILDCARD-DESTRUCTIVE', 'destructive wildcard push can affect protected branches');
+    }
+    if (wildcardRefspec) {
+      return approve('POL-GIT-WILDCARD-PUSH', 'wildcard branch publishing requires approval');
+    }
+
     for (const refspec of refspecs) {
       const protectedDestination = isProtected(refspec.destination, context);
       if (protectedDestination && (forceByFlag || refspec.force)) {
@@ -100,7 +110,7 @@ function classifyGit(args: readonly string[], context: PolicyContext): Classifie
       return approve('POL-GIT-PROTECTED-PUSH', 'protected-branch push needs an explicit task grant');
     }
 
-    if (deleteByFlag || refspecs.some((refspec) => refspec.delete)) {
+    if (deleteByFlag || deleteByRefspec) {
       return approve('POL-GIT-DELETE', 'non-protected branch deletion requires approval');
     }
 
