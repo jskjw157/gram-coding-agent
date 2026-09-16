@@ -41,6 +41,17 @@ describe('Policy Engine v1 rule matrix', () => {
     ['git push --force origin HEAD:main', 'DENY'],
     ['git push --force origin HEAD:refs/heads/main', 'DENY'],
     ['git push origin +HEAD:main', 'DENY'],
+    ['git push --delete origin main', 'DENY'],
+    ['git push origin :refs/heads/main', 'DENY'],
+    ['git push --force origin feature main', 'DENY'],
+    ['git push origin feature main', 'NEEDS_APPROVAL'],
+    ['git push origin feature', 'ALLOW'],
+    ['git push origin', 'NEEDS_APPROVAL'],
+    ['git push --all origin', 'NEEDS_APPROVAL'],
+    ['git push --force --all origin', 'DENY'],
+    ['git push --mirror origin', 'DENY'],
+    ['git push --force origin refs/heads/*:refs/heads/*', 'DENY'],
+    ['git push origin refs/heads/*:refs/heads/*', 'NEEDS_APPROVAL'],
   ] as const)('%s -> %s', (command, expected) => {
     expect(decide(command).kind).toBe(expected);
   });
