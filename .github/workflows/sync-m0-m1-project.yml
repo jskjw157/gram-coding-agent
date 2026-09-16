@@ -1,0 +1,29 @@
+name: sync-m0-m1-project
+on:
+  pull_request:
+    paths:
+      - 'scripts/github-status-sync.sh'
+      - '.github/workflows/sync-m0-m1-project.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync closed M0-M1 issues to Project Done
+        env:
+          PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          FALLBACK_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [[ -n "${PROJECT_TOKEN:-}" ]]; then
+            export GH_TOKEN="$PROJECT_TOKEN"
+          else
+            export GH_TOKEN="$FALLBACK_TOKEN"
+          fi
+          bash scripts/github-status-sync.sh
