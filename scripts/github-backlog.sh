@@ -112,8 +112,11 @@ ensure_project() {
   fi
   number="$(gh project list --owner "$OWNER" --format json --jq ".projects[] | select(.title == \"$PROJECT_TITLE\") | .number" | head -n1)"
   if [[ -z "$number" ]]; then
-    number="$(gh project create --owner "$OWNER" --title "$PROJECT_TITLE" --format json --jq .number)"
+    if ! number="$(gh project create --owner "$OWNER" --title "$PROJECT_TITLE" --format json --jq .number)"; then
+      die "failed to create GitHub Project; authenticate gh with Projects write access"
+    fi
   fi
+  [[ "$number" =~ ^[0-9]+$ ]] || die "invalid project number for $PROJECT_TITLE: $number"
   gh project edit "$number" --owner "$OWNER" --visibility PRIVATE >/dev/null
   if ! output="$(gh project link "$number" --owner "$OWNER" --repo "$REPO_NAME" 2>&1)"; then
     grep -qiE 'already|exists|linked' <<<"$output" || die "failed to link project: $output"
@@ -233,32 +236,55 @@ ensure_blocked_by() {
   fi
 }
 
+project_item_id_for_url() {
+  local url="$1"
+  jq -r --arg url "$url" '.items[]? | select(.content.url == $url) | .id' <<<"$PROJECT_ITEMS_JSON" | head -n1
+}
+
 set_project_field() {
-  local project_number="$1" url="$2" field="$3" value="$4"
+  local item_id="$1" field="$2" value="$3"
+  local field_json field_id option_id
   [[ -n "$value" ]] || return 0
-  gh project item-edit "$project_number" --owner "$OWNER" --url "$url" --field "$field" --value "$value" >/dev/null
+  [[ -n "$item_id" ]] || die "missing Project item node ID for field $field"
+
+  field_json="$(jq -c --arg field "$field" '.fields[]? | select(.name == $field)' <<<"$PROJECT_FIELDS_JSON" | head -n1)"
+  [[ -n "$field_json" ]] || die "Project field not found: $field"
+  field_id="$(jq -r .id <<<"$field_json")"
+  option_id="$(jq -r --arg value "$value" '.options[]? | select(.name == $value) | .id' <<<"$field_json" | head -n1)"
+  [[ -n "$field_id" && "$field_id" != null ]] || die "Project field node ID missing: $field"
+  [[ -n "$option_id" && "$option_id" != null ]] || die "Project option not found: $field=$value"
+
+  gh project item-edit \
+    --id "$item_id" \
+    --project-id "$PROJECT_ID" \
+    --field-id "$field_id" \
+    --single-select-option-id "$option_id" >/dev/null
 }
 
 project_has_url() {
   local url="$1"
-  jq -e --arg url "$url" '.items[]? | select(.content.url == $url)' <<<"$PROJECT_ITEMS_JSON" >/dev/null
+  [[ -n "$(project_item_id_for_url "$url")" ]]
 }
 
 ensure_project_item() {
-  local project_number="$1" url="$2" output
-  if project_has_url "$url"; then
-    printf '%s\n' existing
+  local project_number="$1" url="$2" item_id
+  item_id="$(project_item_id_for_url "$url")"
+  if [[ -n "$item_id" ]]; then
+    printf 'existing|%s\n' "$item_id"
     return 0
   fi
-  if ! output="$(gh project item-add "$project_number" --owner "$OWNER" --url "$url" --format json 2>&1)"; then
-    die "failed to add project item $url: $output"
-  fi
-  printf '%s\n' new
+
+  gh project item-add "$project_number" --owner "$OWNER" --url "$url" >/dev/null || \
+    die "failed to add project item $url"
+  item_id="$(gh project item-list "$project_number" --owner "$OWNER" --format json --limit 500 \
+    --jq ".items[]? | select(.content.url == \"$url\") | .id" | head -n1)"
+  [[ -n "$item_id" ]] || die "could not resolve Project item node ID after adding $url"
+  printf 'new|%s\n' "$item_id"
 }
 
 sync_issue() {
   local logical="$1" actual item body url title milestone parent_logical parent_actual deps blocker_logical blocker_actual
-  local meta priority area risk milestone_code size item_state
+  local meta priority area risk milestone_code size item_ref item_state item_id
   actual="${ACTUAL_NUMBER[$logical]}"
   item="$(manifest_issue_json "$logical")"
   title="$(jq -r .title <<<"$item")"
@@ -267,7 +293,9 @@ sync_issue() {
   milestone="$(issue_milestone_title "$logical")"
 
   gh issue edit "$actual" --repo "$REPO" --milestone "$milestone" >/dev/null
-  item_state="$(ensure_project_item "$PROJECT_NUMBER" "$url")"
+  item_ref="$(ensure_project_item "$PROJECT_NUMBER" "$url")"
+  IFS='|' read -r item_state item_id <<<"$item_ref"
+  [[ -n "$item_id" ]] || die "Project item node ID missing for $url"
 
   if [[ "$logical" =~ ^(1|13|37|78|98|113)$ ]]; then
     gh issue edit "$actual" --repo "$REPO" --add-label 'type:epic' >/dev/null
@@ -278,18 +306,18 @@ sync_issue() {
   meta="$(extract_meta "$body")"
   if [[ -n "$meta" ]]; then
     IFS='|' read -r priority area risk milestone_code size <<<"$meta"
-    set_project_field "$PROJECT_NUMBER" "$url" 'Priority' "$priority"
-    set_project_field "$PROJECT_NUMBER" "$url" 'Area' "$area"
-    set_project_field "$PROJECT_NUMBER" "$url" 'Risk' "$risk"
-    set_project_field "$PROJECT_NUMBER" "$url" 'Milestone' "$milestone_code"
-    set_project_field "$PROJECT_NUMBER" "$url" 'Size' "$size"
+    set_project_field "$item_id" 'Priority' "$priority"
+    set_project_field "$item_id" 'Area' "$area"
+    set_project_field "$item_id" 'Risk' "$risk"
+    set_project_field "$item_id" 'Milestone' "$milestone_code"
+    set_project_field "$item_id" 'Size' "$size"
   fi
 
   if (( logical >= 7 && logical <= 12 )); then
-    set_project_field "$PROJECT_NUMBER" "$url" 'Status' 'Done'
+    set_project_field "$item_id" 'Status' 'Done'
     gh issue close "$actual" --repo "$REPO" --reason completed >/dev/null 2>&1 || true
   elif [[ "$item_state" == new ]]; then
-    set_project_field "$PROJECT_NUMBER" "$url" 'Status' 'Backlog'
+    set_project_field "$item_id" 'Status' 'Backlog'
   fi
 
   parent_logical="$(extract_parent "$body")"
@@ -338,6 +366,13 @@ ensure_single_select_field "$PROJECT_NUMBER" 'Area' 'Core,MCP,Security,Task,Git,
 ensure_single_select_field "$PROJECT_NUMBER" 'Risk' 'Low,Medium,High,Critical'
 ensure_single_select_field "$PROJECT_NUMBER" 'Milestone' 'M0,M1,M2,M3,M4,M5'
 ensure_single_select_field "$PROJECT_NUMBER" 'Size' 'XS,S,M,L,XL'
+
+PROJECT_ID="$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq .id)"
+[[ -n "$PROJECT_ID" && "$PROJECT_ID" != null ]] || die "Project node ID not found for project #$PROJECT_NUMBER"
+readonly PROJECT_ID
+
+PROJECT_FIELDS_JSON="$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 100)"
+readonly PROJECT_FIELDS_JSON
 PROJECT_ITEMS_JSON="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 500)"
 readonly PROJECT_ITEMS_JSON
 
