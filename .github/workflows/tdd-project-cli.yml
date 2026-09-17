@@ -12,9 +12,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec vitest run tests/ops/github-status-sync-contract.test.ts
+      - name: Assert gh project item-edit uses node IDs
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          for (const file of ['scripts/github-backlog.sh', 'scripts/github-status-sync.sh']) {
+            const source = fs.readFileSync(file, 'utf8');
+            const editLines = source.split('\n').filter((line) => line.includes('gh project item-edit')).join('\n');
+            if (!source.includes('--project-id "$PROJECT_ID"')) throw new Error(`${file}: missing project node id`);
+            if (!source.includes('--field-id "$field_id"')) throw new Error(`${file}: missing field node id`);
+            if (!source.includes('--single-select-option-id "$option_id"')) throw new Error(`${file}: missing option node id`);
+            if (!/gh project item-edit[\\\s]*--id "\$item_id"/.test(source)) throw new Error(`${file}: missing item node id`);
+            for (const forbidden of ['--owner', '--url', '--field ', '--value']) {
+              if (editLines.includes(forbidden)) throw new Error(`${file}: legacy item-edit flag ${forbidden}`);
+            }
+          }
+          NODE
