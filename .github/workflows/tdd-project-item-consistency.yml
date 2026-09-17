@@ -1,0 +1,33 @@
+name: tdd-project-item-consistency
+on:
+  pull_request:
+    paths:
+      - 'scripts/github-backlog.sh'
+      - '.github/workflows/tdd-project-item-consistency.yml'
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Assert Project item resolution retries eventual consistency
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const source = fs.readFileSync('scripts/github-backlog.sh', 'utf8');
+          if (!source.includes('for attempt in $(seq 1 5)')) {
+            throw new Error('missing five-attempt Project item resolution loop');
+          }
+          if (!source.includes('sleep 1')) {
+            throw new Error('missing retry delay for Project item eventual consistency');
+          }
+          if (!source.includes('if [[ -n "$item_id" ]]; then')) {
+            throw new Error('missing early success condition for Project item resolution');
+          }
+          if (!source.includes('could not resolve Project item node ID after adding')) {
+            throw new Error('missing terminal failure after retries');
+          }
+          NODE
