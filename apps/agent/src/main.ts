@@ -6,6 +6,7 @@ import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/o
 import { AuditRepository, openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
+import { TaskService } from '@gram/task-engine';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -41,9 +42,8 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
 
   const taskRepository = new TaskRepository(database);
   const auditRepository = new AuditRepository(database);
+  const taskService = new TaskService(taskRepository, auditRepository);
   const policyEngine = new PolicyEngine();
-  void taskRepository;
-  void auditRepository;
   void policyEngine;
 
   const secretProvider = new FileSecretProvider(options.secretDirectory);
@@ -57,6 +57,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         port,
         internalSecret,
         health: () => healthService.status(),
+        taskCreate: taskService,
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
