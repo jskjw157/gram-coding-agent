@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenAI Secure MCP Tunnel for Gram Coding Agent
+Requires=gram-coding-agent.service
+After=network-online.target gram-coding-agent.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__GRAM_AGENT_USER__
+EnvironmentFile=/etc/gram-coding-agent/tunnel-runtime.env
+ExecStart=/usr/bin/env tunnel-client run --config /etc/gram-coding-agent/tunnel-client.yaml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

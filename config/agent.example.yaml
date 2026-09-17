@@ -1,0 +1,11 @@
+mcp:
+  host: 127.0.0.1
+  port: 3847
+state:
+  database: ~/.gram-agent/state/agent.db
+  logs: ~/.gram-agent/logs
+workspace:
+  baseRepositories: ~/workspace/github
+  worktrees: ~/.gram-agent/worktrees
+policy:
+  protectedBranches: [main, master]
