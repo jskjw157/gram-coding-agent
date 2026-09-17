@@ -99,6 +99,7 @@ readonly field_id option_id
 
 PROJECT_ITEMS_JSON="$(gh_retry project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 500)"
 ISSUES_JSON="$(gh issue list --repo "$REPO" --state all --limit 500 --json number,state,url,title)"
+ENSURE_ITEM_ID=''
 
 project_item_id_for_url() {
   local url="$1"
@@ -125,9 +126,10 @@ resolve_project_item_id_for_issue() {
 
 ensure_project_item() {
   local url="$1" item_id attempt added_json
+  ENSURE_ITEM_ID=''
   item_id="$(project_item_id_for_url "$url")"
   if [[ -n "$item_id" ]]; then
-    printf '%s\n' "$item_id"
+    ENSURE_ITEM_ID="$item_id"
     return 0
   fi
 
@@ -150,7 +152,7 @@ ensure_project_item() {
 
   [[ -n "$item_id" ]] || die "Project item node ID missing after add: $url"
   cache_project_item "$item_id" "$url"
-  printf '%s\n' "$item_id"
+  ENSURE_ITEM_ID="$item_id"
 }
 
 for number in $(seq 1 36); do
@@ -166,7 +168,9 @@ for number in $(seq 1 36); do
     continue
   fi
 
-  item_id="$(ensure_project_item "$url")"
+  ensure_project_item "$url"
+  item_id="$ENSURE_ITEM_ID"
+  [[ -n "$item_id" ]] || die "Project item node ID missing for issue #$number"
 
   gh_retry project item-edit \
     --id "$item_id" \
