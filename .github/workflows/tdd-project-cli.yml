@@ -1,0 +1,20 @@
+name: tdd-project-cli
+on:
+  pull_request:
+    paths:
+      - 'scripts/github-backlog.sh'
+      - 'scripts/github-status-sync.sh'
+      - 'tests/ops/github-status-sync-contract.test.ts'
+      - '.github/workflows/tdd-project-cli.yml'
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run tests/ops/github-status-sync-contract.test.ts
