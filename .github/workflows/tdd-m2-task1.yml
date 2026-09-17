@@ -4,6 +4,8 @@ on:
     branches: [feat/m2-vertical-slice]
     paths:
       - 'packages/task-engine/**'
+      - 'packages/mcp/**'
+      - 'apps/agent/**'
       - '.github/workflows/tdd-m2-task1.yml'
 
 permissions:
@@ -21,17 +23,19 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Refresh lockfile for new workspace package
+      - name: Refresh lockfile for Task 1 workspace changes
         run: |
           pnpm install --lockfile-only --no-frozen-lockfile
           if ! git diff --quiet -- pnpm-lock.yaml; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add pnpm-lock.yaml
-            git commit -m 'chore: update lockfile for task engine'
+            git commit -m 'chore: update lockfile for m2 task1'
             git push origin HEAD:feat/m2-vertical-slice
           fi
       - name: Install frozen workspace
         run: pnpm install --frozen-lockfile
-      - name: Run Task 1 contract
+      - name: Run Task Engine contract
         run: pnpm --filter @gram/task-engine test
+      - name: Run MCP contract
+        run: pnpm --filter @gram/mcp test
