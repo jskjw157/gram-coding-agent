@@ -18,6 +18,8 @@ esac
 need gh
 need jq
 need python3
+need date
+need sleep
 
 gh auth status >/dev/null 2>&1 || die 'GitHub CLI is not authenticated'
 
@@ -26,6 +28,65 @@ OWNER="${REPO%%/*}"
 REPO_NAME="${REPO#*/}"
 [[ -n "$OWNER" && -n "$REPO_NAME" && "$OWNER" != "$REPO_NAME" ]] || die "invalid repository: $REPO"
 [[ -f "$BACKLOG_FILE" ]] || die "approved backlog manifest not found: $BACKLOG_FILE"
+
+is_rate_limit_error() {
+  grep -qiE 'rate limit exceeded|API rate limit exceeded|secondary rate limit' <<<"$1"
+}
+
+wait_for_graphql_reset() {
+  local reset_epoch now wait_seconds
+  reset_epoch="$(gh api rate_limit --jq '.resources.graphql.reset // empty' 2>/dev/null || true)"
+  now="$(date +%s)"
+  if [[ "$reset_epoch" =~ ^[0-9]+$ ]]; then
+    wait_seconds=$(( reset_epoch - now + 5 ))
+    (( wait_seconds < 1 )) && wait_seconds=1
+  else
+    wait_seconds=60
+  fi
+  log "GitHub GraphQL rate limit exceeded; sleeping ${wait_seconds}s until reset before retry"
+  sleep "$wait_seconds"
+}
+
+gh_retry() {
+  local output rc
+  while true; do
+    set +e
+    output="$(gh "$@" 2>&1)"
+    rc=$?
+    set -e
+    if (( rc == 0 )); then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if is_rate_limit_error "$output"; then
+      wait_for_graphql_reset
+      continue
+    fi
+    printf '%s\n' "$output" >&2
+    return "$rc"
+  done
+}
+
+gh_retry_stdin() {
+  local input="$1" output rc
+  shift
+  while true; do
+    set +e
+    output="$(gh "$@" <<<"$input" 2>&1)"
+    rc=$?
+    set -e
+    if (( rc == 0 )); then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    if is_rate_limit_error "$output"; then
+      wait_for_graphql_reset
+      continue
+    fi
+    printf '%s\n' "$output" >&2
+    return "$rc"
+  done
+}
 
 python3 - "$BACKLOG_FILE" <<'PY'
 import json, sys
@@ -107,18 +168,18 @@ ensure_milestone() {
 
 ensure_project() {
   local number output
-  if ! gh project list --owner "$OWNER" --format json --limit 1 >/dev/null 2>&1; then
+  if ! gh_retry project list --owner "$OWNER" --format json --limit 1 >/dev/null; then
     die "GitHub CLI token cannot access Projects; run: gh auth refresh -s project"
   fi
-  number="$(gh project list --owner "$OWNER" --format json --jq ".projects[] | select(.title == \"$PROJECT_TITLE\") | .number" | head -n1)"
+  number="$(gh_retry project list --owner "$OWNER" --format json --jq ".projects[] | select(.title == \"$PROJECT_TITLE\") | .number" | head -n1)"
   if [[ -z "$number" ]]; then
-    if ! number="$(gh project create --owner "$OWNER" --title "$PROJECT_TITLE" --format json --jq .number)"; then
+    if ! number="$(gh_retry project create --owner "$OWNER" --title "$PROJECT_TITLE" --format json --jq .number)"; then
       die "failed to create GitHub Project; authenticate gh with Projects write access"
     fi
   fi
   [[ "$number" =~ ^[0-9]+$ ]] || die "invalid project number for $PROJECT_TITLE: $number"
-  gh project edit "$number" --owner "$OWNER" --visibility PRIVATE >/dev/null
-  if ! output="$(gh project link "$number" --owner "$OWNER" --repo "$REPO_NAME" 2>&1)"; then
+  gh_retry project edit "$number" --owner "$OWNER" --visibility PRIVATE >/dev/null
+  if ! output="$(gh_retry project link "$number" --owner "$OWNER" --repo "$REPO_NAME")"; then
     grep -qiE 'already|exists|linked' <<<"$output" || die "failed to link project: $output"
   fi
   printf '%s\n' "$number"
@@ -126,7 +187,7 @@ ensure_project() {
 
 field_json() {
   local project_number="$1" field_name="$2"
-  gh project field-list "$project_number" --owner "$OWNER" --format json --limit 100 \
+  gh_retry project field-list "$project_number" --owner "$OWNER" --format json --limit 100 \
     --jq ".fields[] | select(.name == \"$field_name\")"
 }
 
@@ -135,7 +196,7 @@ ensure_single_select_field() {
   local current
   current="$(field_json "$project_number" "$field_name")"
   if [[ -z "$current" ]]; then
-    gh project field-create "$project_number" --owner "$OWNER" --name "$field_name" \
+    gh_retry project field-create "$project_number" --owner "$OWNER" --name "$field_name" \
       --data-type SINGLE_SELECT --single-select-options "$options_csv" >/dev/null
   fi
 }
@@ -166,7 +227,7 @@ PY
   query='mutation($field:ID!,$opts:[ProjectV2SingleSelectFieldOptionInput!]!){updateProjectV2Field(input:{fieldId:$field,singleSelectOptions:$opts}){projectV2Field{... on ProjectV2SingleSelectField{id name}}}}'
   payload="$(jq -nc --arg query "$query" --arg field "$field_id" --argjson opts "$options_json" \
     '{query:$query,variables:{field:$field,opts:$opts}}')"
-  gh api graphql --input - <<<"$payload" >/dev/null
+  gh_retry_stdin "$payload" api graphql --input - >/dev/null
 }
 
 issue_milestone_title() {
@@ -241,6 +302,24 @@ project_item_id_for_url() {
   jq -r --arg url "$url" '.items[]? | select(.content.url == $url) | .id' <<<"$PROJECT_ITEMS_JSON" | head -n1
 }
 
+cache_project_item() {
+  local item_id="$1" url="$2"
+  PROJECT_ITEMS_JSON="$(jq -c --arg id "$item_id" --arg url "$url" \
+    '.items += [{id:$id,content:{url:$url}}]' <<<"$PROJECT_ITEMS_JSON")"
+}
+
+resolve_project_item_id_for_issue() {
+  local url="$1" issue_number query payload response
+  issue_number="${url##*/}"
+  [[ "$issue_number" =~ ^[0-9]+$ ]] || return 1
+  query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){projectItems(first:20){nodes{id project{id}}}}}}'
+  payload="$(jq -nc --arg query "$query" --arg owner "$OWNER" --arg repo "$REPO_NAME" --argjson number "$issue_number" \
+    '{query:$query,variables:{owner:$owner,repo:$repo,number:$number}}')"
+  response="$(gh_retry_stdin "$payload" api graphql --input -)" || return 1
+  jq -r --arg project "$PROJECT_ID" \
+    '.data.repository.issue.projectItems.nodes[]? | select(.project.id == $project) | .id' <<<"$response" | head -n1
+}
+
 set_project_field() {
   local item_id="$1" field="$2" value="$3"
   local field_json field_id option_id
@@ -254,42 +333,40 @@ set_project_field() {
   [[ -n "$field_id" && "$field_id" != null ]] || die "Project field node ID missing: $field"
   [[ -n "$option_id" && "$option_id" != null ]] || die "Project option not found: $field=$value"
 
-  gh project item-edit \
+  gh_retry project item-edit \
     --id "$item_id" \
     --project-id "$PROJECT_ID" \
     --field-id "$field_id" \
     --single-select-option-id "$option_id" >/dev/null
 }
 
-project_has_url() {
-  local url="$1"
-  [[ -n "$(project_item_id_for_url "$url")" ]]
-}
-
 ensure_project_item() {
-  local project_number="$1" url="$2" item_id attempt
+  local project_number="$1" url="$2" item_id attempt added_json
   item_id="$(project_item_id_for_url "$url")"
   if [[ -n "$item_id" ]]; then
     printf 'existing|%s\n' "$item_id"
     return 0
   fi
 
-  gh project item-add "$project_number" --owner "$OWNER" --url "$url" >/dev/null || \
+  added_json="$(gh_retry project item-add "$project_number" --owner "$OWNER" --url "$url" --format json)" || \
     die "failed to add project item $url"
+  item_id="$(jq -r '.id // empty' <<<"$added_json" 2>/dev/null || true)"
 
-  for attempt in $(seq 1 5); do
-    item_id="$(gh project item-list "$project_number" --owner "$OWNER" --format json --limit 500 \
-      --jq ".items[]? | select(.content.url == \"$url\") | .id" | head -n1)"
-    if [[ -n "$item_id" ]]; then
-      break
-    fi
-    if (( attempt < 5 )); then
-      log "Project item not visible yet after add; retrying ($attempt/5): $url"
-      sleep 1
-    fi
-  done
+  if [[ -z "$item_id" ]]; then
+    for attempt in $(seq 1 5); do
+      item_id="$(resolve_project_item_id_for_issue "$url" || true)"
+      if [[ -n "$item_id" ]]; then
+        break
+      fi
+      if (( attempt < 5 )); then
+        log "Project item not visible yet after add; lightweight retry ($attempt/5): $url"
+        sleep 1
+      fi
+    done
+  fi
 
   [[ -n "$item_id" ]] || die "could not resolve Project item node ID after adding $url"
+  cache_project_item "$item_id" "$url"
   printf 'new|%s\n' "$item_id"
 }
 
@@ -376,14 +453,13 @@ ensure_single_select_field "$PROJECT_NUMBER" 'Area' 'Core,MCP,Security,Task,Git,
 ensure_single_select_field "$PROJECT_NUMBER" 'Risk' 'Low,Medium,High,Critical'
 ensure_single_select_field "$PROJECT_NUMBER" 'Size' 'XS,S,M,L,XL'
 
-PROJECT_ID="$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq .id)"
+PROJECT_ID="$(gh_retry project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq .id)"
 [[ -n "$PROJECT_ID" && "$PROJECT_ID" != null ]] || die "Project node ID not found for project #$PROJECT_NUMBER"
 readonly PROJECT_ID
 
-PROJECT_FIELDS_JSON="$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 100)"
+PROJECT_FIELDS_JSON="$(gh_retry project field-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 100)"
 readonly PROJECT_FIELDS_JSON
-PROJECT_ITEMS_JSON="$(gh project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 500)"
-readonly PROJECT_ITEMS_JSON
+PROJECT_ITEMS_JSON="$(gh_retry project item-list "$PROJECT_NUMBER" --owner "$OWNER" --format json --limit 500)"
 
 for logical in $(seq 1 130); do sync_issue "$logical"; done
 
