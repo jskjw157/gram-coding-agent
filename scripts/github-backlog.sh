@@ -309,7 +309,6 @@ sync_issue() {
     set_project_field "$item_id" 'Priority' "$priority"
     set_project_field "$item_id" 'Area' "$area"
     set_project_field "$item_id" 'Risk' "$risk"
-    set_project_field "$item_id" 'Milestone' "$milestone_code"
     set_project_field "$item_id" 'Size' "$size"
   fi
 
@@ -364,7 +363,6 @@ sync_status_options "$PROJECT_NUMBER"
 ensure_single_select_field "$PROJECT_NUMBER" 'Priority' 'P0,P1,P2,P3'
 ensure_single_select_field "$PROJECT_NUMBER" 'Area' 'Core,MCP,Security,Task,Git,GitHub,Workspace,Verify,Windows,Ops'
 ensure_single_select_field "$PROJECT_NUMBER" 'Risk' 'Low,Medium,High,Critical'
-ensure_single_select_field "$PROJECT_NUMBER" 'Milestone' 'M0,M1,M2,M3,M4,M5'
 ensure_single_select_field "$PROJECT_NUMBER" 'Size' 'XS,S,M,L,XL'
 
 PROJECT_ID="$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json --jq .id)"
@@ -378,4 +376,4 @@ readonly PROJECT_ITEMS_JSON
 
 for logical in $(seq 1 130); do sync_issue "$logical"; done
 
-log "synchronized manifest-backed issues, labels, M0-M5 milestones, project fields/items, sub-issues, dependencies, and design Done state"
+log "synchronized manifest-backed issues, labels, M0-M5 repository milestones, project fields/items, sub-issues, dependencies, and design Done state"
