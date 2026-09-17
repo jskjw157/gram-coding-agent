@@ -267,7 +267,7 @@ project_has_url() {
 }
 
 ensure_project_item() {
-  local project_number="$1" url="$2" item_id
+  local project_number="$1" url="$2" item_id attempt
   item_id="$(project_item_id_for_url "$url")"
   if [[ -n "$item_id" ]]; then
     printf 'existing|%s\n' "$item_id"
@@ -276,8 +276,19 @@ ensure_project_item() {
 
   gh project item-add "$project_number" --owner "$OWNER" --url "$url" >/dev/null || \
     die "failed to add project item $url"
-  item_id="$(gh project item-list "$project_number" --owner "$OWNER" --format json --limit 500 \
-    --jq ".items[]? | select(.content.url == \"$url\") | .id" | head -n1)"
+
+  for attempt in $(seq 1 5); do
+    item_id="$(gh project item-list "$project_number" --owner "$OWNER" --format json --limit 500 \
+      --jq ".items[]? | select(.content.url == \"$url\") | .id" | head -n1)"
+    if [[ -n "$item_id" ]]; then
+      break
+    fi
+    if (( attempt < 5 )); then
+      log "Project item not visible yet after add; retrying ($attempt/5): $url"
+      sleep 1
+    fi
+  done
+
   [[ -n "$item_id" ]] || die "could not resolve Project item node ID after adding $url"
   printf 'new|%s\n' "$item_id"
 }
