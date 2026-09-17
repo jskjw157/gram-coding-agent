@@ -179,7 +179,7 @@ ensure_project() {
   fi
   [[ "$number" =~ ^[0-9]+$ ]] || die "invalid project number for $PROJECT_TITLE: $number"
   gh_retry project edit "$number" --owner "$OWNER" --visibility PRIVATE >/dev/null
-  if ! output="$(gh_retry project link "$number" --owner "$OWNER" --repo "$REPO_NAME")"; then
+  if ! output="$(gh_retry project link "$number" --owner "$OWNER" --repo "$REPO_NAME" 2>&1)"; then
     grep -qiE 'already|exists|linked' <<<"$output" || die "failed to link project: $output"
   fi
   printf '%s\n' "$number"
@@ -340,11 +340,17 @@ set_project_field() {
     --single-select-option-id "$option_id" >/dev/null
 }
 
+ENSURE_ITEM_STATE=''
+ENSURE_ITEM_ID=''
+
 ensure_project_item() {
   local project_number="$1" url="$2" item_id attempt added_json
+  ENSURE_ITEM_STATE=''
+  ENSURE_ITEM_ID=''
   item_id="$(project_item_id_for_url "$url")"
   if [[ -n "$item_id" ]]; then
-    printf 'existing|%s\n' "$item_id"
+    ENSURE_ITEM_STATE='existing'
+    ENSURE_ITEM_ID="$item_id"
     return 0
   fi
 
@@ -367,12 +373,13 @@ ensure_project_item() {
 
   [[ -n "$item_id" ]] || die "could not resolve Project item node ID after adding $url"
   cache_project_item "$item_id" "$url"
-  printf 'new|%s\n' "$item_id"
+  ENSURE_ITEM_STATE='new'
+  ENSURE_ITEM_ID="$item_id"
 }
 
 sync_issue() {
   local logical="$1" actual item body url title milestone parent_logical parent_actual deps blocker_logical blocker_actual
-  local meta priority area risk milestone_code size item_ref item_state item_id
+  local meta priority area risk milestone_code size item_state item_id
   actual="${ACTUAL_NUMBER[$logical]}"
   item="$(manifest_issue_json "$logical")"
   title="$(jq -r .title <<<"$item")"
@@ -381,8 +388,9 @@ sync_issue() {
   milestone="$(issue_milestone_title "$logical")"
 
   gh issue edit "$actual" --repo "$REPO" --milestone "$milestone" >/dev/null
-  item_ref="$(ensure_project_item "$PROJECT_NUMBER" "$url")"
-  IFS='|' read -r item_state item_id <<<"$item_ref"
+  ensure_project_item "$PROJECT_NUMBER" "$url"
+  item_state="$ENSURE_ITEM_STATE"
+  item_id="$ENSURE_ITEM_ID"
   [[ -n "$item_id" ]] || die "Project item node ID missing for $url"
 
   if [[ "$logical" =~ ^(1|13|37|78|98|113)$ ]]; then
