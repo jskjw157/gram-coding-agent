@@ -15,7 +15,8 @@
     "@gram/observability": "workspace:*",
     "@gram/persistence": "workspace:*",
     "@gram/policy": "workspace:*",
-    "@gram/secrets": "workspace:*"
+    "@gram/secrets": "workspace:*",
+    "@gram/task-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.0",
