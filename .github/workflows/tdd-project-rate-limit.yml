@@ -28,5 +28,7 @@ jobs:
             if (!source.includes('resources.graphql.reset')) throw new Error(`${file}: missing GraphQL reset-time lookup`);
             if (!source.includes('rate limit exceeded')) throw new Error(`${file}: missing rate-limit detection`);
             if (!source.includes('sleep "$wait_seconds"')) throw new Error(`${file}: missing automatic wait-until-reset`);
+            if (source.includes('$(ensure_project_item')) throw new Error(`${file}: ensure_project_item must not run in command substitution because cache mutations would be lost in a subshell`);
+            if (!source.includes('ENSURE_ITEM_ID=')) throw new Error(`${file}: missing parent-shell item result variable`);
           }
           NODE
