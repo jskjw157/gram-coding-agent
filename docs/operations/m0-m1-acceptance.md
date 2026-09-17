@@ -1,14 +1,14 @@
 # M0–M1 Secure Runtime Acceptance
 
-Date: 2026-09-16
+Date: 2026-09-17
 Branch: `chore/m0-repository-foundation`
-Draft PR: #131
+PR: #131 — Ready for review
 
-This record follows the approved M0–M1 implementation plan. M2 must not begin until the remaining M1 review/backlog gate is satisfied.
+This record follows the approved M0–M1 implementation plan. All M0–M1 implementation, runtime, backlog synchronization, and review gates are complete. M2 remains a separate next phase and no merge is recorded here.
 
 ## 1. Automated repository verification — PASS
 
-Recorded automated acceptance evidence includes GitHub Actions `34951697070`, `34951949735`, and the post-review security regression run `35090002420`.
+Recorded automated acceptance evidence includes GitHub Actions `34951697070`, `34951949735`, the post-review security regression run `35090002420`, and pre-final-documentation current-head run `35175255497`.
 
 The following completed successfully on Node 24 with the frozen pnpm lockfile:
 
@@ -75,7 +75,7 @@ Recorded on issues #31 and #34 from the actual LG Gram / WSL2 runtime:
 
 Hardware/runtime acceptance issues #31 and #34 are completed.
 
-## 5. Architecture invariant review
+## 5. Architecture invariant review — PASS
 
 | Invariant | M0–M1 status | Evidence |
 | --- | --- | --- |
@@ -90,29 +90,27 @@ Hardware/runtime acceptance issues #31 and #34 are completed.
 | same-repo lock/worktree/push-confirm/release-before-PR invariants | M2 SCOPE | approved design unchanged |
 | CI observation is lock-free | M2 SCOPE | approved design unchanged |
 
-## 6. Evidence-driven backlog synchronization — PARTIAL PASS / PROJECT BLOCKED
+## 6. Evidence-driven backlog and Project synchronization — PASS
 
-Issue-state synchronization is complete from recorded evidence:
+The real user-owned GitHub Project v2 `Gram Coding Agent — Engineering` (project #4, Private) is materialized and the bootstrap/status-sync tooling was executed from the authenticated WSL environment.
 
-- M0 implementation issues #2–#5 are completed.
-- architecture records #7–#12 remain completed.
-- evidence-complete M1 implementation/acceptance issues #14–#34 are completed, excluding parent/synchronization/review gates that depend on this step.
-- #31/#34 include the target hardware evidence above.
+Observed completion evidence:
 
-`scripts/github-status-sync.sh` is checked in and contract-tested. It maps only CLOSED M0–M1 issues to Project `Done` and preserves open issues unchanged. Root CI `35088896826` passed its contract tests.
+- `scripts/github-backlog.sh --bootstrap` synchronized all 130 manifest-backed issues without duplication.
+- existing issues and M0–M5 repository milestones were reused idempotently.
+- labels, Project fields/items, sub-issues, dependencies, and architecture design Done state were synchronized.
+- full Project item listing is loaded once per run and reused from in-memory state; newly added items reuse the returned item ID, with lightweight single-issue resolution only when needed.
+- GraphQL rate-limit exhaustion is detected; the script waits until the reported GraphQL reset time and resumes the failed operation instead of terminating.
+- `scripts/github-status-sync.sh` projected evidence-backed closed M0–M1 issues to Project `Done` and preserved then-open gate issues unchanged during the verification run.
 
-Actual GitHub Project v2 materialization/projection is blocked by credentials, not application code:
+The earlier `createProjectV2` credential blocker documented in runs `35089010285` and `35089086437` is resolved by the successful authenticated local run.
 
-- run `35089010285`: Project `Gram Coding Agent — Engineering` did not yet exist.
-- run `35089086437`: backlog bootstrap reused all approved #1–#130 issues and then failed at `createProjectV2` because `github-actions[bot]` lacks permission to create the user-owned Project.
-- repository secret `GH_PROJECT_TOKEN` was not present, so the workflow fell back to `GITHUB_TOKEN`.
+Tracking issues #6 and #35 are completed. After their completion, #32 and #36 were also closed from recorded evidence, and parent epics #1 and #13 were completed. A final status-sync rerun may be used only to refresh the Project display for those gate/parent issues closed after the verification run.
 
-Tracking issues #6 and #35 therefore remain open until a GitHub credential with Projects v2 write capability is used to materialize the Project and run the checked-in sync.
-
-## 7. M1 review gate — IN PROGRESS
+## 7. M1 review gate — PASS
 
 High-risk code review covered Policy/approval handling, MCP loopback/authentication, secret isolation/redaction, SQLite persistence, systemd/tunnel credential isolation, bootstrap behavior, and the application composition root.
 
-A blocking Policy Engine finding was reproduced with RED tests, fixed, expanded with regression cases, and verified GREEN in GitHub Actions run `35090002420`. No additional blocking finding has been identified in the reviewed M0–M1 high-risk paths.
+A blocking Policy Engine finding was reproduced with RED tests, fixed, expanded with regression cases, and verified GREEN in GitHub Actions run `35090002420`. No additional blocking finding was identified in the reviewed M0–M1 high-risk paths.
 
-The remaining gate is administrative Project v2 synchronization (#35/#6) plus final PR review-gate recording (#36). PR #131 remains Draft and M2 must not begin until those are resolved.
+PR #131 contains a recorded COMMENT review for the M1 high-risk paths. No external reviewer identity/team was configured, so none was fabricated. Final gate #36 is completed, PR #131 has left Draft state, and no merge has been performed as part of this acceptance record.
