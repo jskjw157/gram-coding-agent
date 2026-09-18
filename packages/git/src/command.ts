@@ -1,3 +1,4 @@
+import type { PublishMode } from '@gram/domain';
 import type { CommandRequest } from '@gram/shell';
 
 export interface GitCommandResult {
@@ -14,6 +15,8 @@ export interface GitTaskContext {
   taskId: string;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
+  targetBranch?: string;
+  publishMode?: PublishMode;
 }
 
 export function gitCommandRequest(
@@ -33,6 +36,12 @@ export function gitCommandRequest(
     ...(context.directMainGranted === undefined
       ? {}
       : { directMainGranted: context.directMainGranted }),
+    ...(context.targetBranch === undefined
+      ? {}
+      : { targetBranch: context.targetBranch }),
+    ...(context.publishMode === undefined
+      ? {}
+      : { publishMode: context.publishMode }),
   };
 }
 
