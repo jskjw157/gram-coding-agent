@@ -7,6 +7,7 @@ import {
 } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
+import { registerCodeTools, type CodeToolsPort } from './tools/code-tools.js';
 import { registerTaskTools, type TaskCreatePort } from './tools/task-tools.js';
 
 export interface CreateMcpHttpServerOptions {
@@ -15,6 +16,7 @@ export interface CreateMcpHttpServerOptions {
   internalSecret: string;
   health?: () => unknown | Promise<unknown>;
   taskCreate?: TaskCreatePort;
+  codeTools?: CodeToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -58,6 +60,7 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       },
     );
     if (options.taskCreate !== undefined) registerTaskTools(server, options.taskCreate);
+    if (options.codeTools !== undefined) registerCodeTools(server, options.codeTools);
     return server;
   });
   const nodeHandler = toNodeHandler(mcpHandler);
