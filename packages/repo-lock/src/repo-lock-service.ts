@@ -137,17 +137,6 @@ export class RepoLockService {
 
     let released = false;
 
-    const heartbeat = async (): Promise<void> => {
-      const beatAt = this.now();
-      const owned = this.options.locks.heartbeat(
-        repoId,
-        leaseToken,
-        beatAt.toISOString(),
-        new Date(beatAt.getTime() + this.ttlMs).toISOString(),
-      );
-      if (!owned) throw new RepoLockLostError(repoId);
-    };
-
     const moveTaskTowardRecovery = async (): Promise<void> => {
       const current = this.options.tasks.get(taskId);
       if (current === null || !canMoveToRecovery(current.status)) return;
@@ -155,6 +144,22 @@ export class RepoLockService {
         this.options.tasks.transition(taskId, current.status, 'NEEDS_RECOVERY');
       } catch {
         // Another durable transition won the race; recovery coordinator will inspect current state.
+      }
+    };
+
+    const heartbeat = async (): Promise<void> => {
+      try {
+        const beatAt = this.now();
+        const owned = this.options.locks.heartbeat(
+          repoId,
+          leaseToken,
+          beatAt.toISOString(),
+          new Date(beatAt.getTime() + this.ttlMs).toISOString(),
+        );
+        if (!owned) throw new RepoLockLostError(repoId);
+      } catch (error) {
+        await moveTaskTowardRecovery();
+        throw error;
       }
     };
 
