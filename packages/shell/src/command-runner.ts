@@ -1,5 +1,5 @@
 import { spawn as spawnProcess } from 'node:child_process';
-import type { PolicyDecision } from '@gram/domain';
+import type { PolicyDecision, PublishMode } from '@gram/domain';
 import {
   normalizeExecutableCommand,
   normalizeShellCommand,
@@ -21,6 +21,8 @@ interface CommandRequestBase {
   category: CommandCategory;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
+  targetBranch?: string;
+  publishMode?: PublishMode;
 }
 
 export type CommandRequest =
@@ -172,6 +174,12 @@ function contextFor(request: CommandRequest): PolicyContext {
     ...(request.directMainGranted === undefined
       ? {}
       : { directMainGranted: request.directMainGranted }),
+    ...(request.targetBranch === undefined
+      ? {}
+      : { targetBranch: request.targetBranch }),
+    ...(request.publishMode === undefined
+      ? {}
+      : { publishMode: request.publishMode }),
   };
 }
 
