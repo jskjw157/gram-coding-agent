@@ -23,11 +23,20 @@ export class RemoteService {
     if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
       throw new Error('expectedSha must be a full lowercase Git SHA');
     }
-    await runGit(this.runner, this.context, this.confirmationCwd, [
+
+    const ref = `refs/heads/${branch}`;
+    const result = await runGit(this.runner, this.context, this.confirmationCwd, [
       'ls-remote',
       remote,
-      `refs/heads/${branch}`,
+      ref,
     ]);
-    return true;
+    const line = result.stdout
+      .split('\n')
+      .map((value) => value.trim())
+      .find((value) => value.length > 0);
+    if (line === undefined) return false;
+
+    const [actualSha, actualRef] = line.split(/\s+/);
+    return actualSha === expectedSha && actualRef === ref;
   }
 }
