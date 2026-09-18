@@ -9,7 +9,7 @@ import {
   runMigrations,
   TaskRepository,
 } from '@gram/persistence';
-import { RepoLockedError, RepoLockService } from './repo-lock-service.js';
+import { RepoLockedError, RepoLockLostError, RepoLockService } from './repo-lock-service.js';
 
 const roots: string[] = [];
 const databases: Array<{ close(): void }> = [];
@@ -133,6 +133,17 @@ describe('RepoLockService', () => {
     await lease.release();
     expect(existsSync(join(lockDirectory, '100.lock'))).toBe(false);
     expect(db.prepare('SELECT COUNT(*) AS count FROM repo_locks').get()).toEqual({ count: 0 });
+  });
+
+  it('moves the task toward recovery when heartbeat ownership is lost', async () => {
+    const { db, service, tasks, createWaitingTask } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+
+    db.prepare('DELETE FROM repo_locks WHERE repo_id = 100').run();
+
+    await expect(lease.heartbeat()).rejects.toThrow(RepoLockLostError);
+    expect(tasks.get(task.id)?.status).toBe('NEEDS_RECOVERY');
   });
 
   it('removes the filesystem lock when SQLite acquisition fails after wx succeeds', async () => {
