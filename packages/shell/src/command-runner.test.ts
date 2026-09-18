@@ -8,6 +8,24 @@ import {
   type ProcessSpawner,
 } from './command-runner.js';
 
+function evidencePorts() {
+  return {
+    commandRuns: {
+      start: vi.fn(() => 1),
+      finish: vi.fn(),
+    },
+    outputCapture: {
+      capture: vi.fn(async ({ stdout, stderr }: { stdout: string; stderr: string }) => ({
+        stdout,
+        stderr,
+        stdoutPath: '/tmp/stdout',
+        stderrPath: '/tmp/stderr',
+      })),
+    },
+    environment: { PATH: '/usr/bin', HOME: '/tmp', LANG: 'C.UTF-8' },
+  };
+}
+
 function request(shellText: string) {
   return {
     taskId: '018d8a73-6b4e-7000-8000-000000000001',
@@ -31,6 +49,7 @@ describe('CommandRunner policy gate', () => {
       policy: new PolicyEngine(),
       approvals,
       spawner: { spawn },
+      ...evidencePorts(),
     });
 
     await expect(runner.run(request('rm -rf /'))).rejects.toThrow(PolicyDeniedError);
@@ -52,6 +71,7 @@ describe('CommandRunner policy gate', () => {
       policy: new PolicyEngine(),
       approvals: { consume },
       spawner: { spawn },
+      ...evidencePorts(),
     });
     const command = request('powershell.exe -Command Get-ChildItem');
 
@@ -87,6 +107,7 @@ describe('CommandRunner policy gate', () => {
       policy,
       approvals: { consume: async () => false },
       spawner: { spawn },
+      ...evidencePorts(),
     });
 
     await expect(runner.run(request('git status'))).resolves.toMatchObject({ exitCode: 0 });

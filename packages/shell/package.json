@@ -19,7 +19,9 @@
   },
   "dependencies": {
     "@gram/domain": "workspace:*",
-    "@gram/policy": "workspace:*"
+    "@gram/policy": "workspace:*",
+    "@gram/persistence": "workspace:*",
+    "@gram/secrets": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.0",
