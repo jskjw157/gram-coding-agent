@@ -40,6 +40,7 @@ function setup() {
 
   const tasks = new TaskRepository(db);
   const locks = new LockRepository(db);
+  let currentNow = FIXED_NOW;
   const lockDirectory = join(root, 'locks', 'repos');
   const scheduler = {
     setInterval: vi.fn(() => 1),
@@ -50,7 +51,7 @@ function setup() {
     locks,
     tasks,
     lockDirectory,
-    now: () => FIXED_NOW,
+    now: () => currentNow,
     pid: () => 4242,
     bootId: () => 'boot-test-123',
     scheduler,
@@ -67,7 +68,17 @@ function setup() {
     return task;
   };
 
-  return { db, root, tasks, locks, service, lockDirectory, createWaitingTask, scheduler };
+  return {
+    db,
+    root,
+    tasks,
+    locks,
+    service,
+    lockDirectory,
+    createWaitingTask,
+    scheduler,
+    setNow: (value: Date) => { currentNow = value; },
+  };
 }
 
 afterEach(() => {
@@ -133,6 +144,29 @@ describe('RepoLockService', () => {
     await lease.release();
     expect(existsSync(join(lockDirectory, '100.lock'))).toBe(false);
     expect(db.prepare('SELECT COUNT(*) AS count FROM repo_locks').get()).toEqual({ count: 0 });
+  });
+
+  it('refreshes heartbeat every 15 seconds with a 60 second lease horizon', async () => {
+    const { db, service, createWaitingTask, scheduler, setNow } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+
+    const scheduled = scheduler.setInterval.mock.calls[0]?.[0] as (() => void) | undefined;
+    expect(scheduled).toBeTypeOf('function');
+
+    const heartbeatAt = new Date(FIXED_NOW.getTime() + 15_000);
+    setNow(heartbeatAt);
+    scheduled?.();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const row = db.prepare('SELECT heartbeat_at, lease_until FROM repo_locks WHERE repo_id = 100').get() as {
+      heartbeat_at: string;
+      lease_until: string;
+    };
+    expect(row.heartbeat_at).toBe(heartbeatAt.toISOString());
+    expect(row.lease_until).toBe(new Date(heartbeatAt.getTime() + 60_000).toISOString());
+
+    await lease.release();
   });
 
   it('moves the task toward recovery when heartbeat ownership is lost', async () => {
