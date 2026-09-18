@@ -10,7 +10,7 @@ import {
 } from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
 import { SecretRedactor } from '@gram/secrets';
-import { CommandRunner, type ProcessSpawner } from './command-runner.js';
+import { CommandRunner, NodeProcessSpawner, type ProcessSpawner } from './command-runner.js';
 import { OutputCapture } from './output-capture.js';
 
 const roots: string[] = [];
@@ -124,6 +124,57 @@ describe('CommandRunner evidence and environment isolation', () => {
     expect(storedStderr).toContain('***REDACTED***');
     expect(result.stdout).not.toContain(secret);
     expect(result.stderr).not.toContain('leak-me');
+  });
+
+  it('executes executable/args directly with the same policy gate and safe environment', async () => {
+    const root = tempRoot();
+    const db = openDatabase(join(root, 'state.db'));
+    databases.push(db);
+    runMigrations(db);
+
+    const task = new TaskRepository(db).create({
+      goal: 'inspect child environment',
+      taskType: 'CODING',
+      publishMode: 'PULL_REQUEST',
+    });
+    const commandRuns = new CommandRunRepository(db);
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume: async () => false },
+      spawner: new NodeProcessSpawner(),
+      commandRuns,
+      outputCapture: new OutputCapture({
+        homeDir: root,
+        redactor: new SecretRedactor(),
+      }),
+      environment: {
+        PATH: process.env.PATH ?? '/usr/bin',
+        HOME: root,
+        LANG: 'C.UTF-8',
+        GITHUB_TOKEN: 'must-not-reach-child',
+      },
+    });
+
+    const result = await runner.run({
+      taskId: task.id,
+      cwd: root,
+      category: 'DEVELOPMENT',
+      executable: 'node',
+      args: [
+        '-e',
+        "process.stdout.write(JSON.stringify({ github: process.env.GITHUB_TOKEN ?? null }))",
+      ],
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ github: null });
+    const row = db
+      .prepare('SELECT executable, args_json, shell_text FROM command_runs WHERE task_id = ?')
+      .get(task.id);
+    expect(row).toMatchObject({
+      executable: 'node',
+      shell_text: null,
+    });
   });
 
   it('persists a non-zero process result as FAILED with its exit code', async () => {
