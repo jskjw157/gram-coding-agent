@@ -181,9 +181,15 @@ importers:
       '@gram/domain':
         specifier: workspace:*
         version: link:../domain
+      '@gram/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@gram/policy':
         specifier: workspace:*
         version: link:../policy
+      '@gram/secrets':
+        specifier: workspace:*
+        version: link:../secrets
     devDependencies:
       typescript:
         specifier: ^6.0.0
