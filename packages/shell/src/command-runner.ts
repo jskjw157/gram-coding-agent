@@ -1,6 +1,7 @@
 import { spawn as spawnProcess } from 'node:child_process';
 import type { PolicyDecision } from '@gram/domain';
 import {
+  normalizeExecutableCommand,
   normalizeShellCommand,
   type PolicyContext,
   PolicyEngine,
@@ -14,22 +15,44 @@ export type CommandCategory =
   | 'WINDOWS'
   | 'OTHER';
 
-export interface CommandRequest {
+interface CommandRequestBase {
   taskId: string;
   cwd: string;
   category: CommandCategory;
-  shellText: string;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
 }
 
-export interface SpawnRequest {
+export type CommandRequest =
+  | (CommandRequestBase & {
+      shellText: string;
+      executable?: never;
+      args?: never;
+    })
+  | (CommandRequestBase & {
+      executable: string;
+      args?: readonly string[];
+      shellText?: never;
+    });
+
+interface SpawnRequestBase {
   taskId: string;
   cwd: string;
   category: CommandCategory;
-  shellText: string;
   env: Readonly<Record<string, string>>;
 }
+
+export type SpawnRequest =
+  | (SpawnRequestBase & {
+      shellText: string;
+      executable?: never;
+      args?: never;
+    })
+  | (SpawnRequestBase & {
+      executable: string;
+      args: readonly string[];
+      shellText?: never;
+    });
 
 export interface SpawnResult {
   exitCode: number;
@@ -152,14 +175,34 @@ function contextFor(request: CommandRequest): PolicyContext {
   };
 }
 
+function operationsFor(request: CommandRequest) {
+  if ('shellText' in request) {
+    return normalizeShellCommand(request.shellText, request.cwd);
+  }
+  return [
+    normalizeExecutableCommand(
+      request.executable,
+      request.args ?? [],
+      request.cwd,
+    ),
+  ];
+}
+
 export class NodeProcessSpawner implements ProcessSpawner {
   async spawn(request: SpawnRequest): Promise<SpawnResult> {
     return new Promise((resolve, reject) => {
-      const child = spawnProcess('/bin/bash', ['-lc', request.shellText], {
-        cwd: request.cwd,
-        env: { ...request.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const child =
+        'shellText' in request
+          ? spawnProcess('/bin/bash', ['-lc', request.shellText], {
+              cwd: request.cwd,
+              env: { ...request.env },
+              stdio: ['ignore', 'pipe', 'pipe'],
+            })
+          : spawnProcess(request.executable, [...request.args], {
+              cwd: request.cwd,
+              env: { ...request.env },
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
 
       let stdout = '';
       let stderr = '';
@@ -191,8 +234,10 @@ export class CommandRunner {
   }
 
   async run(request: CommandRequest): Promise<CommandResult> {
-    const operations = normalizeShellCommand(request.shellText, request.cwd);
-    if (operations.length === 0) throw new Error('Command did not contain an executable operation');
+    const operations = operationsFor(request);
+    if (operations.length === 0) {
+      throw new Error('Command did not contain an executable operation');
+    }
 
     const context = contextFor(request);
     const decisions = operations.map((operation) =>
@@ -215,17 +260,39 @@ export class CommandRunner {
       taskId: request.taskId,
       category: request.category,
       cwd: request.cwd,
-      shellText: this.options.outputCapture.redactText(request.shellText),
+      ...('shellText' in request
+        ? {
+            shellText: this.options.outputCapture.redactText(request.shellText),
+          }
+        : {
+            executable: this.options.outputCapture.redactText(request.executable),
+            args: (request.args ?? []).map((argument) =>
+              this.options.outputCapture.redactText(argument),
+            ),
+          }),
     });
 
+    const env = buildSafeCommandEnvironment(this.environment);
+
     try {
-      const raw = await this.options.spawner.spawn({
-        taskId: request.taskId,
-        cwd: request.cwd,
-        category: request.category,
-        shellText: request.shellText,
-        env: buildSafeCommandEnvironment(this.environment),
-      });
+      const raw = await this.options.spawner.spawn(
+        'shellText' in request
+          ? {
+              taskId: request.taskId,
+              cwd: request.cwd,
+              category: request.category,
+              shellText: request.shellText,
+              env,
+            }
+          : {
+              taskId: request.taskId,
+              cwd: request.cwd,
+              category: request.category,
+              executable: request.executable,
+              args: request.args ?? [],
+              env,
+            },
+      );
       const captured = await this.options.outputCapture.capture({
         taskId: request.taskId,
         commandRunId,
