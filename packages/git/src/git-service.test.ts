@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CommandRequest } from '@gram/shell';
 import { CommitService } from './commit-service.js';
+import { RemoteService } from './remote-service.js';
 import type { GitCommandResult, GitCommandRunnerPort } from './command.js';
 
 const roots: string[] = [];
@@ -58,5 +59,30 @@ describe('CommitService.commitExplicit', () => {
     expect(git(worktree, ['show', '--pretty=format:', '--name-only', 'HEAD']).split('\n').filter(Boolean))
       .toEqual(['intended.ts']);
     expect(git(worktree, ['status', '--porcelain'])).toContain('?? unrelated.tmp');
+  });
+});
+
+
+describe('RemoteService.confirmRemoteSha', () => {
+  it('matches the exact branch SHA from a local bare remote and rejects mismatches', async () => {
+    const worktree = createRepository();
+    const remote = mkdtempSync(join(tmpdir(), 'gram-git-remote-'));
+    roots.push(remote);
+    git(remote, ['init', '--bare']);
+
+    git(worktree, ['remote', 'add', 'origin', remote]);
+    writeFileSync(join(worktree, 'publish.txt'), 'publish me\n');
+    git(worktree, ['add', 'publish.txt']);
+    git(worktree, ['commit', '-m', 'feat: publish fixture']);
+
+    const runner = new LocalGitRunner();
+    const service = new RemoteService(runner, { taskId: 'task-57-red' }, worktree);
+    const branch = 'feat/task-000057-remote-confirm';
+    const expectedSha = git(worktree, ['rev-parse', 'HEAD']);
+
+    await service.push(worktree, branch);
+
+    expect(await service.confirmRemoteSha('origin', branch, expectedSha)).toBe(true);
+    expect(await service.confirmRemoteSha('origin', branch, '0'.repeat(40))).toBe(false);
   });
 });
