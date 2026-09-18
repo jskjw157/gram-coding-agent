@@ -18,6 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@gram/domain": "workspace:*",
     "@gram/shell": "workspace:*"
   },
   "devDependencies": {
