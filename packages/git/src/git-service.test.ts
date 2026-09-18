@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CommandRequest } from '@gram/shell';
+import { BranchService } from './branch-service.js';
 import { CommitService } from './commit-service.js';
+import { GitService } from './git-service.js';
 import { RemoteService } from './remote-service.js';
 import type { GitCommandResult, GitCommandRunnerPort } from './command.js';
 
@@ -15,7 +17,10 @@ function git(cwd: string, args: readonly string[]): string {
 }
 
 class LocalGitRunner implements GitCommandRunnerPort {
+  readonly requests: CommandRequest[] = [];
+
   run(request: CommandRequest): Promise<GitCommandResult> {
+    this.requests.push(request);
     if (!('executable' in request) || request.executable !== 'git') {
       throw new Error('expected executable git request');
     }
@@ -36,6 +41,7 @@ function createRepository(): string {
   writeFileSync(join(root, 'baseline.txt'), 'baseline\n');
   git(root, ['add', 'baseline.txt']);
   git(root, ['commit', '-m', 'baseline']);
+  git(root, ['branch', '-M', 'main']);
   return root;
 }
 
@@ -84,5 +90,103 @@ describe('RemoteService.confirmRemoteSha', () => {
 
     expect(await service.confirmRemoteSha('origin', branch, expectedSha)).toBe(true);
     expect(await service.confirmRemoteSha('origin', branch, '0'.repeat(40))).toBe(false);
+  });
+});
+
+
+class RecordingRunner implements GitCommandRunnerPort {
+  readonly requests: CommandRequest[] = [];
+
+  run(request: CommandRequest): Promise<GitCommandResult> {
+    this.requests.push(request);
+    return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
+  }
+}
+
+describe('GitService and BranchService', () => {
+  it('reports task-worktree status and diff through the command runner', async () => {
+    const worktree = createRepository();
+    writeFileSync(join(worktree, 'baseline.txt'), 'changed\n');
+    writeFileSync(join(worktree, 'extra.txt'), 'untracked\n');
+
+    const runner = new LocalGitRunner();
+    const service = new GitService(runner, { taskId: 'task-git-service' });
+
+    const status = await service.status(worktree);
+    expect(status.clean).toBe(false);
+    expect(status.entries.map((entry) => entry.path).sort()).toEqual([
+      'baseline.txt',
+      'extra.txt',
+    ]);
+    expect(await service.diff(worktree)).toContain('+changed');
+    expect(runner.requests.every((request) => request.category === 'GIT')).toBe(true);
+  });
+
+  it('uses explicit safe fetch arguments and reads local branches through the runner', async () => {
+    const recording = new RecordingRunner();
+    const service = new GitService(recording, { taskId: 'task-fetch' });
+    await service.fetch('/repo');
+
+    expect(recording.requests[0]).toMatchObject({
+      executable: 'git',
+      args: ['fetch', '--prune', 'origin'],
+      cwd: '/repo',
+      category: 'GIT',
+    });
+
+    const worktree = createRepository();
+    const branches = new BranchService(new LocalGitRunner(), { taskId: 'task-branch' });
+    expect(await branches.current(worktree)).toBe('main');
+    expect(await branches.listLocal(worktree)).toEqual(['main']);
+  });
+});
+
+describe('RemoteService publishing policy context', () => {
+  it('passes target branch and publish mode into CommandRunner policy context', async () => {
+    const runner = new RecordingRunner();
+    const service = new RemoteService(
+      runner,
+      {
+        taskId: 'task-protected-main',
+        protectedBranches: ['main'],
+        directMainGranted: false,
+        publishMode: 'PULL_REQUEST',
+      },
+      '/repo',
+    );
+
+    await service.push('/repo', 'main');
+
+    expect(runner.requests[0]).toMatchObject({
+      taskId: 'task-protected-main',
+      cwd: '/repo',
+      category: 'GIT',
+      executable: 'git',
+      args: ['push', 'origin', 'HEAD:refs/heads/main'],
+      protectedBranches: ['main'],
+      directMainGranted: false,
+      targetBranch: 'main',
+      publishMode: 'PULL_REQUEST',
+    });
+  });
+});
+
+describe('@gram/git architecture', () => {
+  it('routes production Git execution through CommandRunner instead of child_process', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const productionFiles = [
+      './command.ts',
+      './git-service.ts',
+      './branch-service.ts',
+      './commit-service.ts',
+      './remote-service.ts',
+    ];
+
+    for (const relativePath of productionFiles) {
+      const source = await readFile(new URL(relativePath, import.meta.url), 'utf8');
+      expect(source).not.toContain('node:child_process');
+      expect(source).not.toContain('execFile');
+      expect(source).not.toContain('spawn(');
+    }
   });
 });
