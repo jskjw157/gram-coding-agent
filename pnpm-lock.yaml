@@ -176,6 +176,22 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
 
+  packages/shell:
+    dependencies:
+      '@gram/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@gram/policy':
+        specifier: workspace:*
+        version: link:../policy
+    devDependencies:
+      typescript:
+        specifier: ^6.0.0
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+
   packages/task-engine:
     dependencies:
       '@gram/domain':
