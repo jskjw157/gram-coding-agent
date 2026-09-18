@@ -8,11 +8,12 @@ export class RemoteService {
   ) {}
 
   async push(worktree: string, branch: string): Promise<void> {
-    await runGit(this.runner, this.context, worktree, [
-      'push',
-      'origin',
-      `HEAD:refs/heads/${branch}`,
-    ]);
+    await runGit(
+      this.runner,
+      { ...this.context, targetBranch: branch },
+      worktree,
+      ['push', 'origin', `HEAD:refs/heads/${branch}`],
+    );
   }
 
   async confirmRemoteSha(
