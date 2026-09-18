@@ -43,8 +43,14 @@ function setup() {
   let currentNow = FIXED_NOW;
   const lockDirectory = join(root, 'locks', 'repos');
   const scheduler = {
-    setInterval: vi.fn((_callback: () => void, _intervalMs: number) => 1),
-    clearInterval: vi.fn((_handle: unknown) => undefined),
+    setInterval: vi.fn((callback: () => void, intervalMs: number) => {
+      void callback;
+      void intervalMs;
+      return 1;
+    }),
+    clearInterval: vi.fn((handle: unknown) => {
+      void handle;
+    }),
   };
 
   const service = new RepoLockService({
