@@ -8,11 +8,22 @@ export class CommitService {
 
   async commitExplicit(
     worktree: string,
-    _paths: readonly string[],
+    paths: readonly string[],
     message: string,
   ): Promise<string> {
-    await runGit(this.runner, this.context, worktree, ['add', '--', '.']);
-    await runGit(this.runner, this.context, worktree, ['commit', '-m', message]);
+    if (paths.length === 0) {
+      throw new Error('commitExplicit requires at least one explicit path');
+    }
+
+    await runGit(this.runner, this.context, worktree, ['add', '--', ...paths]);
+    await runGit(this.runner, this.context, worktree, [
+      'commit',
+      '--only',
+      '-m',
+      message,
+      '--',
+      ...paths,
+    ]);
     const head = await runGit(this.runner, this.context, worktree, ['rev-parse', 'HEAD']);
     return head.stdout.trim();
   }
