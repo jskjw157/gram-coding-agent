@@ -18,8 +18,11 @@ export class RemoteService {
   async confirmRemoteSha(
     remote: string,
     branch: string,
-    _expectedSha: string,
+    expectedSha: string,
   ): Promise<boolean> {
+    if (!/^[0-9a-f]{40}$/.test(expectedSha)) {
+      throw new Error('expectedSha must be a full lowercase Git SHA');
+    }
     await runGit(this.runner, this.context, this.confirmationCwd, [
       'ls-remote',
       remote,
