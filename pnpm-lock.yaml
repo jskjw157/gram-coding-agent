@@ -92,6 +92,9 @@ importers:
 
   packages/git:
     dependencies:
+      '@gram/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@gram/shell':
         specifier: workspace:*
         version: link:../shell
