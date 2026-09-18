@@ -3,3 +3,4 @@ export * from './server.js';
 export * from './tools/repo-tools.js';
 export * from './tools/task-tools.js';
 export * from './tools/code-tools.js';
+export * from './tools/git-tools.js';
