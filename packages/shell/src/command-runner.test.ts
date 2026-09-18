@@ -15,6 +15,7 @@ function evidencePorts() {
       finish: vi.fn(),
     },
     outputCapture: {
+      redactText: vi.fn((text: string) => text),
       capture: vi.fn(async ({ stdout, stderr }: { stdout: string; stderr: string }) => ({
         stdout,
         stderr,
