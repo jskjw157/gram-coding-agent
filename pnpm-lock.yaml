@@ -90,6 +90,19 @@ importers:
         specifier: ^5.0.0
         version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
 
+  packages/git:
+    dependencies:
+      '@gram/shell':
+        specifier: workspace:*
+        version: link:../shell
+    devDependencies:
+      typescript:
+        specifier: ^6.0.0
+        version: 6.0.3
+      vitest:
+        specifier: ^5.0.0
+        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+
   packages/mcp:
     dependencies:
       '@modelcontextprotocol/node':
