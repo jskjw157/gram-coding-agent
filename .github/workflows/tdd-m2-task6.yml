@@ -35,3 +35,4 @@ jobs:
           fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @gram/filesystem test
+      - run: pnpm --filter @gram/mcp test
