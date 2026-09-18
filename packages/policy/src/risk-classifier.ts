@@ -1,10 +1,12 @@
-import type { PolicyDecisionKind } from '@gram/domain';
+import type { PolicyDecisionKind, PublishMode } from '@gram/domain';
 import type { NormalizedOperation } from './command-parser.js';
 
 export interface PolicyContext {
   taskId: string;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
+  targetBranch?: string;
+  publishMode?: PublishMode;
 }
 
 export interface ClassifiedRisk {
