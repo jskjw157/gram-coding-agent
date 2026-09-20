@@ -23,7 +23,7 @@ describe('diagnostic CLI', () => {
       read: () => facts, writeOut: (v) => out.push(v), writeError: (v) => err.push(v),
     })).toBe(0);
     expect(out).toHaveLength(1);
-    expect(JSON.parse(out[0]!).capabilities.apiRead.status).toBe('UNKNOWN');
+    expect(JSON.parse(out[0] ?? '').capabilities.apiRead.status).toBe('UNKNOWN');
     expect(err).toEqual([]);
   });
   it('returns 2 for an unsupported execution target and still emits parseable JSON', () => {
@@ -31,7 +31,7 @@ describe('diagnostic CLI', () => {
     expect(runDiagnostic(['--json'], {
       read: () => ({ ...facts, arch: 'x64' }), writeOut: (v) => out.push(v), writeError: () => undefined,
     })).toBe(2);
-    expect(JSON.parse(out[0]!).platform.compatible).toBe(false);
+    expect(JSON.parse(out[0] ?? '').platform.compatible).toBe(false);
   });
   it('rejects unsupported arguments before any probe', () => {
     const invalidArgs = [[], ['--json', '--install'], ['--login'], ['--secrets'], ['--json', '--json']];
