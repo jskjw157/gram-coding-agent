@@ -64,7 +64,8 @@ export async function preview(config: ServiceConfig, expectedDigest: string, ins
     if (!facts.validAccount) return refused(firstRefusal(facts));
 
     stage = 'UNTRUSTED_RELEASE';
-    const release = data(await inspector.release(normalized, expectedDigest));
+    // Adapters receive copies, never the configuration later rendered and hashed.
+    const release = data(await inspector.release(parseConfig(normalized), expectedDigest));
     facts.trustedRelease = release.verified === true && release.digest === expectedDigest;
     if (!facts.trustedRelease) return refused(firstRefusal(facts));
     if (release.safePaths !== true) return refused('UNSAFE_PATH');
@@ -85,7 +86,7 @@ export async function preview(config: ServiceConfig, expectedDigest: string, ins
 
     const roles: Role[] = normalized.tunnel.enabled ? ['core', 'tunnel'] : ['core'];
     stage = 'PORT_IN_USE';
-    const ports = data(await inspector.ports(roles));
+    const ports = data(await inspector.ports([...roles]));
     facts.freeOrOwnedPorts = roles.every(role => ports[role] === 'free'
       || (ports[role] === 'owned' && present[role] && enabled[role]));
     if (!facts.freeOrOwnedPorts) return refused(firstRefusal(facts));
