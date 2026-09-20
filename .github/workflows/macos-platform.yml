@@ -1,55 +1,88 @@
 name: macos-platform
 on:
   pull_request:
+    paths:
+      - 'packages/platform/**'
+      - '.github/workflows/macos-platform.yml'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.base.json'
+      - 'vitest.config.mts'
+      - 'eslint.config.mjs'
+      - 'docs/operations/macos-platform-readiness.md'
+  push:
     branches: [main]
+    paths:
+      - 'packages/platform/**'
+      - '.github/workflows/macos-platform.yml'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig.base.json'
+      - 'vitest.config.mts'
+      - 'eslint.config.mjs'
+      - 'docs/operations/macos-platform-readiness.md'
 permissions:
   contents: read
 concurrency:
   group: macos-platform-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  platform-tdd:
-    runs-on: ubuntu-24.04
+  platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: Prepare isolated worktree
+      - name: Verify package in an isolated worktree
+        shell: bash
         run: |
+          set -euo pipefail
           git worktree add --detach "$RUNNER_TEMP/mac01-feature" HEAD
-      - name: Frozen install and package tests
-        run: |
           cd "$RUNNER_TEMP/mac01-feature"
           pnpm install --frozen-lockfile
           pnpm --filter @gram/platform test
-      - name: Package lint, types, build and root project collection
-        run: |
-          cd "$RUNNER_TEMP/mac01-feature"
           pnpm --filter @gram/platform lint
           pnpm --filter @gram/platform typecheck
           pnpm --filter @gram/platform build
           pnpm exec vitest run --project platform
           git diff --check
-      - name: Execute compiled Linux diagnostic and verify its honest exit status
+      - name: Verify native macOS arm64 execution
+        if: runner.os == 'macOS'
+        run: node -e "if(process.platform!=='darwin'||process.arch!=='arm64') process.exit(1)"
+      - name: Validate compiled diagnostic without claiming live readiness
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/mac01-feature"
           code=0
           node packages/platform/dist/cli.js --json > "$RUNNER_TEMP/mac01-diagnostic.json" || code=$?
-          test "$code" -eq 2
-          node --input-type=module - "$RUNNER_TEMP/mac01-diagnostic.json" <<'JS'
+          node --input-type=module - "$RUNNER_TEMP/mac01-diagnostic.json" "$code" <<'JS'
           import { readFileSync } from 'node:fs';
           const r = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-          if (r.mode !== 'DIAGNOSTIC_ONLY' || r.liveProbesCollected !== false ||
-              r.platform.kind !== 'unsupported' ||
-              Object.values(r.capabilities).some(v => v.status !== 'UNSUPPORTED')) process.exit(1);
+          const mac = process.platform === 'darwin';
+          const expectedStatus = mac ? 'UNKNOWN' : 'UNSUPPORTED';
+          if (Number(process.argv[3]) !== (mac ? 0 : 2) ||
+              r.schemaVersion !== 1 || r.mode !== 'DIAGNOSTIC_ONLY' ||
+              r.liveProbesCollected !== false ||
+              r.platform.kind !== (mac ? 'macos-arm64' : 'unsupported') ||
+              Object.values(r.capabilities).some(v => v.status !== expectedStatus)) process.exit(1);
           console.log(JSON.stringify(r));
           JS
+          code=0
+          node packages/platform/dist/cli.js --install > "$RUNNER_TEMP/mac01-invalid.out" 2> "$RUNNER_TEMP/mac01-invalid.err" || code=$?
+          test "$code" -eq 64
+          test ! -s "$RUNNER_TEMP/mac01-invalid.out"
+          grep -Fx 'USAGE: gram-platform --json' "$RUNNER_TEMP/mac01-invalid.err"
