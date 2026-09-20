@@ -4,83 +4,36 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: macos-platform-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  detector-tdd:
-    if: github.head_ref == 'feat/macos-platform-readiness' && github.event.pull_request.head.repo.full_name == github.repository
+  platform-tdd:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: Create isolated feature worktree and preserve locked resolutions
-        shell: bash
+      - name: Prepare isolated worktree
         run: |
-          set -euo pipefail
           git worktree add --detach "$RUNNER_TEMP/mac01-feature" HEAD
+      - name: Frozen install and package tests
+        run: |
           cd "$RUNNER_TEMP/mac01-feature"
-          cp pnpm-lock.yaml "$RUNNER_TEMP/mac01-lock.before"
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p=Path('pnpm-lock.yaml'); text=p.read_text()
-          if '\n  packages/platform:\n' not in text:
-            source=re.search(r'  packages/secrets:\n.*?(?=\npackages:)', text, re.S)
-            assert source, 'locked dependency reference missing'
-            block=source.group().replace('packages/secrets:', 'packages/platform:', 1).rstrip('\n')+'\n\n'
-            text=text.replace('  packages/policy:\n',block+'  packages/policy:\n',1)
-            p.write_text(text)
-          PY
-          pnpm install --lockfile-only
-          python3 - <<'PY'
-          from pathlib import Path
-          import os, re, difflib
-          before=Path(os.environ['RUNNER_TEMP']+'/mac01-lock.before').read_text()
-          after=Path('pnpm-lock.yaml').read_text()
-          def strip(text):
-            return re.sub(r'\n  packages/platform:\n.*?(?=\n  [^ ]|\npackages:)', '', text, flags=re.S)
-          if strip(after) != strip(before):
-            print(''.join(difflib.unified_diff(strip(before).splitlines(True),strip(after).splitlines(True)))[:16000])
-            raise SystemExit('unrelated lockfile churn; refuse publication')
-          assert '\n  packages/platform:\n' in after
-          PY
           pnpm install --frozen-lockfile
+          pnpm --filter @gram/platform test
+      - name: Package lint, types, build and root project collection
+        run: |
+          cd "$RUNNER_TEMP/mac01-feature"
+          pnpm --filter @gram/platform lint
+          pnpm --filter @gram/platform typecheck
+          pnpm --filter @gram/platform build
+          pnpm exec vitest run --project platform
           git diff --check
-          git diff -- pnpm-lock.yaml
-      - name: Persist generated lockfile to this feature branch only
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/mac01-feature"
-          if git diff --quiet -- pnpm-lock.yaml; then exit 0; fi
-          actual=$(gh api repos/jskjw157/gram-coding-agent/git/ref/heads/feat/macos-platform-readiness --jq '.object.sha')
-          test "$actual" = "$EXPECTED_HEAD"
-          export LOCK_BLOB=$(git rev-parse HEAD:pnpm-lock.yaml)
-          python3 - <<'PY'
-          from pathlib import Path
-          import json, base64, os
-          Path(os.environ['RUNNER_TEMP']+'/mac01-lock-update.json').write_text(json.dumps({
-            'message':'chore(platform): record generated platform lockfile importer',
-            'branch':'feat/macos-platform-readiness',
-            'sha':os.environ['LOCK_BLOB'],
-            'content':base64.b64encode(Path('pnpm-lock.yaml').read_bytes()).decode()
-          }))
-          PY
-          gh api --method PUT repos/jskjw157/gram-coding-agent/contents/pnpm-lock.yaml --input "$RUNNER_TEMP/mac01-lock-update.json" --jq '.commit.sha'
-      - name: Execute detector RED before production implementation
-        shell: bash
-        run: |
-          cd "$RUNNER_TEMP/mac01-feature"
-          pnpm --filter @gram/platform test -- src/detect.test.ts
