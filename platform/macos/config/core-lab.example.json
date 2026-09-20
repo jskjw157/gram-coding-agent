@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "mode": "LAB_ONLY",
+  "runtimeUser": "gram-agent",
+  "releaseId": "lab-001",
+  "releaseDigest": "0000000000000000000000000000000000000000000000000000000000000000",
+  "tunnel": { "enabled": false }
+}

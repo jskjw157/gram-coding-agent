@@ -39,8 +39,8 @@ describe('strict lifecycle configuration', () => {
   ])('rejects %s with a fixed error only', (_name, value) => {
     expect(() => parseConfig(value)).toThrow(/^INVALID_CONFIG$/);
   });
-  it.each(['', '.', '..', '../lab', 'lab/path', 'lab\\path', 'lab\nkey', 'a'.repeat(65), '<lab>', 'lab space'])
-    ('rejects unsafe release identifier %j', releaseId => {
+  it.each(['', '.', '..', '../lab', 'lab/path', 'lab\\path', 'lab\nkey', 'a'.repeat(65), '<lab>', 'lab space'])(
+    'rejects unsafe release identifier %j', releaseId => {
       expect(() => parseConfig({ ...input, releaseId })).toThrow(/^INVALID_CONFIG$/);
     });
   it.each(['a', 'a'.repeat(64), 'Lab_01.2-3'])('accepts bounded release identifier %s', releaseId => {
