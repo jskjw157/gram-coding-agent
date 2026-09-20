@@ -1,12 +1,27 @@
 name: macos-lifecycle
 on:
   pull_request:
-    paths: ['packages/macos-lifecycle/**', 'platform/macos/**', 'pnpm-lock.yaml', '.github/workflows/macos-lifecycle.yml', 'docs/operations/macos-service-lifecycle.md']
+    paths:
+      - 'packages/macos-lifecycle/**'
+      - 'platform/macos/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'tsconfig.base.json'
+      - 'vitest.config.mts'
+      - 'eslint.config.mjs'
+      - '.github/workflows/macos-lifecycle.yml'
+      - 'docs/operations/macos-service-lifecycle.md'
 permissions:
   contents: read
 jobs:
   lifecycle:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,6 +32,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - name: Verify native runtime
+        shell: bash
+        run: |
+          node -e "console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version})); if(process.platform==='darwin' && process.arch!=='arm64') process.exit(1)"
       - name: Frozen install in an isolated exact-head worktree
         shell: bash
         run: |
@@ -35,16 +54,44 @@ jobs:
       - name: Behavioral tests
         shell: bash
         run: |
+          set -euo pipefail
           cd "$RUNNER_TEMP/mac02"
-          pnpm --filter @gram/macos-lifecycle test
-      - name: Package checks and root regressions
+          pnpm --filter @gram/macos-lifecycle test > "$RUNNER_TEMP/mac02-tests.log" 2>&1 || { tail -120 "$RUNNER_TEMP/mac02-tests.log"; exit 1; }
+          tail -22 "$RUNNER_TEMP/mac02-tests.log"
+      - name: Root lint types tests and build
         shell: bash
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/mac02"
-          pnpm --filter @gram/macos-lifecycle lint
-          pnpm --filter @gram/macos-lifecycle typecheck
-          pnpm --filter @gram/macos-lifecycle build
-          pnpm exec vitest run --project macos-lifecycle
-          pnpm test
+          pnpm lint
+          pnpm typecheck
+          pnpm test > "$RUNNER_TEMP/mac02-root-tests.log" 2>&1 || { tail -160 "$RUNNER_TEMP/mac02-root-tests.log"; exit 1; }
+          tail -22 "$RUNNER_TEMP/mac02-root-tests.log"
+          pnpm build
           git diff --check
+          test ! -d packages/macos-lifecycle/dist/test-support
+          test -z "$(find packages/macos-lifecycle/dist -name '*.test.js' -print)"
+      - name: Validate compiled renderer output without installing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          node --input-type=module <<'JS'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { parseConfig, renderPlist } from './packages/macos-lifecycle/dist/index.js';
+          const dir = join(process.env.RUNNER_TEMP, 'mac02-plists');
+          mkdirSync(dir, { recursive: true });
+          const base = { schemaVersion: 1, mode: 'LAB_ONLY', runtimeUser: 'gram-agent',
+            releaseId: 'lab-001', releaseDigest: 'a'.repeat(64), tunnel: { enabled: false } };
+          writeFileSync(join(dir, 'core.plist'), renderPlist(parseConfig(base), 'core'));
+          writeFileSync(join(dir, 'tunnel.plist'), renderPlist(parseConfig({ ...base,
+            tunnel: { enabled: true, compatibilityDigest: 'b'.repeat(64), credentialRef: 'test-tunnel-key' }
+          }), 'tunnel'));
+          JS
+          python3 platform/macos/tests/verify-plist.py "$RUNNER_TEMP/mac02-plists"
+      - name: Native Apple plist syntax check only
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          /usr/bin/plutil -lint "$RUNNER_TEMP/mac02-plists/core.plist" "$RUNNER_TEMP/mac02-plists/tunnel.plist"
