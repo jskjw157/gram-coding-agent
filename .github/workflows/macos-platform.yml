@@ -1,0 +1,83 @@
+name: macos-platform
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  baseline-and-tdd:
+    if: github.head_ref == 'feat/macos-platform-readiness' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify exact unmodified baseline in isolated worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/mac01-baseline" fdf5dda2211e011e473f1c89095b78d7cb565c2f
+          cd "$RUNNER_TEMP/mac01-baseline"
+          pnpm install --frozen-lockfile
+          pnpm lint
+          pnpm typecheck
+          pnpm test
+          pnpm build
+      - name: Create isolated feature worktree and resolve only new importer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/mac01-feature" HEAD
+          cd "$RUNNER_TEMP/mac01-feature"
+          cp pnpm-lock.yaml "$RUNNER_TEMP/mac01-lock.before"
+          pnpm install --lockfile-only
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re
+          before=Path(os.environ['RUNNER_TEMP']+'/mac01-lock.before').read_text()
+          after=Path('pnpm-lock.yaml').read_text()
+          restored=re.sub(r'\n  packages/platform:\n.*?(?=\n  [^ ]|\npackages:)', '', after, flags=re.S)
+          assert restored == before, 'unrelated lockfile churn; refuse publication'
+          assert '\n  packages/platform:\n' in after, 'new importer missing'
+          PY
+          pnpm install --frozen-lockfile
+          git diff --check
+          git diff --stat
+      - name: Persist generated lockfile to this feature branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac01-feature"
+          if git diff --quiet -- pnpm-lock.yaml; then exit 0; fi
+          actual=$(gh api repos/jskjw157/gram-coding-agent/git/ref/heads/feat/macos-platform-readiness --jq '.object.sha')
+          test "$actual" = "$EXPECTED_HEAD"
+          export LOCK_BLOB=$(git rev-parse HEAD:pnpm-lock.yaml)
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, base64, os
+          Path(os.environ['RUNNER_TEMP']+'/mac01-lock-update.json').write_text(json.dumps({
+            'message':'chore(platform): record generated platform lockfile importer',
+            'branch':'feat/macos-platform-readiness',
+            'sha':os.environ['LOCK_BLOB'],
+            'content':base64.b64encode(Path('pnpm-lock.yaml').read_bytes()).decode()
+          }))
+          PY
+          gh api --method PUT repos/jskjw157/gram-coding-agent/contents/pnpm-lock.yaml --input "$RUNNER_TEMP/mac01-lock-update.json" --jq '.commit.sha'
+      - name: Execute detector RED before production implementation
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/mac01-feature"
+          pnpm --filter @gram/platform test -- src/detect.test.ts
