@@ -1,0 +1,65 @@
+name: macos-lifecycle
+on:
+  pull_request:
+    paths: ['packages/macos-lifecycle/**', 'platform/macos/**', 'pnpm-lock.yaml', '.github/workflows/macos-lifecycle.yml', 'docs/operations/macos-service-lifecycle.md']
+permissions:
+  contents: read
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fdf5dda2211e011e473f1c89095b78d7cb565c2f
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify unchanged baseline in an isolated worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/mac02-baseline" HEAD
+          cd "$RUNNER_TEMP/mac02-baseline"
+          pnpm install --frozen-lockfile
+          pnpm lint && pnpm typecheck && pnpm test && pnpm build
+          test -z "$(git diff --name-only)"
+  lifecycle:
+    needs: baseline
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Frozen install in an isolated exact-head worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/mac02" HEAD
+          cd "$RUNNER_TEMP/mac02"
+          pnpm install --frozen-lockfile
+          git diff --exit-code -- pnpm-lock.yaml
+      - name: Behavioral tests
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/mac02"
+          pnpm --filter @gram/macos-lifecycle test
+      - name: Package checks and root regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          pnpm --filter @gram/macos-lifecycle lint
+          pnpm --filter @gram/macos-lifecycle typecheck
+          pnpm --filter @gram/macos-lifecycle build
+          pnpm exec vitest run --project macos-lifecycle
+          pnpm test
+          git diff --check
