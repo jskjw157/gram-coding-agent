@@ -29,7 +29,7 @@ describe('readiness evidence', () => {
   it.each(['CORE', 'ISOLATION', 'SERVICE_AUTH'] satisfies ProbeKey[])(
     'does not allow missing %s', (key) => {
       const s = snapshot();
-      delete s.probes[key];
+      Reflect.deleteProperty(s.probes, key);
       expect(evaluateReadiness(s, api, 100_000).blockers).toContainEqual({ probe: key, reason: 'MISSING' });
     },
   );
