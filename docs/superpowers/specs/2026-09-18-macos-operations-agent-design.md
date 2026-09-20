@@ -1,485 +1,270 @@
 # macOS Operations Agent — Working Design
 
-**Status:** DRAFT / design in progress  
+**Status:** DRAFT / written-spec review pending; not an implementation plan  
 **Repository:** `jskjw157/gram-coding-agent`  
+**Design branch:** `docs/macos-operations-agent-design`  
 **Target:** Apple Silicon macOS, always-on dedicated Mac  
-**Date started:** 2026-09-18
+**Date started:** 2026-09-18  
+**Last reviewed:** 2026-09-20 (Asia/Seoul)
 
-> This document records decisions already approved in the design discussion.
-> It is intentionally not an implementation plan yet. Open questions remain and implementation must not begin from this document alone.
-
----
+This revision preserves the agreed product direction and incorporates the reboot/session discussion. It separates user-approved direction, verified repository facts, external platform constraints, and proposed implementation details. Approval of the overall direction does not mean that the Mac runtime exists or that every provider integration has been verified.
 
 ## 1. Product direction
 
-The existing `gram-coding-agent` will evolve from a Windows/WSL-focused coding agent into a **cross-platform operations agent**.
+Evolve the existing repository into a cross-platform operations agent for HAAR shopping-mall operations. Coding is one capability, not the product boundary. The primary interaction remains ChatGPT.
 
-Coding remains a first-class capability, but it is only one module.
+The intended scope includes storefront/marketplace operations, product registration and editing, orders/CS, advertising, email/messaging, Drive/files, spreadsheets/CSV, image/video workflows, browser/native-app automation, and code/site maintenance including tests, deployment and GitHub.
 
-The macOS target is intended to run day-to-day HAAR / shopping-mall operations, including:
+Do not reinterpret the project as a headless coding-only server. Deliver this broad scope through independently reviewable capability increments, not one all-or-nothing implementation.
 
-- storefront and marketplace operations,
-- product registration and editing,
-- order / CS workflows,
-- advertising operations,
-- file and Google Drive workflows,
-- spreadsheets and CSV processing,
-- image / video production workflows,
-- email and messaging workflows,
-- browser-based operational work,
-- site maintenance,
-- code changes, testing, deployment, Git and GitHub operations.
+## 2. Repository and branch strategy
 
-The primary interaction remains ChatGPT.
+**Approved:** one repository, shared core, platform-specific adapters. No separate Mac repository or permanent fork of the Windows core.
 
----
+Current work is documentation-only on `docs/macos-operations-agent-design`. Leave `main` and `feat/m2-vertical-slice` unchanged. Open a separate draft design PR; do not merge, rebase, force-push, or close the Windows PR from this workflow.
 
-## 2. Repository strategy
+After written design and implementation-plan review, use short-lived feature branches based on the then-current reviewed `main`. Any change to shared M2 contracts waits for their integration, or requires an explicitly reviewed dependency-extraction plan. Do not silently cherry-pick the unmerged M2 implementation.
 
-**Decision:** Keep one repository.
-
-Do not create a separate `mac-coding-agent` repository.
-
-The existing repository becomes multi-platform and shares the same domain, policy, persistence, MCP, Git, GitHub, verification, audit and recovery layers.
-
-Platform-specific capabilities are isolated behind adapters.
-
----
+The branch separates development; the folders remain after PR merge. A local implementation checkout should use a separate worktree so it cannot disturb a Windows development checkout.
 
 ## 3. Platform architecture
 
-**Decision:** Introduce a Platform Adapter layer.
-
-Conceptual structure:
+**Approved:** Platform Adapter boundaries. This is a target structure, not existing folders:
 
 ```text
 packages/
-  domain/
-  persistence/
-  policy/
-  mcp/
-  secrets/
-  platform/
-    src/
-      contracts.ts
-      detect.ts
-      linux-wsl/
-      macos/
-
+  domain/                 shared identity and task contracts
+  persistence/            shared durable state
+  policy/                 shared authorization and approvals
+  mcp/                    shared gateway
+  secrets/                credential-use contracts
+  platform/src/
+    contracts.ts
+    detect.ts
+    linux-wsl/
+    macos/
 platform/
-  linux-wsl/
-    systemd/
-    bootstrap.sh
-  macos/
-    launchd/
-    bootstrap.sh
+  linux-wsl/               eventual systemd/bootstrap home
+  macos/                  launchd/bootstrap
 ```
 
-Shared core:
+Reuse Task Engine, audit, Git/GitHub, verification and recovery as they become available. Add business/browser/native-app capabilities behind ports; do not import orchestration into platform adapters.
 
-- Task Engine
-- SQLite / WAL persistence
-- Policy Engine
-- MCP
-- audit / observability
-- Git / GitHub
-- worktree lifecycle
-- verification
-- recovery
-- publishing
-
-Platform adapters own OS-specific concerns such as:
-
-- service lifecycle,
-- paths,
-- opening / revealing files,
-- clipboard,
-- package management,
-- native application integration,
-- GUI-session bridging.
-
----
+Do not move existing `systemd/` or `scripts/bootstrap-wsl.sh` in the first Mac change. Add Mac files first; any later WSL relocation must update its installers, docs and tests together in a separate PR.
 
 ## 4. macOS support target
 
-**Decision:** Apple Silicon only for the first macOS version.
+**Approved:** Apple Silicon, always-on dedicated Mac. Intel compatibility is outside the initial target.
 
-Intel Mac compatibility is out of scope for the initial implementation.
-
-**Decision:** The primary deployment target is an **always-on dedicated Mac**, not a personal laptop used intermittently.
-
----
+The exact target macOS build, installed Aside version, runtime paths and native dependency support have not been inspected on the real Mac. Record them during bootstrap validation; do not infer them from a browser user-agent. Native runtime support and recovery features have separate compatibility checks.
 
 ## 5. Runtime account and privilege model
 
-**Decision:** Use a dedicated local account named conceptually `gram-agent`.
+**Approved:** dedicated local non-admin `gram-agent` account, separate browser/application state and workspaces. Administrator participation is for installation or explicitly approved system changes, not standing root privileges for the agent.
 
-Properties:
+Application approval does not itself grant OS authorization. Do not add broad passwordless sudo or give the runtime permission to rewrite its own privileged launchd configuration.
 
-- local non-admin account,
-- dedicated to agent operation,
-- separate home directory,
-- separate browser and application state,
-- separate workspaces, downloads, uploads and secret storage,
-- no standing administrator privilege.
+A dedicated account separates personal data, but is not a sandbox between processes running as that account. Repository scripts must not inherit browser credentials or gain access to broker secrets merely because they share a user ID. Executor isolation and authenticated broker IPC are required security design work before real store credentials are onboarded; environment filtering alone is not proof of isolation.
 
-Installation/bootstrap may require an administrator account, but long-running processes must run as `gram-agent`.
+## 6. launchd model and capability boundary
 
-The agent should not inherit broad access to a human user's personal Desktop, Documents, iCloud Drive or Keychain by default.
-
----
-
-## 6. launchd model
-
-The macOS deployment replaces the WSL/systemd-specific service layer.
-
-Proposed split:
+**Agreed direction:** background core/tunnel plus a logged-in user-session helper.
 
 ```text
-macOS boot
-   |
-   +-- background core service
-   |     +-- Operations Agent
-   |     +-- localhost MCP
-   |     +-- Task Engine
-   |     +-- persistence
-   |     +-- Git / filesystem / API work
-   |
-   +-- OpenAI tunnel-client service
-   |
-   +-- logged-in GUI session helper
-         +-- browser interaction
-         +-- Finder / open / reveal
-         +-- clipboard
-         +-- screenshots
-         +-- native app automation
+authenticated data-volume unlock
+  -> LaunchDaemon: core, running as gram-agent
+  -> LaunchDaemon: tunnel, running as gram-agent
+  -> core recovery and non-GUI capabilities
+
+actual gram-agent GUI login
+  -> LaunchAgent: browser/native helper
+  -> user credential/vault availability checks
+  -> browser session checks
+  -> eligible GUI/browser work
 ```
 
-The background core and GUI-session automation are separate trust and capability boundaries.
+These are separate capability boundaries. The helper receives typed, scoped requests through authenticated local IPC; it must not expose an unrestricted shell, script, or secret-reading endpoint. Installation files and executable identity need tamper-resistant ownership.
 
-Exact LaunchDaemon / LaunchAgent topology will be finalized with reboot/login recovery design.
-
----
+Missing GUI login, locked screen, missing TCC permission, locked vault, disconnected browser and expired website authentication are different conditions. A process being alive does not prove a workflow is runnable.
 
 ## 7. Operations-first capability model
 
-The macOS version is **not** a headless coding-only server.
+Keep these groups separate: core runtime/scheduler; business adapters; browser automation; macOS GUI automation; coding.
 
-Major capability groups:
+A non-coding task must not need a fabricated repository, Git branch or PR. Coding tasks retain UUIDv7 identity, atomic display sequence, worktree isolation and existing publishing rules. Proposed future task extensions must remain backward compatible with the current coding API and database migrations.
 
-### Core Runtime
+Browser/account resource leases are not Repo Locks. Serialize incompatible mutations against the same store/account/profile, and release a browser lease before waiting for a human challenge. Reconcile the page and account again on resume.
 
-- Task Engine / scheduler
-- SQLite persistence
-- audit / recovery
-- Policy Engine
-- Secret Provider
-- MCP gateway
-
-### Business Adapters
-
-- shopping mall / marketplace APIs
-- advertising APIs
-- Gmail / Drive / Sheets integrations
-- GitHub / deployment
-- image / video services
-- other business SaaS integrations
-
-### Browser Automation
-
-- navigate
-- click
-- type
-- upload
-- download
-- read page state
-- complete operational browser flows
-
-### macOS GUI Automation
-
-- Finder / native file picker
-- open / reveal
-- clipboard
-- screenshots / vision
-- native application interaction
-
-### Coding
-
-- repository discovery
-- worktrees
-- file editing
-- test / build
-- commit / push / PR
-- CI observation
-
----
+Each machine owns its own local state. Do not share a live SQLite file or browser profile between the Gram and Mac. Cross-machine mutation coordination is not implemented; initially assign a single writer for each live operational account/resource.
 
 ## 8. Automation priority
 
-**Decision:** Prefer structured APIs/connectors before browser or GUI automation.
+**Approved:** API/connector first, typed local adapter next, browser DOM automation next, native GUI last.
 
-Priority:
+ChatGPT-connected Gmail/Drive or other plugins are not automatically callable by an unattended local daemon. Connector-executed steps and locally implemented OAuth/API steps must be distinguished. Do not assume that a disconnected ChatGPT conversation can keep choosing new actions or that a browser subagent consumes no separate provider entitlement.
 
-```text
-1. API / native connector
-2. dedicated typed adapter
-3. browser DOM automation
-4. native macOS GUI automation
-```
-
-Examples:
-
-- use an official marketplace API when available,
-- use Gmail / Drive connectors rather than webmail clicking when available,
-- use browser automation for services that expose only web UI,
-- use native GUI automation only when DOM/API access cannot complete the workflow.
-
-This reduces brittleness and unnecessary exposure to GUI permissions.
-
----
+Without an active reasoning client, only already-authorized deterministic local workflows may continue. An ambiguous step stops for reconnection or human input. No additional paid AI API dependency is introduced by this design.
 
 ## 9. Browser execution model
 
-Use a dedicated operational browser environment owned by `gram-agent`.
+Use dedicated `gram-agent` operational browser state, never the person's daily browsing profile.
 
-Do not automate the human user's everyday Chrome profile.
-
-Conceptual storage:
+Conceptual storage, subject to bootstrap path validation:
 
 ```text
-/Users/gram-agent/
-  agent/
-    state/
-    workspaces/
-    downloads/
-    uploads/
-    browser/
-      operations-profile/
+/Users/gram-agent/agent/
+  state/
+  workspaces/
+  uploads/
+  downloads/
+  browser/
+    aside/                logical reference to Aside-owned state
+    playwright/           separate persistent profile
 ```
 
-The browser profile is treated as sensitive authentication state.
+The Aside path is not a promise that its physical profile location is configurable. Discover provider-owned locations through supported mechanisms.
 
-Browser cookies / local storage must not be copied into Git, task SQLite payloads or audit logs.
-
----
+Only one owning browser process may use a given profile directory. Aside and Playwright do not concurrently open the same profile. Browser profiles/auth state are sensitive, excluded from Git, task payloads and ordinary diagnostics. [P1]
 
 ## 10. Aside + Playwright strategy
 
-**Decision:** Use a layered browser model.
+**Approved preference:** Aside primary when healthy and capable; dedicated persistent Playwright fallback; native GUI for steps not supported by APIs/DOM.
 
-### Primary: Aside
+Aside's official documentation describes CLI, MCP and REPL interfaces, including continuing an agent session with `--session`. That does not establish the lifetime of every REPL object, compatibility with every Playwright API, or post-crash resumability. Probe the installed version and expose a capability/health result before routing. [A1]
 
-Aside is preferred when available because it can operate against a real logged-in browser state.
+Use the local Aside integration behind the existing gateway/policy boundary. Do not expose a second remote tunnel or treat Aside's nested task permissions as a replacement for our approval policy.
 
-### Fallback: Playwright
-
-A dedicated persistent Playwright / Chromium profile provides a second execution path when Aside is unavailable or unsuitable.
-
-Conceptual selection:
-
-```text
-Aside READY
-  -> use Aside
-
-Aside unavailable / crashed
-  -> use persistent Playwright profile
-
-Playwright session not authenticated
-  -> attempt safe session recovery
-
-Session cannot be recovered automatically
-  -> NEEDS_APPROVAL
-```
-
-Exact Aside integration details remain subject to implementation verification.
-
----
+A provider switch is an execution fallback, not an authentication guarantee. Recheck account/store identity, login state and last observed side effects before resuming. Stop when equivalent account/domain permissions cannot be enforced.
 
 ## 11. Session persistence and recovery
 
-**Decision:** Do not depend on one long-lived browser tab or one cookie session.
+Track four independent layers: ChatGPT/MCP connection; durable Task/checkpoint; browser process/profile; website login/OAuth state.
 
-Use layered recovery:
+Recovery order:
 
-### Tier 1 — existing browser session
+1. Recover persisted task/checkpoint and reconcile any in-flight external effect.
+2. Reconnect to a healthy browser using that provider's persistent state.
+3. Check authenticated account/store identity, not merely absence of a login form.
+4. Use a supported refresh or locally brokered login action within its grant.
+5. Wait for human action when MFA, CAPTCHA, passkey presence, identity confirmation or vault unlock is required.
 
-Reuse real browser cookies / local storage when the service session remains valid.
+Use bounded retry/backoff. Do not loop password attempts indefinitely. Credentials do not keep expired/revoked server sessions alive. Do not automatically import or decrypt another browser's cookie database as the default fallback; a migration would require a separately validated, scoped and authorized path.
 
-### Tier 2 — persistent fallback browser state
+Do not treat reconnect as authorization to repeat a write. After a timeout following a product save, upload, refund or send action, query the remote result/idempotency key first. Uncertain effects remain blocked for reconciliation.
 
-Use the dedicated persistent Playwright profile and safe cookie/session reuse.
+## 12. Credential Broker and two secret contexts
 
-### Tier 3 — credential-assisted reauthentication
+**Approved:** credentials are used locally; generic MCP `secret_get`, `get_password` and raw cookie export are forbidden. Return status/redacted evidence only.
 
-If the service session expires, a local Credential Broker attempts reauthentication using macOS Keychain-backed credentials where appropriate.
+**Two-context direction:**
 
-If authentication requires human-presence or an unsupported challenge, transition to `NEEDS_APPROVAL`.
+- Service context: minimal tunnel/internal MCP and explicitly provisioned machine credentials. Use a daemon-compatible file-based/System Keychain provider with item access control and verified executable identity. Access as the non-admin service user must pass a real-machine test; placing an item in System Keychain does not by itself prove access.
+- User context: `gram-agent` website credentials, user OAuth credentials and browser login recovery. Use the appropriate user Keychain or provider-owned vault through a constrained credential-use operation.
 
-Examples likely requiring approval:
+Apple documents that the data-protection Keychain requires a user login context; a launchd daemon must target file-based Keychain storage. These are not interchangeable implementations. [K1]
 
-- CAPTCHA,
-- passkey / Touch ID,
-- device verification,
-- unfamiliar-device confirmation,
-- unsupported OTP challenge.
+Aside already provides a Password Manager that autofills matched credentials without returning raw passwords to its agent. Treat it as a provider-owned credential-use facility, not as a proven generic macOS Keychain API or a readable store for Playwright. Its documented per-item/access policies and possible human challenges still apply. Never weaken its vault policy silently. [A2]
 
----
+Keychain remains the intended backend for our own scoped machine/API/login brokers. Do not duplicate/export passwords between Aside and the broker by default. Disable screenshots, DOM-value capture, traces and credential-bearing logs during sensitive fill steps. Tokens, passwords and unlock material must not enter argv, task state, logs, Git or MCP results.
 
-## 12. macOS Keychain Credential Broker
+## 13. FileVault, reboot and health recovery
 
-**Decision:** Use macOS Keychain as a local secret backend for session recovery and operational credentials.
+**Agreed direction:** FileVault ON, staged core/GUI recovery, two secret contexts. This does not promise zero-interaction recovery after a power failure.
 
-Possible stored credential classes:
+Apple does not allow ordinary passwordless automatic login while FileVault is enabled. Do not disable FileVault or screen-lock protections to meet an uptime claim. [F1]
 
-- account passwords,
-- API tokens,
-- refresh tokens,
-- app passwords,
-- other service-specific secrets.
+Before the data volume is unlocked, the installed agent/tunnel cannot be assumed available. After unlock, start core recovery and only advertise capabilities whose required stores/services are ready. GUI login and user-vault readiness remain independent checks.
 
-### Hard security rule
+macOS 26 documents FileVault volume unlock via SSH password authentication when Remote Login is enabled; normal shell access is not initially available and the connection drops during completion of the unlock. This is an optional operator recovery path, subject to real hardware/OS/network verification, not automatic browser recovery. [F2]
 
-Do **not** expose a generic MCP secret-reading interface.
+Do not assume a VPN running on the locked Mac provides its own pre-unlock rescue path. If remote rescue is required, design a separately available trusted network path; do not open public SSH or store the FileVault password in agent config. No network topology is provisioned by this document. Planned authenticated restart support is also a target-machine verification gate, not a guaranteed Apple Silicon capability.
 
-Forbidden model:
+Proposed observable conditions, not new values silently inserted into the current TaskStatus enum:
 
-```text
-get_password("service")
--> raw password
-```
+| Condition | Runnable work | Required recovery |
+|---|---|---|
+| Data volume locked / host unreachable | None through this local agent | Operator unlock or separately approved rescue path |
+| CORE_RECOVERING | Diagnostics only | DB/lease/workspace/in-flight-effect reconciliation |
+| CORE_READY, no GUI session | Eligible API/file/Git work with available credentials | Actual user login for GUI-dependent work |
+| GUI session locked or permission missing | Independently eligible core/DOM work only | Unlock/permission action; verify capability before continuing |
+| Vault locked / AUTH_REQUIRED | Unrelated work only | Approved local login or human challenge |
+| BROWSER_READY + account verified | Scoped browser work | Normal checkpointed execution |
+| External write outcome unknown | Read-only reconciliation | Confirm remote effect before any retry |
 
-Preferred model:
+Human authentication waits and infrastructure waits are distinct from permission approval. Keep existing coding Task states unchanged until an additive lifecycle design/migration is reviewed.
 
-```text
-auth_login(service, account)
--> local broker obtains secret
--> local adapter uses it directly
--> MCP receives only status / redacted evidence
-```
-
-Secret values must not appear in:
-
-- ChatGPT responses,
-- MCP results,
-- audit logs,
-- Task records,
-- command output retained in SQLite,
-- Git commits.
-
-The broker should lease/use credentials for a narrowly scoped operation rather than returning them to generic callers.
-
----
-
-## 13. Browser/session security
-
-Browser profiles and cookie stores are security-sensitive assets.
-
-Requirements:
-
-- dedicated `gram-agent` ownership,
-- restrictive filesystem permissions,
-- no Git tracking,
-- no raw cookie dumping into diagnostics,
-- backup strategy must exclude or encrypt authentication state,
-- browser auth state is not considered a substitute for Keychain-based recovery credentials,
-- Keychain credentials are not considered permission to bypass MFA / human-presence challenges.
-
----
+Scheduler direction: persist schedule identity, time zone, due occurrence, attempt and completion checkpoint. Define catch-up/coalesce/expire per workflow. Reports may catch up; missed publishing, refunds, payments and sends must not be replayed blindly. A restart must not manufacture fresh authorization.
 
 ## 14. Policy model for business operations
 
-The existing `ALLOW / NEEDS_APPROVAL / DENY` model remains.
+Retain `ALLOW / NEEDS_APPROVAL / DENY` and bind grants to account, normalized operation, resource, material parameters and expiry. Recheck before the external commit action.
 
-Illustrative direction:
+Read-only product/inventory/ad reporting and preparing local drafts are low-risk candidates. Routine live edits or approved asset uploads can be automated only within an explicit operational grant. Provider switching must not widen that grant.
 
-### ALLOW candidates
+Until specific thresholds are agreed, new live publication, pricing changes, ad-budget changes, refunds, payments, outbound CS messages and bulk mutations stop for review. Account/store deletion, credential exfiltration, protected-history destruction and security-boundary bypass remain blocked.
 
-- read product information,
-- read orders,
-- check inventory,
-- read ad reports,
-- upload approved assets,
-- routine product edits within defined rules,
-- normal code/test/build operations.
-
-### NEEDS_APPROVAL candidates
-
-- significant advertising budget changes,
-- refunds,
-- payments / purchases,
-- account security changes,
-- bulk destructive edits,
-- credential / login changes,
-- unusual high-impact publication actions.
-
-### DENY candidates
-
-- account deletion,
-- store deletion,
-- destructive mass deletion without a separately designed recovery path,
-- credential exfiltration,
-- attempts to bypass hard platform security boundaries.
-
-Exact thresholds and operation-specific rules will be defined later.
-
----
+Remote pages, emails, documents and repository instructions are untrusted task data, not authorization to change policies or reveal credentials. Store only necessary/redacted customer data in evidence.
 
 ## 15. Relationship to existing Windows / WSL architecture
 
-The existing core concepts remain valid:
+Preserve UUIDv7 + display sequence, SQLite WAL, coding worktrees, same-repo serialization, different-repo concurrency, PR-by-default and explicit direct-main grants, localhost-only MCP, OpenAI tunnel-client, secret-safe audit, and remote SHA confirmation before Repo Lock release. PR creation and CI observation stay lock-free.
 
-- stateful Task Engine,
-- SQLite WAL,
-- task-scoped worktrees,
-- same-repo serialization,
-- different-repo concurrency,
-- branch -> commit -> push -> PR by default,
-- explicit direct-main grant only,
-- protected-branch force push/delete denied,
-- localhost-only MCP,
-- OpenAI tunnel-client as remote MCP transport,
-- approval-gated high-risk operations,
-- audit evidence.
+The Windows M2/M3 recovery and verification modules are shared dependencies, not copied into a competing Mac engine. This draft does not alter the original approved Windows spec or its milestone gates.
 
-WSL/systemd/Windows-specific implementations become one platform implementation rather than assumptions embedded into the shared core.
+## 16. Remaining design and validation gates
 
----
+These are explicit pending gates, not implemented capabilities:
 
-## 16. Open decisions
+- Stable signed helper identity, authenticated IPC and executor isolation from real account secrets.
+- Exact supported macOS/Aside versions; arm64 runtime/native-dependency and launchd smoke tests.
+- Aside MCP/REPL capability probe and side-effect-safe cancellation/reconciliation behavior.
+- Daemon Keychain access, user-vault locked behavior, and secret-free diagnostics on the actual Mac.
+- TCC scope for Accessibility, Screen Recording, Automation and file access; no blanket Full Disk Access by default.
+- Optional pre-unlock remote rescue route and planned restart support; no automatic-login/security changes are authorized.
+- First real HAAR service/account fixture and approved mutation limits. TOTP/OTP remains provider-supported or human-assisted, not a generic bypass.
+- Encrypted state backup/restore, excluded browser auth state, and re-provisioning of device-bound secrets; no export of hardware-protected keys.
 
-The following items are intentionally unresolved:
+## 17. Current design gate and next increment
 
-1. exact LaunchDaemon vs LaunchAgent split for the core/tunnel/helper processes,
-2. reboot recovery when no GUI user is logged in,
-3. whether the dedicated `gram-agent` account uses automatic login,
-4. FileVault implications for unattended reboot,
-5. Keychain unlock behavior for unattended operation,
-6. macOS TCC permissions:
-   - Accessibility,
-   - Screen Recording,
-   - Automation,
-   - Full Disk Access,
-   - protected-folder access,
-7. exact browser choice and Aside lifecycle ownership,
-8. TOTP handling,
-9. OTP retrieval paths,
-10. GUI automation technology below the browser layer,
-11. operational adapters required for the first HAAR vertical slice,
-12. business-operation approval thresholds,
-13. backup / restore policy for browser state and Keychain references,
-14. health checks and self-healing for browser / GUI-session helpers.
+This is still a Working Design. Review the written spec and resolve the applicable security/compatibility gates before deriving an executable implementation plan. Implementation begins only after that written plan is reviewed and an execution method is selected.
 
----
+Proposed sequence, not an approved executable task plan:
 
-## 17. Current design gate
+1. Platform contracts and capability reporting, with WSL regression tests and no existing path relocation.
+2. Mac core/tunnel lifecycle and staged readiness, using test credentials only.
+3. Backward-compatible operations task/resource model after shared M2 dependencies are integrated.
+4. Browser sessions, credential-use broker and GUI helper, with isolation/permission tests.
+5. A HAAR vertical slice: inspect one product, prepare assets/draft, save evidence, stop before unapproved live publication.
 
-This document is a working decision record.
+Payments, live ad changes and CS sending are later separately gated workflows, not default acceptance fixtures.
 
-Before implementation begins:
+## 18. Verified repository checkpoint — 2026-09-20
 
-1. resolve the remaining architecture questions,
-2. convert this working draft into an approved design specification,
-3. self-review the specification for ambiguity / contradictions,
-4. obtain explicit user approval,
-5. write the implementation plan,
-6. only then begin code changes.
+Observed through GitHub, not inferred from previous chat:
+
+- `main`: `fdf5dda2211e011e473f1c89095b78d7cb565c2f`; PR #131 is merged.
+- `feat/m2-vertical-slice`: `c7fc805511bd777059d93c6a8360596a934919dc`; PR #135 is open/draft/unmerged. Its progress record covers Tasks 1–7; Task 8 issue #58 is open.
+- Actions run `35329853818` reports `completed/success` for that exact M2 head. This review checked the recorded run; it did not rerun product tests.
+- Before this revision the Mac branch was one document commit (`f0de2f5`) ahead of main, zero behind, with no implementation changes.
+
+Concrete integration seams found in M2 source:
+
+- `packages/task-engine/src/task-service.ts`: requires `repo` and persists `taskType: 'CODING'`. Non-coding task support is not present.
+- `packages/workspace/src/path-mapper.ts`: WSL-to-Windows conversion.
+- `packages/workspace/src/worktree-service.ts`: requires `toWindows()` and returns `linuxPath`/`windowsPath`. A platform-neutral native path plus optional display paths needs an additive compatibility plan.
+- Shared policy, persistence, MCP, task, shell, Git and workspace changes are still owned by the unmerged M2 work. Do not edit them from this documentation branch.
+
+See `docs/operations/2026-09-20-macos-integration-checkpoint.md` for evidence links and handoff boundaries. Any implementation must refresh this snapshot first.
+
+## 19. External references and corrected assumptions
+
+These sources validate platform constraints; they are not evidence that our implementation works.
+
+- [A1] Aside developer interfaces: https://docs.aside.com/help/developers
+- [A2] Aside credential autofill and human challenges: https://docs.aside.com/help/password-manager
+- [P1] Playwright persistent profiles and single-owner restriction: https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context
+- [K1] Apple TN3137, Keychain contexts: https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains
+- [F1] Apple automatic-login/FileVault constraints: https://support.apple.com/102316
+- [F2] Apple OpenSSH FileVault unlock manual: https://github.com/apple-oss-distributions/OpenSSH/blob/main/apple_ssh_and_filevault.7
+
+This revision explicitly narrows earlier conversational assumptions: Aside is not a verified cookie-export bridge; its own vault is not synonymous with our Keychain provider; fallback browser availability is not authenticated-session continuity; and FileVault unlock is not equivalent to GUI login or vault unlock. These distinctions preserve the approved security and operations goals without claiming untested behavior.
