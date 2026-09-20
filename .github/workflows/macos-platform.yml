@@ -37,3 +37,19 @@ jobs:
           pnpm --filter @gram/platform build
           pnpm exec vitest run --project platform
           git diff --check
+      - name: Execute compiled Linux diagnostic and verify its honest exit status
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac01-feature"
+          code=0
+          node packages/platform/dist/cli.js --json > "$RUNNER_TEMP/mac01-diagnostic.json" || code=$?
+          test "$code" -eq 2
+          node --input-type=module - "$RUNNER_TEMP/mac01-diagnostic.json" <<'JS'
+          import { readFileSync } from 'node:fs';
+          const r = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          if (r.mode !== 'DIAGNOSTIC_ONLY' || r.liveProbesCollected !== false ||
+              r.platform.kind !== 'unsupported' ||
+              Object.values(r.capabilities).some(v => v.status !== 'UNSUPPORTED')) process.exit(1);
+          console.log(JSON.stringify(r));
+          JS
