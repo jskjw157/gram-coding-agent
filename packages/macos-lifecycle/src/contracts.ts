@@ -1,8 +1,8 @@
 export type Role = 'core' | 'tunnel';
-export const labels = {
+export const labels = Object.freeze({
   core: 'com.haar.gram-agent.core',
   tunnel: 'com.haar.gram-agent.tunnel',
-} as const;
+} as const);
 export const root = '/Library/Application Support/HAAR/GramAgent';
 export interface ServiceConfig {
   schemaVersion: 1;
