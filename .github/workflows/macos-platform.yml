@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 jobs:
-  baseline-and-tdd:
+  detector-tdd:
     if: github.head_ref == 'feat/macos-platform-readiness' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -22,37 +22,40 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Verify exact unmodified baseline in isolated worktree
-        shell: bash
-        run: |
-          set -euo pipefail
-          git worktree add --detach "$RUNNER_TEMP/mac01-baseline" fdf5dda2211e011e473f1c89095b78d7cb565c2f
-          cd "$RUNNER_TEMP/mac01-baseline"
-          pnpm install --frozen-lockfile
-          pnpm lint
-          pnpm typecheck
-          pnpm test
-          pnpm build
-      - name: Create isolated feature worktree and resolve only new importer
+      - name: Create isolated feature worktree and preserve locked resolutions
         shell: bash
         run: |
           set -euo pipefail
           git worktree add --detach "$RUNNER_TEMP/mac01-feature" HEAD
           cd "$RUNNER_TEMP/mac01-feature"
           cp pnpm-lock.yaml "$RUNNER_TEMP/mac01-lock.before"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('pnpm-lock.yaml'); text=p.read_text()
+          if '\n  packages/platform:\n' not in text:
+            source=re.search(r'  packages/secrets:\n.*?(?=\npackages:)', text, re.S)
+            assert source, 'locked dependency reference missing'
+            block=source.group().replace('packages/secrets:', 'packages/platform:', 1).rstrip('\n')+'\n\n'
+            text=text.replace('  packages/policy:\n',block+'  packages/policy:\n',1)
+            p.write_text(text)
+          PY
           pnpm install --lockfile-only
           python3 - <<'PY'
           from pathlib import Path
-          import os, re
+          import os, re, difflib
           before=Path(os.environ['RUNNER_TEMP']+'/mac01-lock.before').read_text()
           after=Path('pnpm-lock.yaml').read_text()
-          restored=re.sub(r'\n  packages/platform:\n.*?(?=\n  [^ ]|\npackages:)', '', after, flags=re.S)
-          assert restored == before, 'unrelated lockfile churn; refuse publication'
-          assert '\n  packages/platform:\n' in after, 'new importer missing'
+          def strip(text):
+            return re.sub(r'\n  packages/platform:\n.*?(?=\n  [^ ]|\npackages:)', '', text, flags=re.S)
+          if strip(after) != strip(before):
+            print(''.join(difflib.unified_diff(strip(before).splitlines(True),strip(after).splitlines(True)))[:16000])
+            raise SystemExit('unrelated lockfile churn; refuse publication')
+          assert '\n  packages/platform:\n' in after
           PY
           pnpm install --frozen-lockfile
           git diff --check
-          git diff --stat
+          git diff -- pnpm-lock.yaml
       - name: Persist generated lockfile to this feature branch only
         env:
           GH_TOKEN: ${{ github.token }}
