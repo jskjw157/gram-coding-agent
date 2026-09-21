@@ -32,9 +32,9 @@ export class EvidenceCollector {
   persistPlan(input: PersistVerificationPlanInput): PersistedVerificationPlan {
     const planId = this.repository.createPlan({
       taskId: input.taskId,
-      headSha: input.headSha,
+      ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
       changeClass: input.plan.changeClass,
-      risk: input.risk,
+      ...(input.risk === undefined ? {} : { risk: input.risk }),
       plan: input.plan,
     });
 
@@ -45,7 +45,7 @@ export class EvidenceCollector {
         name: check.name,
         required: check.required,
         status: check.status,
-        reason: check.reason,
+        ...(check.reason === undefined ? {} : { reason: check.reason }),
       });
       return { ...check, id };
     });
@@ -67,7 +67,7 @@ export class EvidenceCollector {
     this.repository.finishCheck(input.checkId, {
       status: input.status,
       commandRunId: input.commandRunId,
-      reason: input.reason,
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     });
   }
 
@@ -82,8 +82,8 @@ export class EvidenceCollector {
   }): void {
     this.repository.finishCheck(input.checkId, {
       status: input.status,
-      evidenceRef: input.evidenceRef,
-      reason: input.reason,
+      ...(input.evidenceRef === undefined ? {} : { evidenceRef: input.evidenceRef }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
     });
   }
 }
