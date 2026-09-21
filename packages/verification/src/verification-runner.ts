@@ -143,7 +143,7 @@ export class VerificationRunner {
       await this.options.evidence.recordNonCommandResult({
         checkId: check.id,
         status: gate.status,
-        evidenceRef: gate.evidenceRef,
+        ...(gate.evidenceRef === undefined ? {} : { evidenceRef: gate.evidenceRef }),
         ...(gate.reason === undefined ? {} : { reason: gate.reason }),
       });
       results.push(resultFrom(check, gate.status, gate.reason));
