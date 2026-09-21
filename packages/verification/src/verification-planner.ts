@@ -69,6 +69,21 @@ export class VerificationPlanner {
       });
     }
 
+    checks.push(
+      {
+        name: 'secret-scan',
+        kind: 'NON_COMMAND',
+        required: true,
+        status: 'PENDING',
+      },
+      {
+        name: 'diff-review',
+        kind: 'NON_COMMAND',
+        required: true,
+        status: 'PENDING',
+      },
+    );
+
     if (changeClass === 'UI') {
       if (repoProfile.capabilities?.browserVerification === true) {
         checks.push({
