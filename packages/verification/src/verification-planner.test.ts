@@ -20,7 +20,7 @@ describe('VerificationPlanner', () => {
     expect(plan.changeClass).toBe('FRONTEND_LOGIC');
     expect(
       plan.checks
-        .filter((check) => check.required)
+        .filter((check) => check.kind === 'COMMAND' && check.required)
         .map((check) => [check.name, check.command]),
     ).toEqual([
       ['lint', 'pnpm lint'],
@@ -43,6 +43,30 @@ describe('VerificationPlanner', () => {
     expect(plan.changeClass).toBe('DOCUMENTATION');
     expect(plan.checks.some((check) => check.name === 'build')).toBe(false);
     expect(plan.checks.some((check) => check.name === 'test')).toBe(false);
+  });
+
+  it('always plans secret scan and diff review as required publish gates', () => {
+    const plan = planner.plan(
+      { paths: ['docs/operations/runbook.md'] },
+      { commands: {}, capabilities: {} },
+    );
+
+    expect(plan.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'secret-scan',
+          kind: 'NON_COMMAND',
+          required: true,
+          status: 'PENDING',
+        }),
+        expect.objectContaining({
+          name: 'diff-review',
+          kind: 'NON_COMMAND',
+          required: true,
+          status: 'PENDING',
+        }),
+      ]),
+    );
   });
 
   it('requires browser verification for UI changes only when the repository declares the capability', () => {
