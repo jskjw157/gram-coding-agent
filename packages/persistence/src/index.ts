@@ -6,3 +6,4 @@ export * from './repositories/task-repository.js';
 export * from './repositories/lock-repository.js';
 export * from './repositories/workspace-repository.js';
 export * from './repositories/command-run-repository.js';
+export * from './repositories/verification-repository.js';
