@@ -1,139 +1,149 @@
-# MAC-02 Service Lifecycle — Native Service Probe Checkpoint
+# MAC-02 Service Lifecycle — Installed Identity and Preview Integration
 
 **Updated:** 2026-09-23 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Not an installed service or completed MAC-02.  
-**Branch:** `feat/macos-service-lifecycle`; Draft PR #138.  
-**Verified code checkpoint:** `bbeeb4cd3b6d403bea4270fca1b1735374b45b29`.  
-**Resume baseline for this increment:** `6611c5562746b1aa1612a3e2eb9d7f8e652a3d19`.  
+**Status:** IN_PROGRESS / PARTIAL. This is not an installed service or a completed MAC-02.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft and unmerged.  
+**Implementation checkpoint:** `6114ea0724afda63066689fa9ec733d805af8056`.  
+**Additional test checkpoint:** `dab581d97b8c4531f1adc4e6bc79d691a483e63e`.  
+**Resume baseline:** `73003de0f5d0a0669f62ae7e8a4dd9c260b167ed`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
 **Implementation merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
 
 ## 1. Current scope
 
-| Plan task | Status |
+| Task | Status |
 |---|---|
-| Task 1 | Implemented: strict LAB_ONLY configuration, canonical digest, frozen service labels, fixed XML renderer |
-| Task 2 | PARTIAL: file/release/ACL/account inspection plus native launchd registration/override queries, TCP occupancy and trusted path-presence checks now exist |
-| Task 2 remaining | Installed-manifest/plist identity, live OWNED-process proof, independently trusted helper bootstrap, fixed-root Inspector composition and complete preview acceptance |
-| Tasks 3–7 | NOT_IMPLEMENTED: durable circuits/status/logs, authenticated peer health, supervisors, admin install/rollback/uninstall, runnable CLI and sealed packaging |
-| Task 8 | Read-only unit/native/component CI exists; full lifecycle, independent review and user-device acceptance remain incomplete |
+| Task 1 | Implemented: strict LAB_ONLY config, frozen labels, canonical digest and fixed plist renderer |
+| Task 2 | PARTIAL: existing file/release/ACL/account/registry/port checks plus static installed identity and six-port preview composition implemented |
+| Task 2 remaining | Independently authenticated ACL-helper bootstrap, running-installation identity via Task 4, real fixed-root native integration acceptance |
+| Tasks 3–7 | Not implemented: durable circuits/status/logs, authenticated peer health, supervisors, administrative install/rollback/uninstall, runnable CLI and sealed packaging |
+| Task 8 | Read-only component/native CI exists; full service lifecycle, independent review and user-device acceptance remain incomplete |
 
-There is still no production Inspector factory wiring every native observation to `preview`. No missing check is replaced with a successful boolean. Registration, disabled overrides, path existence and port occupancy are separate observations, not permission to install or restart anything.
+The new factory has fixed paths and actual native observation adapters. Its missing trusted ACL dependency fails closed. It is not a ready-to-install command, and constructing it is not proof that the machine is ready. No result authorizes installation or business operations.
 
-## 2. What this continuation actually added
+## 2. This increment
 
-New production modules:
+Added four files, without rewriting the existing checks:
 
-- `packages/macos-lifecycle/src/adapters/macos-service-probes.ts`
-- `packages/macos-lifecycle/src/adapters/trusted-presence.ts`
+- `packages/macos-lifecycle/src/installation-inspection.ts`
+- `packages/macos-lifecycle/src/installation-inspection.test.ts`
+- `packages/macos-lifecycle/src/adapters/native-inspector.ts`
+- `packages/macos-lifecycle/src/native-inspector.test.ts`
 
-Five accompanying test files add 73 tests to the previous 190-test package: 42 service-output cases, 10 override-spelling cases, 15 real temporary-filesystem presence cases, and 6 actual-Mac service/port/plist cases. The native ACL/account/file/release implementation at baseline `6611c556` already existed and was reused rather than rewritten.
+There are 38 installation identity cases and 12 composition cases: 50 additional tests over the preceding 263-test package. The implementation consumes actual bounded byte readers, release validation, path-presence checks and the existing decision-layer `preview`; it does not accept a precomputed trusted-release flag from a CLI.
 
-No dependency, original CI, WSL file, shared M2 contract, database schema, credential, account, TCC permission or launchd job was changed. This continuation does not use or copy GPT-Bridge.
+No user account, launchd job, permission, database, credential, dependency, original workflow or Windows contract is changed by this increment. GPT-Bridge is not copied or integrated.
 
-## 3. Native service and port observations
+## 3. Static installation identity
 
-Only fixed read-only commands are issued, with a 2-second timeout, 1 MiB output cap, minimal C-locale environment and no shell:
+`inspectInstallation(account, io)` accepts only a genuinely pristine installation or an explicitly disabled, unregistered installation with verified static files. All managed objects must be regular trusted files or genuinely absent; orphaned configuration, plist, journal or manifest files are refused.
 
-| Purpose | Fixed command |
+An existing manifest must match the current non-admin account UID/GID, the exact configuration bytes and the configured release. The actual core/tunnel plist bytes must match both their manifest hashes and the output of the fixed renderer for that installed configuration. An attacker cannot make a foreign plist acceptable merely by putting its new hash into the manifest.
+
+The installed release is revalidated through the existing full manifest/inventory/hash verifier. The old release digest is anchored by the root-controlled installed record; the candidate new release digest still comes independently from the caller's reviewed input. No staged program is executed to discover its identity.
+
+Before returning, the implementation checks all path presences, all read bytes and registry state again. The resulting digest covers the complete fixed-file snapshot and registry observation, not just the installation manifest. It detects changed observations; it is not an atomic reservation against concurrent trusted-root actions.
+
+**Conservative limit:** any registered job is refused, regardless of its name or PID. Present roles must have explicit disabled overrides and `desiredEnabled=false`. These checks establish static installation provenance, not live process ownership. Task 4 must provide established-peer evidence before support for running installations is added. Occupied ports are never upgraded to OWNED here.
+
+## 4. Closed installation read contract for Task 6
+
+The plan names installation manifests and journal stages but does not give their concrete JSON fields. This increment defines a closed read contract, not an administrative writer. A later writer must use it or introduce an explicitly reviewed versioned change.
+
+Fixed managed locations:
+
+| Logical role | Fixed location |
 |---|---|
-| Core registration | `/bin/launchctl print system/com.haar.gram-agent.core` |
-| Tunnel registration | `/bin/launchctl print system/com.haar.gram-agent.tunnel` |
-| Disabled overrides | `/bin/launchctl print-disabled system` |
-| Numeric TCP snapshot | `/usr/sbin/netstat -an -p tcp` |
-| In-memory plist validation | `/usr/bin/plutil -lint -`, XML supplied on stdin |
+| configuration | `/Library/Application Support/HAAR/GramAgent/config/service.json` |
+| manifest | `/Library/Application Support/HAAR/GramAgent/config/installation.json` |
+| journal | `/Library/Application Support/HAAR/GramAgent/config/install-journal.json` |
+| core | `/Library/LaunchDaemons/com.haar.gram-agent.core.plist` |
+| tunnel | `/Library/LaunchDaemons/com.haar.gram-agent.tunnel.plist` |
 
-No caller-supplied executable, arbitrary launchd label, network endpoint or secret is accepted. Native output is interpreted internally rather than returned as raw command output. The parsers reject failed, oversized, malformed or unexpected observations.
+The manifest requires exactly `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, and `desiredEnabled:{core,tunnel}`. The name is `gram-agent`; hashes bind exact bytes; absent tunnel hash is null. The currently supported installed state is disabled for both roles.
 
-A job is absent only for the specific observed launchctl not-found status/message for the exact fixed label and system domain. Permission errors, empty output and an unknown response are not absence. A matching registration does not establish executable ownership, startup identity, health or authorization.
+If a journal remains, it must have exactly `schemaVersion:1`, `stage:'COMMITTED'` and `installationDigest` equal to the exact manifest SHA-256. An absent journal is allowed only with the otherwise valid installation. Pending/intermediate/mismatched journals are refused, not replayed or deleted. Journal digest and composite preview digest are distinct values.
 
-Disabled-state parsing preserves three outcomes per role: explicitly disabled, explicitly enabled, or no override. It accepts the known boolean spelling and the `enabled`/`disabled` spelling observed on the native CI runner. `disabled`/`true` mean disabled; `enabled`/`false` mean enabled. Unknown words and duplicate entries are rejected. An unset override is not assumed to mean that a service is safely stopped.
+Metadata buffers are copied and bounded to 262,144 bytes even if the underlying reader misbehaves. Unknown fields, accessors in object inputs, invalid UTF-8, identity mismatch, provider exceptions and malformed evidence yield a fixed safe refusal, not raw error text or credential data.
 
-TCP inspection reports `free`, `occupied` or `unknown` for fixed ports 3847 and 8080. IPv4/IPv6/wildcard and bound non-listening sockets are treated conservatively. An unrelated remote port or numeric suffix is not confused with a fixed local port. No connection or authentication data is sent to a listener.
+## 5. Six-port preview composition
 
-**Hard boundary:** occupancy is not OWNED. Do not turn a matching label, PID or open port into permission to send credentials. Task 4 still owns live peer verification. A snapshot is not a reservation; eventual apply/start must revalidate. Diagnostic text is OS-version-sensitive: unrecognized formats fail closed rather than broadening acceptance.
+`composeInspector` uses one instance for one ordered preview: host, account, release, installation, ports, then plist validity. Reuse or out-of-order calls are rejected. Public results are detached from cached configuration/account/installation state.
 
-## 4. Descriptor-bound path presence
+At the final step it compares the proposed XML to the fixed renderer, runs the supplied plist syntax check, rereads account identity, revalidates the candidate release and static installation, and rechecks that the required ports remain free. Changed configuration/plists/release bytes/account/ports do not receive a successful preview.
 
-`probeTrustedPath` distinguishes a regular file, a directory and a genuinely missing path without reading file contents or creating missing parents. Every existing ancestor is opened with no-follow flags and checked for expected owner, mode, link type/count and ACL. Handles remain open while the path is inspected. Path and descriptor metadata are compared before and after checking.
+The final-stage interface is the existing boolean plist-validity port. Drift discovered there produces a safe refusal through that interface; it is not currently distinguished as a dedicated CONFIG_CHANGED result. No claim of transaction-level exclusion or continuing readiness after return is made.
 
-Only ENOENT below an already validated anchor may produce `absent`. A missing anchor, ENOTDIR, permissions/ACL failure, symlink, hardlink, wrong owner or replacement yields the fixed `UNSAFE_PATH` error. Raw exception text is not propagated.
+`createMacInspector` binds the ports to actual macOS account/registry/netstat/plutil adapters and descriptor-bound files rooted at `/` with owner UID 0. Managed paths and labels are immutable and cannot be set through config. No helper executable path, command string, secret, remote endpoint or success boolean is accepted by an external interface.
 
-The anchor and ACL callback are internal trust dependencies, not CLI/MCP options. Deployment must use `/`, owner 0, fixed paths and an independently trusted ACL verifier. Tests use temporary runner-owned anchors and a synthetic ACL callback; native ACL behavior is verified separately by the existing helper suite. These checks do not claim atomic exclusion of concurrent trusted-root changes. No atime guarantee is made.
+**Unresolved trust gate:** `trustedAcl` is an internal, already-trusted local code dependency. Without it every ACL check returns false. This factory does not authenticate, install, select or bootstrap that verifier. Neither a callback type nor helper output proves provenance. A real trusted launcher must establish independent helper identity before supplying this dependency. A default factory is therefore not deployable readiness.
 
-Real-filesystem tests verify that missing parents are not created and existing fixture content and directory membership remain unchanged. They also cover unsafe ancestors, symlinks, hardlinks, wrong ownership, ACL refusal, file-as-parent and replacement during validation.
+## 6. Test evidence and its limits
 
-## 5. Existing components retained
+The installation tests use real temporary files and the actual bounded descriptor readers, but their account, registry, release callback and ACL observations are controlled fixtures. The composed preview tests also execute the actual release verifier and installation validator over real bytes; host/account/registry/ports/plist checks remain test ports. They are integration tests, not a successful preview of `/Library` on a provisioned user's Mac.
 
-`trusted-files.ts` retains descriptor-bound bounded reads/hashes and metadata inventory. `release-inspection.ts` checks the independently supplied exact-manifest SHA-256, closed schema, required core/Node/lifecycle entries, complete inventory, executable flags, internal link resolution and actual file hashes. No staged binary is executed to discover its identity.
+Positive composition fixtures compare a hash of the whole temporary tree before and after preview: names, readable file bytes, owner/mode/link/device/inode and mutation-sensitive timestamps. An inert mode-000 canary has its metadata checked without content reads, and non-root runners verify it is unreadable. The preview trace contains no credential/browser/secret reads. atime is deliberately excluded. All fixture writes and cleanup belong to the tests, not the preview.
 
-`platform/macos/native/file-acl.c` consumes fd 3, reads native metadata/ACL only, and returns bounded safe/device/inode information. `macos-acl.ts` contains its output/errors and checks descriptor identity. The ACL rule is intentionally conservative: allow-write ACEs are refused, not evaluated as a full effective-access engine. The helper must not establish its own trust using the release under inspection.
+The existing native tests still compile and invoke the fd3 ACL helper, query actual launchctl/ports and validate plist syntax on the GitHub Mac. No service is installed or started by those tests.
 
-`macos-inspection.ts` uses fixed dscl/id/dsmemberutil calls for `gram-agent`, requiring consistent UID/GID and group evidence. Native lookup tests do not provision or prove a correctly configured dedicated account. Manifest tool metadata is not authenticated MCP health, and database compatibility metadata is not a real migration/rollback check.
+### Verified implementation checkpoint
 
-## 6. Verified code evidence
+At `6114ea0724afda63066689fa9ec733d805af8056`:
 
-At exact code commit `bbeeb4cd3b6d403bea4270fca1b1735374b45b29`:
+- Focused workflow `35767531553`: both jobs completed/success.
+- Mac job `106880742004`: full log read; macOS 15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
+- Mac lifecycle: 18 files / **311 passed**, zero failed or skipped.
+- Mac root: 26 files / **359 passed**, zero failed or skipped.
+- Ubuntu job `106880741742`: all applicable steps successful; Apple-only tests skipped explicitly.
+- Root lint, typecheck and build passed on both jobs. Compiled plist structure and native `plutil -lint` passed; 12 altered structures rejected.
+- Existing root workflow `35767531681`: completed/success. It runs GitHub's synthetic PR merge preview, not an actual merge.
 
-- Focused run `35762388130`: both native Mac and Ubuntu jobs completed successfully.
-- Mac job `106863374178`: actual macOS 15.7.9, darwin/arm64, Node24.20.0; full log read.
-- Mac package: **16 files / 263 passed, zero failed or skipped**.
-- Mac root collection: **24 files / 311 passed, zero failed or skipped**.
-- Ubuntu job `106863374459`: all enabled steps succeeded. Apple-only tests are explicitly skipped, not counted as native passes.
-- Root lint, typecheck and build succeeded on both focused jobs.
-- Actual Mac probes verified clean-runner registration/override queries, a temporary loopback listener with zero accepted connections, and plutil stdin validation. No launchd service was installed or started.
-- Existing compiled-plist structural checks passed for both roles and rejected 12 altered structures; native `plutil -lint` passed.
-- Existing root workflow `35762388195`: completed/success for this PR head. It uses a synthetic merge preview, not a real merge.
+### Additional coverage checkpoint
 
-The 311 root tests include the pinned main's 48 tests plus the 263 lifecycle tests. They do not include the unmerged Windows M2 or MAC-01 branches. Documentation-only head verification, if newer, is recorded separately in PR #138.
+The `dab581d97b8c4531f1adc4e6bc79d691a483e63e` commit strengthens full-tree preservation and adds two late release/port drift cases, without changing product code. Its observed results are:
 
-Evidence:
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35762388130
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35762388195
+- Focused workflow `35768010489` and existing root workflow `35768010579`: completed/success.
+- Native Mac job `106882344895`: full log read; same native runtime family as above, all stages successful.
+- Mac lifecycle: 18 files / **313 passed**, zero failed or skipped.
+- Mac root: 26 files / **361 passed**, zero failed or skipped.
+- Ubuntu job `106882344669`: all applicable stages successful; Apple-only skips remain explicit.
+- Both matrices passed root lint, typecheck, tests, build and compiled plist validation. The Mac also passed native plist lint.
 
-## 7. RED/GREEN and corrective evidence
+Exact-head evidence:
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35768010489
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35768010579
 
-| Step | Observed result |
-|---|---|
-| Probe RED `909e94d3` | Run `35760936219`, Mac job `106858501383`: 17 failures / 218 passes against explicit nonimplementing probes |
-| Initial probe implementation `8fc5888c` | Mac run `35761225300`: 1 failure / 234 passes; registry failed, real port/plutil checks passed |
-| Format diagnosis `6fcb4cc5` | Mac run `35761384566`: 2 failures / 236 passes; safe diagnostics showed successful command output using enabled/disabled |
-| Explicit spelling fix `25df7212` | Behavioral tests passed; a new test formatting lint error remained. Not reported as full success |
-| Presence RED and lint correction `4597fc78` | Run `35762041650`, Mac job `106862202520`: all 15 new presence assertions failed; 248 previous assertions passed |
-| Presence implementation `bbeeb4cd` | Both final focused jobs and root CI succeeded, as recorded above |
+A later documentation-only commit receives separately reported checks; these runs are not represented as a test of a different head.
 
-The ten added spelling cases extend coverage; the native failure was observed before the spelling correction. The lint rule and assertions were not disabled. The investigation used only bounded, redacted format metadata from a disposable runner, not raw production service details.
+Counts exclude the separate unmerged MAC-01 and Windows M2 branches. The root baseline contributes 48 tests; Linux skips are not native successes.
 
-Earlier implementation and verification records remain available at the previous checkpoint:
-https://github.com/jskjw157/gram-coding-agent/blob/6611c5562746b1aa1612a3e2eb9d7f8e652a3d19/docs/operations/macos-service-lifecycle.md
+## 7. RED/GREEN history
 
-In particular, code `0702ec2` had 190 native package / 238 native root tests and corrected internal-link parent traversal. Task 1/preflight/frozen-label history remains in that checkpoint, Git history and PR #138. It is historical evidence, not a replacement for the new runs above.
+| Change | Observed RED | Observed GREEN |
+|---|---|---|
+| Static installed identity | `c2442bf`, run `35766591740`, native job `106877822061`: 38 failed / 263 passed against explicit nonimplementing scaffold | `332a22c`: focused `35766939093` and root `35766939005` completed/success |
+| Six-port composition | `b7e3e16`, run `35767215546`, native job `106879679667`: 9 failed / 302 passed | `6114ea0`: exact checkpoint results above |
 
-## 8. Execution and review boundaries
+The fixed path-table assertion already passed at the second scaffold; it is not described as a failing behavior. The subsequent preservation and late-drift checks strengthen coverage of implemented behavior, not evidence of a newly discovered/fixed bug. No assertions, lint rules or native checks were disabled.
 
-The local authoring environment has Node22/TypeScript but no pnpm, and direct GitHub/npm DNS was unavailable. There is no complete local checkout or claimed local Node24 repository test run. Actual verification uses the existing read-only GitHub Actions exact-head detached worktrees. Local syntax-only transpilation is not represented as repository typecheck.
+Earlier configuration, file/release, ACL/account, registry/port and path-presence history remains at:
+https://github.com/jskjw157/gram-coding-agent/blob/73003de0f5d0a0669f62ae7e8a4dd9c260b167ed/docs/operations/macos-service-lifecycle.md
 
-No workflow permissions, dependency versions, runtime privilege, paid AI API, automatic deployment or merge were introduced. The existing empty-importer normalization rule is unchanged: frozen installation may add only the empty `packages/macos-lifecycle: {}` importer in the temporary checkout. Persist that importer through a reviewed change before sealed packaging; do not call the temporary checkout pristine.
+## 8. Review, execution and isolation
 
-This increment received author source/test review, not an independent reviewer. No independent approval is claimed. Keep PR #138 Draft and unmerged. Even on a supported Mac, these exported library functions are not a runnable lifecycle CLI or deployment tool.
+This increment received author self-review against the Task 2 requirements and Task 4/6 read-contract boundaries. **Independent review: NOT_PERFORMED.** Open trust/native acceptance gates are retained, not waived.
+
+The local authoring environment has Node22/global TypeScript, no pnpm, and unavailable direct GitHub DNS (git access was attempted). No complete local checkout, local worktree or local Node24 repository execution is claimed. Real verification uses the existing read-only GitHub Actions exact-head detached worktrees. Supplemental local syntax transpilation is not represented as a typecheck.
+
+The previous empty-workspace-importer normalization is unchanged. Resolve it through a reviewed generated lockfile update before sealed packaging. No new dependencies, CI permissions, workflow, paid API, privilege or alternate tunnel were introduced.
+
+Refresh refs before the next edit. Initial refs: main `fdf5dda`, Windows M2 `c5225dd8`, MAC-01 `a98c8ff`, docs `3c643d4`. Only the MAC-02 branch is written. No force push, rebase, merge, branch deletion or Windows issue closure is authorized.
 
 ## 9. Exact continuation point
 
-Do not rebuild the config, file/release, native ACL/account, registry/port or path-presence components. Finish Task 2 integration by binding the fixed installed manifest/plist paths to verified installation identity, establishing helper provenance and composing the six native Inspector ports without caller-provided success facts. Complete preview must prove no writes/credential reads, and must refuse foreign/unknown installations.
+Do not rebuild static installation validation or the fixed-root composition. Continue Task 2 at independent ACL-verifier provenance and real fixed-root adapter integration; reconcile the defined read schema with the future Task 6 writer. Preserve conservative refusal of live jobs until Task 4 supplies established-peer proof. A registered label or PID is not a credential destination.
 
-Task 4 owns established-peer authentication; Task 6 owns the journal/installation manifest and idempotent administrative apply. Resolve their read-contract boundaries before treating an existing running installation as OWNED. Do not invent that proof from this increment's mere registration or TCP occupancy. Then continue Tasks 3–8 of the approved plan. No renewed general plan approval is needed for already-approved development scope.
+Then continue the approved Tasks 3–8, keeping development evidence separate from actual administrative/credential acceptance. No new general design approval is required for the already-approved scope; real administrator writes, credentials, deployment and merge retain their separate gates.
 
-**NOT_RUN:** user-Mac provisioning; complete preview against its installation; launchd start/stop/reboot; live peer ownership; Keychain/TCC; actual tunnel; browser; HAAR operations. Real administrative changes, credentials and merge retain separate authorization gates. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
-
-At this continuation's initial ref inspection, main was `fdf5dda`, Windows M2 was `c5225dd8`, MAC-01 was `a98c8ff`, and docs were `3c643d4`. Only the MAC-02 feature branch was written. Refresh all refs at handoff; c7fc805 Windows snapshots are historical.
-
-## 10. Primary platform references
-
-Native code uses Apple SDK/system interfaces; platform source review is not execution evidence:
-- https://github.com/apple-oss-distributions/network_cmds/blob/main/netstat.tproj/inet.c
-- https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
-- https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_entry.c
-- https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
-
-Actual observed-format and filesystem/native tests, with their limits, are recorded above.
+**NOT_RUN:** user's account provisioning; complete fixed-root preview with authenticated helper; real launchd start/stop/reboot; live peer ownership; Keychain/TCC; real tunnel; browser and HAAR operations. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
