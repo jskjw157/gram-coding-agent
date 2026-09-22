@@ -32,6 +32,7 @@ describe('PublishingService critical lock boundary', () => {
         events.push('lock.release');
       }),
     };
+    const markRemoteConfirmed = vi.fn();
     const service = new PublishingService({
       verification: {
         assertPassed: vi.fn(async () => {
@@ -55,7 +56,7 @@ describe('PublishingService critical lock boundary', () => {
       },
       persistence: {
         recordCommit: vi.fn(() => 41),
-        markRemoteConfirmed: vi.fn(),
+        markRemoteConfirmed,
       },
       audit: {
         append: vi.fn(),
@@ -73,7 +74,7 @@ describe('PublishingService critical lock boundary', () => {
       'remote.confirm',
     ]);
     expect(lock.release).not.toHaveBeenCalled();
-    expect(service['options'].persistence.markRemoteConfirmed).not.toHaveBeenCalled();
+    expect(markRemoteConfirmed).not.toHaveBeenCalled();
   });
 
   it('releases the Repo Lock only after verification, commit, push, and exact remote confirmation', async () => {
