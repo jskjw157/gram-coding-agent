@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile, rm, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile, rm, realpath, readdir, lstat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
@@ -17,10 +17,27 @@ const roots: string[] = [];
 const sha = (value: Buffer | string) => createHash('sha256').update(value).digest('hex');
 const entries = ['bin/node', 'apps/agent/dist/main.js', 'packages/macos-lifecycle/dist/supervisor-cli.js', 'pnpm-lock.yaml'];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+// Snapshot every fixture path, byte hash and mutation-sensitive metadata, never
+// atime. Inaccessible canary content is intentionally not read by the snapshot.
+async function treeSnapshot(root: string): Promise<string> {
+  const rows: unknown[] = [];
+  async function visit(relative: string): Promise<void> {
+    const path = join(root, relative); const stat = await lstat(path, { bigint: true });
+    if (!stat.isDirectory() && !stat.isFile()) throw new Error('UNEXPECTED_FIXTURE_TYPE');
+    const metadata = [relative, stat.dev, stat.ino, stat.uid, stat.gid, stat.mode, stat.nlink,
+      stat.isFile() ? stat.size : 0n, stat.mtimeNs, stat.ctimeNs].map(String);
+    const content = stat.isFile() ? ((stat.mode & 0o444n) === 0n ? 'UNREADABLE_CANARY' : sha(await readFile(path))) : null;
+    rows.push([metadata, content]);
+    if (stat.isDirectory()) for (const name of (await readdir(path)).sort()) await visit(relative ? `${relative}/${name}` : name);
+  }
+  await visit(''); return sha(JSON.stringify(rows));
+}
 async function fixture(installed = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'mac02-composed-preview-'))); roots.push(root);
   const releaseRoot = join(root, 'release'); const systemRoot = join(root, 'system');
   await mkdir(systemRoot); const uid = process.getuid?.() ?? 0;
+  await mkdir(join(systemRoot, 'secrets'), { mode: 0o700 });
+  await writeFile(join(systemRoot, 'secrets/DO_NOT_READ'), 'inert fixture canary', { mode: 0o000 });
   for (const path of entries) {
     await mkdir(dirname(join(releaseRoot, path)), { recursive: true, mode: 0o700 });
     await writeFile(join(releaseRoot, path), `inert:${path}`, { mode: path.startsWith('bin/') ? 0o700 : 0o600 });
@@ -63,14 +80,15 @@ async function fixture(installed = false) {
 }
 it.each([false, true])('runs the full six-port preview over actual bytes with installed=%s', async installed => {
   const f = await fixture(installed);
-  const before = await readFile(join(f.releaseRoot, 'release.json'));
+  const before = await treeSnapshot(f.root);
+  if (process.getuid?.() !== 0) await expect(readFile(join(f.systemRoot, 'secrets/DO_NOT_READ'))).rejects.toMatchObject({ code: 'EACCES' });
   const result = await preview(f.config, f.digest, composeInspector(f.ports));
   expect(result).toMatchObject({ ok: true, code: 'OK', roles: ['core'], releaseDigest: f.digest });
   expect(result.configDigest).toMatch(/^[a-f0-9]{64}$/);
   expect(installed ? typeof result.previousInstallDigest === 'string' : result.previousInstallDigest === null).toBe(true);
   expect(f.reads).toContain('hash:bin/node'); expect(f.reads).toContain('presence:manifest');
   expect(f.reads.some(path => /secret|credential|browser/u.test(path))).toBe(false);
-  expect(await readFile(join(f.releaseRoot, 'release.json'))).toEqual(before);
+  expect(await treeSnapshot(f.root)).toBe(before);
 });
 it('does not manufacture trusted release evidence for tampered real bytes', async () => {
   const f = await fixture(); await writeFile(join(f.releaseRoot, 'apps/agent/dist/main.js'), 'tampered');
@@ -113,4 +131,16 @@ it('constructs only read-only production ports; missing ACL trust is never repla
   expect(await inspector.host()).toEqual({ platform: process.platform, arch: process.arch, nodeVersion: process.versions.node });
   // Without the required sequence/trust, never start inspecting a release.
   await expect(inspector.release({} as never, 'a'.repeat(64))).rejects.toThrow();
+});
+
+it('rechecks actual requested release bytes after the final validation step', async () => {
+  const f = await fixture();
+  f.ports.plistValidity = async () => { await writeFile(join(f.releaseRoot, 'apps/agent/dist/main.js'), 'late-change'); return true; };
+  expect(await preview(f.config, f.digest, composeInspector(f.ports))).toMatchObject({ ok: false });
+});
+it('refuses a port that becomes occupied during final revalidation', async () => {
+  const f = await fixture(); let observations = 0;
+  f.ports.ports = async () => ({ core: ++observations === 1 ? 'free' : 'occupied', tunnel: 'free' });
+  expect(await preview(f.config, f.digest, composeInspector(f.ports))).toMatchObject({ ok: false });
+  expect(observations).toBe(2);
 });
