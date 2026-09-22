@@ -1,57 +1,120 @@
-# MAC-02 Service Lifecycle — Installed Identity and Preview Integration
+# MAC-02 Service Lifecycle — Restart Accounting and Private State Persistence
 
 **Updated:** 2026-09-23 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. This is not an installed service or a completed MAC-02.  
+**Status:** IN_PROGRESS / PARTIAL. Not an installed service, runnable supervisor or completed MAC-02.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft and unmerged.  
-**Implementation checkpoint:** `6114ea0724afda63066689fa9ec733d805af8056`.  
-**Additional test checkpoint:** `dab581d97b8c4531f1adc4e6bc79d691a483e63e`.  
-**Resume baseline:** `73003de0f5d0a0669f62ae7e8a4dd9c260b167ed`.  
+**Product implementation checkpoint:** `206798f2e10f0bc45a72e8415115de13035c3d1c`.  
+**Latest code/test checkpoint:** `3ea9b296b77fad1d683130d971cf29d4b5c62a90`.  
+**Resume baseline:** `0e32fd4bccf1fff684b38b11752e4cbcdf8347c7`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
 **Implementation merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
 
-## 1. Current scope
+## 1. Current scope and sequencing ruling
 
-| Task | Status |
+| Task | Actual state |
 |---|---|
-| Task 1 | Implemented: strict LAB_ONLY config, frozen labels, canonical digest and fixed plist renderer |
-| Task 2 | PARTIAL: existing file/release/ACL/account/registry/port checks plus static installed identity and six-port preview composition implemented |
-| Task 2 remaining | Independently authenticated ACL-helper bootstrap, running-installation identity via Task 4, real fixed-root native integration acceptance |
-| Tasks 3–7 | Not implemented: durable circuits/status/logs, authenticated peer health, supervisors, administrative install/rollback/uninstall, runnable CLI and sealed packaging |
-| Task 8 | Read-only component/native CI exists; full service lifecycle, independent review and user-device acceptance remain incomplete |
+| Task 1 | Implemented: strict LAB_ONLY configuration, frozen labels and fixed plist rendering |
+| Task 2 | PARTIAL: file/release/ACL/account/registry/port inspection, static installation identity and six-port preview composition exist |
+| Task 2 outstanding | Independent ACL-verifier provenance/bootstrap, live-instance identity through Task 4, real fixed-root positive acceptance |
+| Task 3 | PARTIAL: pure restart accounting, canonical history store and real private-file compare-and-swap persistence implemented |
+| Task 3 outstanding | Closed status records/writeStatus, safe appendEvent and three 5 MiB logs per role, bounded raw-child-output drain, process/supervisor integration |
+| Tasks 4–7 | Authenticated established-peer health, supervisors, administrative apply/rollback/uninstall, runnable CLI and sealed packaging not implemented |
+| Task 8 | Component/native CI exists; full lifecycle, independent review and user-device acceptance remain incomplete |
 
-The new factory has fixed paths and actual native observation adapters. Its missing trusted ACL dependency fails closed. It is not a ready-to-install command, and constructing it is not proof that the machine is ready. No result authorizes installation or business operations.
+**Ruling:** retain the Task 2 deployment trust gate and develop independent Task 3 accounting/persistence behind internal ports. Do not derive trust from an unverified helper's own output, its own release manifest, or a caller-supplied success boolean. This does not mark Task 2 complete or authorize bypassing it. The cost of this sequencing is explicit: tested persistence is not operational service readiness.
 
-## 2. This increment
+MAC-03–05 documents were prepared separately on `docs/macos-operations-agent-design` at `31e66aa21b705b1793f11122c1b12d5ebf41715c`. This continuation resumes MAC-02 only and implements none of those later capabilities.
 
-Added four files, without rewriting the existing checks:
+## 2. New modules and preserved work
 
-- `packages/macos-lifecycle/src/installation-inspection.ts`
-- `packages/macos-lifecycle/src/installation-inspection.test.ts`
-- `packages/macos-lifecycle/src/adapters/native-inspector.ts`
-- `packages/macos-lifecycle/src/native-inspector.test.ts`
+Three production modules:
 
-There are 38 installation identity cases and 12 composition cases: 50 additional tests over the preceding 263-test package. The implementation consumes actual bounded byte readers, release validation, path-presence checks and the existing decision-layer `preview`; it does not accept a precomputed trusted-release flag from a CLI.
+- `packages/macos-lifecycle/src/circuit.ts`: pure bounded restart history and transitions.
+- `packages/macos-lifecycle/src/lifecycle-store.ts`: canonical encoding, digest-bound snapshots and durable transition ordering.
+- `packages/macos-lifecycle/src/adapters/service-files.ts`: trusted private-directory reads and cooperative exclusive file replacement.
 
-No user account, launchd job, permission, database, credential, dependency, original workflow or Windows contract is changed by this increment. GPT-Bridge is not copied or integrated.
+Five test files:
 
-## 3. Static installation identity
+- `packages/macos-lifecycle/src/circuit.test.ts`: 42 cases.
+- `packages/macos-lifecycle/src/lifecycle-store.test.ts`: 22 cases.
+- `packages/macos-lifecycle/src/adapters/service-files.test.ts`: 24 real-filesystem cases.
+- `packages/macos-lifecycle/src/adapters/service-files-failure.test.ts`: 2 additional failure cases.
+- `packages/macos-lifecycle/src/adapters/service-files.native.test.ts`: 2 actual macOS ACL/persistence cases, explicitly skipped elsewhere.
 
-`inspectInstallation(account, io)` accepts only a genuinely pristine installation or an explicitly disabled, unregistered installation with verified static files. All managed objects must be regular trusted files or genuinely absent; orphaned configuration, plist, journal or manifest files are refused.
+This adds 92 tests to the previous 313-test lifecycle package. Existing configuration, trusted-files, release validation, native ACL/account/service probes, static installed identity and native-inspector code are reused without modification. No original package, dependency, lockfile, workflow, WSL path or shared M2 contract is changed. No GPT-Bridge integration is introduced.
 
-An existing manifest must match the current non-admin account UID/GID, the exact configuration bytes and the configured release. The actual core/tunnel plist bytes must match both their manifest hashes and the output of the fixed renderer for that installed configuration. An attacker cannot make a foreign plist acceptable merely by putting its new hash into the manifest.
+## 3. Restart history and transition contract
 
-The installed release is revalidated through the existing full manifest/inventory/hash verifier. The old release digest is anchored by the root-controlled installed record; the candidate new release digest still comes independently from the caller's reviewed input. No staged program is executed to discover its identity.
+`CircuitHistory` is closed data with exactly these fields:
 
-Before returning, the implementation checks all path presences, all read bytes and registry state again. The resulting digest covers the complete fixed-file snapshot and registry observation, not just the installation manifest. It detects changed observations; it is not an atomic reservation against concurrent trusted-root actions.
+```ts
+interface CircuitHistory {
+  schemaVersion: 1;
+  blocked: boolean;
+  lastSeenMs: number;
+  exitsMs: number[];
+  lastGeneration: string | null;
+  activeAttempt: null | { generation: string; startedAtMs: number };
+}
+```
 
-**Conservative limit:** any registered job is refused, regardless of its name or PID. Present roles must have explicit disabled overrides and `desiredEnabled=false`. These checks establish static installation provenance, not live process ownership. Task 4 must provide established-peer evidence before support for running installations is added. Occupied ports are never upgraded to OWNED here.
+This is a new, not-yet-deployed format. `lastGeneration` is mandatory and initially null; no implicit migration of an older deployed format is claimed. The future supervisor must allocate fresh opaque generations locally. These fields are not a channel for user-entered text or credentials.
 
-## 4. Closed installation read contract for Task 6
+- `freshHistory(nowMs)` is explicit new-installation construction, never fallback for missing/corrupt recovered state.
+- `parseHistory(value)` validates own enumerable data properties, supported schema, finite nonnegative safe-integer times, dense bounded ordered exit arrays, generation syntax and active/last-generation consistency. It rejects accessors, symbols, unknown fields and nonstandard object prototypes. Returned objects/arrays are detached.
+- `recordExit(history, nowMs, intentional)` counts only unexpected exits, keeps at most five recent exit timestamps and clears the active marker. The rolling window is `(nowMs - 300000, nowMs]`: an exit exactly 300000 ms old is excluded.
+- The fifth unexpected exit in that window opens a sticky circuit. Elapsed time, reload and recovery do not close it.
+- `beginAttempt(history, generation, nowMs)` refuses blocked or unresolved active state and immediate generation reuse. Its returned marker must be durably saved before any child spawn.
+- `recoverAttempt(history, nowMs)` accounts for an unresolved active marker once, clearing it in the returned transition. Exactly-once accounting across repeated recovery depends on successfully committing that transition; an ambiguous failed write requires reload.
+- `resetFailure(history, expectedGeneration, nowMs)` is only a pure reset proposal. It rejects unresolved active attempts and stale generation acknowledgements. It does not spawn a child or grant permission. Task 6 must independently establish a stopped installation and local authorization before calling it.
 
-The plan names installation manifests and journal stages but does not give their concrete JSON fields. This increment defines a closed read contract, not an administrative writer. A later writer must use it or introduce an explicitly reviewed versioned change.
+Reversed time, future timestamps relative to stored observation time, impossible shapes and invalid generation values are `INVALID_HISTORY`. The caller must not replace that error with a fresh history. The parser is validation, not cryptographic authentication against trusted root or same-user modification.
 
-Fixed managed locations:
+## 4. Store and durable-write boundary
+
+`LifecycleStore` consumes the internal `CircuitFiles` port:
+
+```ts
+interface CircuitFiles {
+  read(role: 'core' | 'tunnel'): Promise<Buffer | null>;
+  compareAndSwap(
+    role: 'core' | 'tunnel', expectedDigest: string | null, bytes: Buffer
+  ): Promise<void>;
+}
+```
+
+`encodeHistory` serializes normalized JSON plus a newline. `decodeHistory` accepts only canonical UTF-8 bytes, at most 65536 bytes, and compares the decoded/re-encoded bytes. Duplicate JSON keys, a BOM, unknown fields and noncanonical whitespace are rejected rather than silently normalized during recovery.
+
+`HistorySnapshot` contains role, exact-byte SHA-256 digest and detached history. `write` requires that digest to match the supplied history and role, then consumes a closed `begin`, `exit`, `recover` or `reset` mutation. An exit must acknowledge the current active generation; duplicate or stale reports are rejected. Arbitrary replacement history is not the normal store interface.
+
+`read` returns `MISSING_HISTORY` for absence; it does not write. `initializeNew` performs a create-only compare-and-swap against absence and cannot overwrite corrupt existing bytes. Its use belongs to the future independently authorized new-installation path, not general recovery.
+
+The store awaits durable CAS before returning a successful begin marker. Concurrent writes against the same old digest produce a conflict rather than silently erasing a failure. If a provider reports failure after replacing bytes, the store returns `STATE_IO` and does not retry old state. Reload and reconcile the current record before any next transition.
+
+Fixed internal errors include `INVALID_HISTORY`, `MISSING_HISTORY`, `RESTART_BUDGET`, `ACTIVE_ATTEMPT`, `STATE_CONFLICT`, `STATE_IO`, `UNSAFE_PATH` and `BUSY`. Unknown provider error text is not propagated. These codes are not yet a public MCP/CLI schema; future external mapping must be explicit.
+
+## 5. Real private-file persistence
+
+`createCircuitFilesAt(policy, io)` is an internal capability constructor, not CLI/MCP input. Its directory/UID/ACL dependencies must already be trusted. It provisions no account or directories. A future production wrapper must bind `/`, administrator-owned fixed ancestors, the actual non-admin service UID, the fixed run path and an independently trusted ACL verifier. That wrapper is not shipped in this increment.
+
+Every directory component is opened without following links and held while the operation runs. Administrator-owned ancestors and the service-owned leaf have distinct UID checks. The leaf must be exactly mode 0700; parent unsafe writes, ownership mismatch and ACL refusal block operations. State files must be regular mode-0600 files owned by the designated service UID with exactly one hard link. Bounded descriptor reads compare file/path identity and mutation-sensitive metadata before/after reading.
+
+Only these role filenames are generated: `core.circuit.json`, `tunnel.circuit.json`, and their corresponding `.circuit.lock` writer locks. A genuinely absent target is returned only below a verified existing directory. Symlinks, hardlinks, unexpected directories, oversized files and path replacements are not treated as absence.
+
+CAS uses an exclusive per-role lock, rechecks the current digest, writes a private same-directory temporary file, syncs it, rechecks state/lock/directory identity, renames it atomically, and awaits directory sync. Cleanup removes only paths still referring to its held temporary/lock inode. A replaced foreign lock is preserved; no process is killed.
+
+**Failure semantics:** failure before rename leaves the previous complete record. Directory-sync failure after rename can leave a complete newer record with unconfirmed durability; it is reported as failure, not rolled back or called success. Caller buffers are copied before asynchronous I/O. The test suite injects actual partial temporary writes and sync/rename failures.
+
+**Limits:** locks coordinate cooperating writers. A crash while holding a lock leaves `BUSY`; there is no age/PID-based lock stealing, stale-lock cleanup or journal recovery here. Temporary remnants may need separately verified stopped recovery. Trusted root and same-UID code are outside this isolation guarantee. Repeated path checks are not an OS sandbox or atomic protection against those principals replacing paths/ACLs. OS sync calls and passing tests are not a hardware power-loss guarantee.
+
+## 6. Task 2 and Task 6 contracts retained
+
+`inspectInstallation` continues to accept a genuinely pristine installation or an explicitly disabled, unregistered installation with verified static files. Manifest/account/config/release/plist identities must match; actual plist bytes must equal the fixed renderer, not merely a manifest-provided hash. Orphans, unknown registrations and incomplete journals are refused. Static identity is not live process ownership.
+
+`composeInspector` remains one-shot and ordered across host/account/release/installation/ports/plist checks, with final account/release/installation/port revalidation. `createMacInspector` still fails closed when its independently trusted ACL dependency is missing. No new code in this increment supplies or authenticates that dependency.
+
+The earlier closed installation read contract for the future Task 6 writer is preserved:
 
 | Logical role | Fixed location |
 |---|---|
@@ -63,87 +126,61 @@ Fixed managed locations:
 
 The manifest requires exactly `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, and `desiredEnabled:{core,tunnel}`. The name is `gram-agent`; hashes bind exact bytes; absent tunnel hash is null. The currently supported installed state is disabled for both roles.
 
-If a journal remains, it must have exactly `schemaVersion:1`, `stage:'COMMITTED'` and `installationDigest` equal to the exact manifest SHA-256. An absent journal is allowed only with the otherwise valid installation. Pending/intermediate/mismatched journals are refused, not replayed or deleted. Journal digest and composite preview digest are distinct values.
+If a journal remains, it has exactly `schemaVersion:1`, `stage:'COMMITTED'` and `installationDigest` equal to the exact manifest SHA-256. An absent journal is allowed only with the otherwise valid installation. Intermediate/mismatched journals are refused, not replayed/deleted. Metadata is bounded to 262144 bytes. The future writer must use this contract or introduce an explicitly reviewed versioned change.
 
-Metadata buffers are copied and bounded to 262,144 bytes even if the underlying reader misbehaves. Unknown fields, accessors in object inputs, invalid UTF-8, identity mismatch, provider exceptions and malformed evidence yield a fixed safe refusal, not raw error text or credential data.
+The installation manifest/journal, restart history and composite preview digest are different records. None substitutes for Task 4 established-peer identity or grants permission to send credentials to an occupied port.
 
-## 5. Six-port preview composition
+## 7. Actual verification and scope
 
-`composeInspector` uses one instance for one ordered preview: host, account, release, installation, ports, then plist validity. Reuse or out-of-order calls are rejected. Public results are detached from cached configuration/account/installation state.
+Final code/test commit: `3ea9b296b77fad1d683130d971cf29d4b5c62a90`.
 
-At the final step it compares the proposed XML to the fixed renderer, runs the supplied plist syntax check, rereads account identity, revalidates the candidate release and static installation, and rechecks that the required ports remain free. Changed configuration/plists/release bytes/account/ports do not receive a successful preview.
+| Check | Observed result |
+|---|---|
+| Focused exact-head workflow | `35782176376`, completed/success |
+| Native Mac job | `106930105936`, full log read; macOS 15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
+| Native lifecycle package | 23 files / **405 passed**, zero failed or skipped |
+| Native root collection | 31 files / **453 passed**, zero failed or skipped |
+| Ubuntu job | `106930105762`, all applicable steps successful; Apple-only tests explicitly skipped |
+| Root lint/typecheck/build | Successful on both focused jobs |
+| Compiled plist structure | Both roles accepted; 12 altered structures rejected |
+| Native plist syntax | Both generated files passed `plutil -lint`; no jobs installed |
+| Existing root CI | `35782176433`, completed/success; synthetic PR merge preview, not an actual merge |
 
-The final-stage interface is the existing boolean plist-validity port. Drift discovered there produces a safe refusal through that interface; it is not currently distinguished as a dedicated CONFIG_CHANGED result. No claim of transaction-level exclusion or continuing readiness after return is made.
+Evidence:
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35782176376
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35782176433
 
-`createMacInspector` binds the ports to actual macOS account/registry/netstat/plutil adapters and descriptor-bound files rooted at `/` with owner UID 0. Managed paths and labels are immutable and cannot be set through config. No helper executable path, command string, secret, remote endpoint or success boolean is accepted by an external interface.
+The 453 root tests are the pinned main's 48 tests plus 405 lifecycle tests. They exclude the unmerged MAC-01 and Windows M2 branches. A subsequent documentation-only head receives separately reported checks.
 
-**Unresolved trust gate:** `trustedAcl` is an internal, already-trusted local code dependency. Without it every ACL check returns false. This factory does not authenticate, install, select or bootstrap that verifier. Neither a callback type nor helper output proves provenance. A real trusted launcher must establish independent helper identity before supplying this dependency. A default factory is therefore not deployable readiness.
+The filesystem tests operate on real temporary files, including file/rename/directory-sync fault injection, replacement, concurrency and store reloads. Most use a synthetic ACL callback. The two native integration cases compile the existing fd3 helper into an isolated temporary fixture, perform actual file sync/recovery with it, and verify that an actual macOS allow-write ACL rejects reading/replacing a record without changing its bytes.
 
-## 6. Test evidence and its limits
+That native helper build proves component interoperability, not independently authenticated production provenance. The tests do not install launchd jobs, create `gram-agent`, kill/restart the deployed supervisor, reboot the host, connect a real tunnel or access Keychain/store credentials. They do not claim machine-power-loss recovery.
 
-The installation tests use real temporary files and the actual bounded descriptor readers, but their account, registry, release callback and ACL observations are controlled fixtures. The composed preview tests also execute the actual release verifier and installation validator over real bytes; host/account/registry/ports/plist checks remain test ports. They are integration tests, not a successful preview of `/Library` on a provisioned user's Mac.
+## 8. RED/GREEN and corrective record
 
-Positive composition fixtures compare a hash of the whole temporary tree before and after preview: names, readable file bytes, owner/mode/link/device/inode and mutation-sensitive timestamps. An inert mode-000 canary has its metadata checked without content reads, and non-root runners verify it is unreadable. The preview trace contains no credential/browser/secret reads. atime is deliberately excluded. All fixture writes and cleanup belong to the tests, not the preview.
+| Increment | Observed evidence |
+|---|---|
+| Circuit RED `1fc85b6` | Run `35780128847`, native job `106923222790`: 42 failed / 313 passed against explicit nonimplementing scaffold |
+| Circuit implementation `c8cf6aa` | Focused `35780412140` and root `35780412133` successful; native step results read |
+| Store RED `bfc069a` | Run `35780568037`, native job `106924734471`: 22 failed / 355 passed |
+| Store implementation `5b69e22` | Native run `35781082797`, job `106926433559`: 377 behavioral tests passed, then two new-test lint errors; not full success |
+| File adapter RED `7f38e44` | Run `35781345170`, Ubuntu job `106927307242`: 24 failed / 365 passed / 12 Apple-only skipped |
+| File implementation `206798f` | Focused `35781742012`, native job `106928653818`: 401 package / 449 root passed; lint/types/build/native plist checks successful |
+| Additional coverage `3ea9b29` | Two native ACL cases plus partial-write/foreign-lock cases; final 405/453 results above, no product-code change |
 
-The existing native tests still compile and invoke the fd3 ACL helper, query actual launchctl/ports and validate plist syntax on the GitHub Mac. No service is installed or started by those tests.
+The two lint findings were an unused test assignment and a non-null assertion. They were corrected without weakening lint rules or assertions. The four final cases are added coverage, not a claimed newly reproduced/fixed production defect. Earlier implementation evidence is preserved at:
+https://github.com/jskjw157/gram-coding-agent/blob/0e32fd4bccf1fff684b38b11752e4cbcdf8347c7/docs/operations/macos-service-lifecycle.md
 
-### Verified implementation checkpoint
+## 9. Review, isolation and continuation
 
-At `6114ea0724afda63066689fa9ec733d805af8056`:
+Author self-review checked generation/reset boundaries, stale snapshots, unknown commit outcomes, directory/file identity, fixed role names, exclusive-writer cleanup and missing trust. **Independent review: NOT_PERFORMED.** No security certification or reviewer approval is claimed.
 
-- Focused workflow `35767531553`: both jobs completed/success.
-- Mac job `106880742004`: full log read; macOS 15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
-- Mac lifecycle: 18 files / **311 passed**, zero failed or skipped.
-- Mac root: 26 files / **359 passed**, zero failed or skipped.
-- Ubuntu job `106880741742`: all applicable steps successful; Apple-only tests skipped explicitly.
-- Root lint, typecheck and build passed on both jobs. Compiled plist structure and native `plutil -lint` passed; 12 altered structures rejected.
-- Existing root workflow `35767531681`: completed/success. It runs GitHub's synthetic PR merge preview, not an actual merge.
+Local authoring has Node22/global TypeScript, no pnpm and unavailable direct GitHub/npm DNS; git access was attempted. No complete local checkout/worktree or local Node24 repository run is claimed. Actual tests use the existing read-only GitHub Actions exact-head detached worktrees. No paid AI API, write-enabled CI, new dependency or alternate tunnel is introduced.
 
-### Additional coverage checkpoint
+The existing empty-workspace-importer normalization remains unchanged: resolve it through a reviewed generated lockfile update before sealed packaging. Do not disguise temporary normalization as a pristine frozen install.
 
-The `dab581d97b8c4531f1adc4e6bc79d691a483e63e` commit strengthens full-tree preservation and adds two late release/port drift cases, without changing product code. Its observed results are:
+At the latest pre-documentation ref inspection, main was `fdf5dda`, Windows M2 `c5225dd8`, MAC-01 `a98c8ff`, docs `31e66aa`. Only MAC-02 advanced. No merge, rebase, force push, branch deletion, Windows issue closure, account provisioning or system-security change was performed.
 
-- Focused workflow `35768010489` and existing root workflow `35768010579`: completed/success.
-- Native Mac job `106882344895`: full log read; same native runtime family as above, all stages successful.
-- Mac lifecycle: 18 files / **313 passed**, zero failed or skipped.
-- Mac root: 26 files / **361 passed**, zero failed or skipped.
-- Ubuntu job `106882344669`: all applicable stages successful; Apple-only skips remain explicit.
-- Both matrices passed root lint, typecheck, tests, build and compiled plist validation. The Mac also passed native plist lint.
+**Next safe code work:** finish Task 3 closed status/event schemas, status persistence, safe bounded log rotation and raw-child-output draining against the written plan; reuse circuit/store/file modules. Define owned stopped recovery for abandoned writer locks before claiming automatic lifecycle recovery. Independently complete Task 2 helper trust and fixed-root acceptance; retain Task 4 live peer and Task 6 local-admin authorization gates. Do not mark either Task 2 or Task 3 complete from this checkpoint.
 
-Exact-head evidence:
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35768010489
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35768010579
-
-A later documentation-only commit receives separately reported checks; these runs are not represented as a test of a different head.
-
-Counts exclude the separate unmerged MAC-01 and Windows M2 branches. The root baseline contributes 48 tests; Linux skips are not native successes.
-
-## 7. RED/GREEN history
-
-| Change | Observed RED | Observed GREEN |
-|---|---|---|
-| Static installed identity | `c2442bf`, run `35766591740`, native job `106877822061`: 38 failed / 263 passed against explicit nonimplementing scaffold | `332a22c`: focused `35766939093` and root `35766939005` completed/success |
-| Six-port composition | `b7e3e16`, run `35767215546`, native job `106879679667`: 9 failed / 302 passed | `6114ea0`: exact checkpoint results above |
-
-The fixed path-table assertion already passed at the second scaffold; it is not described as a failing behavior. The subsequent preservation and late-drift checks strengthen coverage of implemented behavior, not evidence of a newly discovered/fixed bug. No assertions, lint rules or native checks were disabled.
-
-Earlier configuration, file/release, ACL/account, registry/port and path-presence history remains at:
-https://github.com/jskjw157/gram-coding-agent/blob/73003de0f5d0a0669f62ae7e8a4dd9c260b167ed/docs/operations/macos-service-lifecycle.md
-
-## 8. Review, execution and isolation
-
-This increment received author self-review against the Task 2 requirements and Task 4/6 read-contract boundaries. **Independent review: NOT_PERFORMED.** Open trust/native acceptance gates are retained, not waived.
-
-The local authoring environment has Node22/global TypeScript, no pnpm, and unavailable direct GitHub DNS (git access was attempted). No complete local checkout, local worktree or local Node24 repository execution is claimed. Real verification uses the existing read-only GitHub Actions exact-head detached worktrees. Supplemental local syntax transpilation is not represented as a typecheck.
-
-The previous empty-workspace-importer normalization is unchanged. Resolve it through a reviewed generated lockfile update before sealed packaging. No new dependencies, CI permissions, workflow, paid API, privilege or alternate tunnel were introduced.
-
-Refresh refs before the next edit. Initial refs: main `fdf5dda`, Windows M2 `c5225dd8`, MAC-01 `a98c8ff`, docs `3c643d4`. Only the MAC-02 branch is written. No force push, rebase, merge, branch deletion or Windows issue closure is authorized.
-
-## 9. Exact continuation point
-
-Do not rebuild static installation validation or the fixed-root composition. Continue Task 2 at independent ACL-verifier provenance and real fixed-root adapter integration; reconcile the defined read schema with the future Task 6 writer. Preserve conservative refusal of live jobs until Task 4 supplies established-peer proof. A registered label or PID is not a credential destination.
-
-Then continue the approved Tasks 3–8, keeping development evidence separate from actual administrative/credential acceptance. No new general design approval is required for the already-approved scope; real administrator writes, credentials, deployment and merge retain their separate gates.
-
-**NOT_RUN:** user's account provisioning; complete fixed-root preview with authenticated helper; real launchd start/stop/reboot; live peer ownership; Keychain/TCC; real tunnel; browser and HAAR operations. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
+**NOT_RUN:** user's account provisioning; trusted-helper fixed-root positive preview; production state-directory binding; real launchd start/stop/reboot; live peer ownership; Keychain/TCC; real tunnel; browser and HAAR operations. Actual admin writes, real credentials, deployment and merging retain their separate gates. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
