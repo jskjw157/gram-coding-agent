@@ -1,1 +1,1 @@
-export {};
+export * from './publishing-service.js';
