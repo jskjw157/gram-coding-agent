@@ -1,5 +1,8 @@
 # macOS Operations Agent — Delivery and Dependency Index
 
+> **2026-09-23 navigation update:** MAC-03–05 now have detailed draft specifications and execution plans in `docs/superpowers/plans/2026-09-23-macos-operations-03-05-index.md`. That package contains 3 specs, 3 plans and 28 tasks; it is REVIEW_REQUIRED / NOT_EXECUTED.
+> MAC-01 implementation remains in PR #137. MAC-02 is partially implemented in PR #138, whose branch runbook is the current execution checkpoint. The text below is the preserved 2026-09-20 planning snapshot, not current implementation status. This pointer does not approve any new plan, change a code branch, or merge a PR.
+
 **Repository:** `jskjw157/gram-coding-agent`  
 **Documentation PR:** #136, `docs/macos-operations-agent-design`  
 **Date:** 2026-09-20 (Asia/Seoul)  
