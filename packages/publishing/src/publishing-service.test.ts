@@ -54,7 +54,7 @@ describe('PublishingService critical lock boundary', () => {
         }),
       },
       persistence: {
-        recordCommit: vi.fn(),
+        recordCommit: vi.fn(() => 41),
         markRemoteConfirmed: vi.fn(),
       },
       audit: {
@@ -73,6 +73,7 @@ describe('PublishingService critical lock boundary', () => {
       'remote.confirm',
     ]);
     expect(lock.release).not.toHaveBeenCalled();
+    expect(service['options'].persistence.markRemoteConfirmed).not.toHaveBeenCalled();
   });
 
   it('releases the Repo Lock only after verification, commit, push, and exact remote confirmation', async () => {
@@ -104,7 +105,7 @@ describe('PublishingService critical lock boundary', () => {
         }),
       },
       persistence: {
-        recordCommit: vi.fn(),
+        recordCommit: vi.fn(() => 41),
         markRemoteConfirmed: vi.fn(),
       },
       audit: {
@@ -122,11 +123,74 @@ describe('PublishingService critical lock boundary', () => {
       'lock.release',
     ]);
     expect(published).toMatchObject({
+      commitId: 41,
       taskId,
       repoId: 84722133,
       sha,
       branch: 'feat/task-000001-publish',
       remote: 'origin',
     });
+  });
+
+  it('persists and audits confirmation before releasing mutation control', async () => {
+    const events: string[] = [];
+    const service = new PublishingService({
+      verification: {
+        assertPassed: vi.fn(async () => {
+          events.push('verification.assertPassed');
+        }),
+      },
+      commits: {
+        commitExplicit: vi.fn(async () => {
+          events.push('commit');
+          return sha;
+        }),
+      },
+      remote: {
+        push: vi.fn(async () => {
+          events.push('push');
+        }),
+        confirmRemoteSha: vi.fn(async () => {
+          events.push('remote.confirm');
+          return true;
+        }),
+      },
+      persistence: {
+        recordCommit: vi.fn(() => {
+          events.push('persistence.recordCommit');
+          return 41;
+        }),
+        markRemoteConfirmed: vi.fn(() => {
+          events.push('persistence.markRemoteConfirmed');
+        }),
+      },
+      audit: {
+        append: vi.fn((event: { eventType: string }) => {
+          events.push(`audit.${event.eventType}`);
+        }),
+      },
+      now: () => new Date('2026-09-22T01:00:00.000Z'),
+    });
+    const lock = {
+      release: vi.fn(async () => {
+        events.push('lock.release');
+      }),
+    };
+
+    await service.publish(context({ lock }));
+
+    expect(events).toEqual([
+      'verification.assertPassed',
+      'commit',
+      'persistence.recordCommit',
+      'audit.COMMIT_CREATED',
+      'audit.PUSH_STARTED',
+      'push',
+      'remote.confirm',
+      'persistence.markRemoteConfirmed',
+      'audit.REMOTE_PUSH_CONFIRMED',
+      'lock.release',
+      'audit.REPO_LOCK_RELEASED',
+    ]);
   });
 });
