@@ -133,6 +133,77 @@ describe('PublishingService critical lock boundary', () => {
     });
   });
 
+  it('does not mutate Git or release the lock when verification has not passed', async () => {
+    const commits = {
+      commitExplicit: vi.fn(async () => sha),
+    };
+    const remote = {
+      push: vi.fn(async () => undefined),
+      confirmRemoteSha: vi.fn(async () => true),
+    };
+    const lock = {
+      release: vi.fn(async () => undefined),
+    };
+    const persistence = {
+      recordCommit: vi.fn(() => 41),
+      markRemoteConfirmed: vi.fn(),
+    };
+    const service = new PublishingService({
+      verification: {
+        assertPassed: vi.fn(async () => {
+          throw new Error('required verification has not passed');
+        }),
+      },
+      commits,
+      remote,
+      persistence,
+      audit: { append: vi.fn() },
+    });
+
+    await expect(service.publish(context({ lock }))).rejects.toThrow(
+      /verification has not passed/i,
+    );
+
+    expect(commits.commitExplicit).not.toHaveBeenCalled();
+    expect(remote.push).not.toHaveBeenCalled();
+    expect(remote.confirmRemoteSha).not.toHaveBeenCalled();
+    expect(persistence.recordCommit).not.toHaveBeenCalled();
+    expect(lock.release).not.toHaveBeenCalled();
+  });
+
+  it('does not confirm or release when push itself fails', async () => {
+    const lock = {
+      release: vi.fn(async () => undefined),
+    };
+    const confirmRemoteSha = vi.fn(async () => true);
+    const markRemoteConfirmed = vi.fn();
+    const service = new PublishingService({
+      verification: {
+        assertPassed: vi.fn(async () => undefined),
+      },
+      commits: {
+        commitExplicit: vi.fn(async () => sha),
+      },
+      remote: {
+        push: vi.fn(async () => {
+          throw new Error('push failed');
+        }),
+        confirmRemoteSha,
+      },
+      persistence: {
+        recordCommit: vi.fn(() => 41),
+        markRemoteConfirmed,
+      },
+      audit: { append: vi.fn() },
+    });
+
+    await expect(service.publish(context({ lock }))).rejects.toThrow(/push failed/i);
+
+    expect(confirmRemoteSha).not.toHaveBeenCalled();
+    expect(markRemoteConfirmed).not.toHaveBeenCalled();
+    expect(lock.release).not.toHaveBeenCalled();
+  });
+
   it('persists and audits confirmation before releasing mutation control', async () => {
     const events: string[] = [];
     const service = new PublishingService({
