@@ -83,13 +83,13 @@ export class CiRunRepository {
 
     const updatedAt = input.updatedAt ?? new Date().toISOString();
     const transaction = this.db.transaction(() => {
-      const existing = this.db
+      const existingRow = this.db
         .prepare(
-          'SELECT id FROM ci_runs WHERE task_id = ? AND provider_check_id = ? ORDER BY id DESC LIMIT 1',
+          'SELECT * FROM ci_runs WHERE task_id = ? AND provider_check_id = ? ORDER BY id DESC LIMIT 1',
         )
-        .get(input.taskId, providerCheckId) as { id: number } | undefined;
+        .get(input.taskId, providerCheckId) as CiRunRow | undefined;
 
-      if (existing === undefined) {
+      if (existingRow === undefined) {
         const result = this.db
           .prepare(`
             INSERT INTO ci_runs(
@@ -115,6 +115,7 @@ export class CiRunRepository {
         return Number(result.lastInsertRowid);
       }
 
+      const existing = decode(existingRow);
       this.db
         .prepare(`
           UPDATE ci_runs
@@ -131,15 +132,27 @@ export class CiRunRepository {
           WHERE id = ?
         `)
         .run(
-          input.pullRequestId ?? null,
-          input.providerRunId ?? null,
-          input.workflowName ?? null,
+          input.pullRequestId === undefined
+            ? existing.pullRequestId
+            : input.pullRequestId,
+          input.providerRunId === undefined
+            ? existing.providerRunId
+            : input.providerRunId,
+          input.workflowName === undefined
+            ? existing.workflowName
+            : input.workflowName,
           input.checkName,
           input.status,
-          input.conclusion ?? null,
-          input.url ?? null,
-          input.startedAt ?? null,
-          input.finishedAt ?? null,
+          input.conclusion === undefined
+            ? existing.conclusion
+            : input.conclusion,
+          input.url === undefined ? existing.url : input.url,
+          input.startedAt === undefined
+            ? existing.startedAt
+            : input.startedAt,
+          input.finishedAt === undefined
+            ? existing.finishedAt
+            : input.finishedAt,
           updatedAt,
           existing.id,
         );
