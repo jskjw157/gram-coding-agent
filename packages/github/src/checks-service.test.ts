@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ChecksService,
+  PersistentCiCompletion,
   type CiPullRequestContext,
   type RequiredCheckSnapshot,
 } from './checks-service.js';
+import {
+  openDatabase,
+  RepositoryRepository,
+  runMigrations,
+  TaskRepository,
+} from '@gram/persistence';
 
 const pr: CiPullRequestContext = {
   taskId: '018d8a73-6b4e-7000-8000-000000000001',
@@ -169,5 +176,58 @@ describe('ChecksService lock-free CI observation', () => {
     expect(first.outcome).toBe('PENDING');
     expect(second.outcome).toBe('SUCCESS');
     expect(completion.complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('PersistentCiCompletion', () => {
+  it('transitions only a PUBLISHING task to COMPLETED and is idempotent after completion', () => {
+    const db = openDatabase(':memory:');
+    try {
+      runMigrations(db);
+      new RepositoryRepository(db).upsert({
+        githubRepositoryId: 84722133,
+        owner: 'company',
+        name: 'web',
+        defaultBranch: 'main',
+        localBasePath: '/workspace/company/web',
+      });
+      const tasks = new TaskRepository(db);
+      const task = tasks.create({
+        goal: 'complete after CI',
+        taskType: 'CODING',
+        publishMode: 'PULL_REQUEST',
+        repoId: 84722133,
+      });
+      tasks.transition(task.id, 'QUEUED', 'PUBLISHING');
+
+      const completion = new PersistentCiCompletion(tasks);
+      completion.complete(task.id);
+      completion.complete(task.id);
+
+      expect(tasks.get(task.id)?.status).toBe('COMPLETED');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('refuses to complete a task that is not in PUBLISHING state', () => {
+    const db = openDatabase(':memory:');
+    try {
+      runMigrations(db);
+      const tasks = new TaskRepository(db);
+      const task = tasks.create({
+        goal: 'not ready for completion',
+        taskType: 'CODING',
+        publishMode: 'PULL_REQUEST',
+      });
+
+      const completion = new PersistentCiCompletion(tasks);
+
+      expect(() => completion.complete(task.id)).toThrow(/requires PUBLISHING/);
+      expect(tasks.get(task.id)?.status).toBe('QUEUED');
+    } finally {
+      db.close();
+    }
   });
 });
