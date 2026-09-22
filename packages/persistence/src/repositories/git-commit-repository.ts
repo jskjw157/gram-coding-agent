@@ -51,7 +51,7 @@ function decode(row: GitCommitRow): StoredGitCommit {
 export class GitCommitRepository {
   constructor(private readonly db: Database.Database) {}
 
-  recordCreated(input: RecordGitCommitInput): number {
+  recordCommit(input: RecordGitCommitInput): number {
     if (!/^[0-9a-f]{40}$/.test(input.sha)) {
       throw new Error('Git commit SHA must be a full lowercase SHA');
     }
