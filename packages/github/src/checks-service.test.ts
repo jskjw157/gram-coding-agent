@@ -84,6 +84,32 @@ describe('ChecksService lock-free CI observation', () => {
     expect(forbiddenLock.release).not.toHaveBeenCalled();
   });
 
+  it.each(['neutral', 'skipped'] as const)(
+    'treats merge-acceptable %s required checks as successful completion',
+    async (conclusion) => {
+      const completion = {
+        complete: vi.fn(),
+      };
+      const service = new ChecksService({
+        client: {
+          listRequiredChecks: vi.fn(async () => [
+            check({ conclusion }),
+          ]),
+        },
+        persistence: { upsertCheck: vi.fn() },
+        completion,
+        delay: { wait: vi.fn() },
+        maxAttempts: 1,
+        pollIntervalMs: 25,
+      });
+
+      const result = await service.observeRequiredChecks(pr);
+
+      expect(result.outcome).toBe('SUCCESS');
+      expect(completion.complete).toHaveBeenCalledWith(pr.taskId);
+    },
+  );
+
   it('records terminal required-check failure and does not complete or mutate code', async () => {
     const persistence = {
       upsertCheck: vi.fn(),
