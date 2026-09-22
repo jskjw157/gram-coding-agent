@@ -87,8 +87,19 @@ const FAILURE_CONCLUSIONS = new Set([
   'stale',
 ]);
 
+const MERGE_ACCEPTABLE_CONCLUSIONS = new Set([
+  'success',
+  'neutral',
+  'skipped',
+]);
+
 function isSuccess(check: RequiredCheckSnapshot): boolean {
-  return check.status === 'completed' && check.conclusion === 'success';
+  return (
+    check.status === 'completed' &&
+    check.conclusion !== null &&
+    check.conclusion !== undefined &&
+    MERGE_ACCEPTABLE_CONCLUSIONS.has(check.conclusion)
+  );
 }
 
 function isFailure(check: RequiredCheckSnapshot): boolean {
