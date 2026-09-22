@@ -48,7 +48,7 @@ describe('durable transition boundary', () => {
   });
   it('recovers an active marker across store instances exactly once', async () => {
     const f = fixture(); let h = await f.store.initializeNew('core', 0);
-    h = await f.store.write('core', h, { kind: 'begin', generation: 'g1', nowMs: 1 });
+    await f.store.write('core', h, { kind: 'begin', generation: 'g1', nowMs: 1 });
     const restarted = new LifecycleStore(f.files);
     h = await restarted.write('core', await restarted.read('core'), { kind: 'recover', nowMs: 2 });
     expect(h.history.exitsMs).toEqual([2]);
@@ -79,7 +79,9 @@ describe('durable transition boundary', () => {
     release(); expect((await pending).history.activeAttempt?.generation).toBe('g1');
   });
   it('contains provider errors and never treats failed durability as success', async () => {
-    const f = fixture(); const h = await f.store.initializeNew('core', 0); const before = Buffer.from(f.disk.get('core')!);
+    const f = fixture(); const h = await f.store.initializeNew('core', 0);
+    const original = f.disk.get('core'); if (!original) throw new Error('MISSING_FIXTURE');
+    const before = Buffer.from(original);
     const broken: CircuitFiles = { read: f.files.read, async compareAndSwap() { throw new Error('synthetic-sensitive disk failure'); } };
     await expect(new LifecycleStore(broken).write('core', h, { kind: 'begin', generation: 'g1', nowMs: 1 })).rejects.toThrow(/^STATE_IO$/);
     expect(f.disk.get('core')).toEqual(before);
