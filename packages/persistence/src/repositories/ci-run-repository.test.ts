@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  CiRunRepository,
-  openDatabase,
-  PullRequestRepository,
-  RepositoryRepository,
-  runMigrations,
-  TaskRepository,
-} from '@gram/persistence';
+import { openDatabase } from '../database.js';
+import { runMigrations } from '../migrator.js';
+import { CiRunRepository } from './ci-run-repository.js';
+import { PullRequestRepository } from './pull-request-repository.js';
+import { RepositoryRepository } from './repository-repository.js';
+import { TaskRepository } from './task-repository.js';
 
 const databases: Array<{ close(): void }> = [];
 
