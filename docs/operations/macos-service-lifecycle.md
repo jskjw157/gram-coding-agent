@@ -1,110 +1,139 @@
-# MAC-02 Service Lifecycle — Native Inspection Checkpoint
+# MAC-02 Service Lifecycle — Native Service Probe Checkpoint
 
-**Updated:** 2026-09-22 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL; not an installed service or completed MAC-02.  
+**Updated:** 2026-09-23 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Not an installed service or completed MAC-02.  
 **Branch:** `feat/macos-service-lifecycle`; Draft PR #138.  
-**Code checkpoint:** `0702ec2fd6371f2e9c013b3c572fae8a2a8056c0`.  
+**Verified code checkpoint:** `bbeeb4cd3b6d403bea4270fca1b1735374b45b29`.  
+**Resume baseline for this increment:** `6611c5562746b1aa1612a3e2eb9d7f8e652a3d19`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
 **Implementation merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
 
-## 1. What exists now
+## 1. Current scope
 
-Task 1 configuration validation and fixed-role plist generation remain intact. Task 2 now has actual descriptor-bound filesystem reads, sealed-release inventory/hash validation, a native Apple ACL metadata helper and fixed-command local account inspection in addition to its previously implemented preflight decision layer.
-
-| Plan task | Current status |
+| Plan task | Status |
 |---|---|
-| Task 1 | Implemented: strict LAB_ONLY configuration, canonical digest, frozen labels and XML renderer |
-| Task 2 | PARTIAL: real file/release/ACL/account components implemented; native installed-job/port ownership and complete trusted preview composition remain absent |
-| Tasks 3–7 | NOT_IMPLEMENTED: durable circuits/status/logs, authenticated peer health, supervisors, admin installation/rollback/uninstall, runnable CLI and sealed packaging |
-| Task 8 | Read-only package, actual temporary-filesystem and native ACL/plist checks; full lifecycle/independent/user-device acceptance incomplete |
+| Task 1 | Implemented: strict LAB_ONLY configuration, canonical digest, frozen service labels, fixed XML renderer |
+| Task 2 | PARTIAL: file/release/ACL/account inspection plus native launchd registration/override queries, TCP occupancy and trusted path-presence checks now exist |
+| Task 2 remaining | Installed-manifest/plist identity, live OWNED-process proof, independently trusted helper bootstrap, fixed-root Inspector composition and complete preview acceptance |
+| Tasks 3–7 | NOT_IMPLEMENTED: durable circuits/status/logs, authenticated peer health, supervisors, admin install/rollback/uninstall, runnable CLI and sealed packaging |
+| Task 8 | Read-only unit/native/component CI exists; full lifecycle, independent review and user-device acceptance remain incomplete |
 
-No native Inspector factory currently wires all six inspection ports to `preview`. The library never substitutes successful booleans for the missing installation/port checks. An accepted test configuration or a green unit suite is not deployment authorization.
+There is still no production Inspector factory wiring every native observation to `preview`. No missing check is replaced with a successful boolean. Registration, disabled overrides, path existence and port occupancy are separate observations, not permission to install or restart anything.
 
-## 2. Descriptor-bound file checks
+## 2. What this continuation actually added
 
-`adapters/trusted-files.ts` opens directories and regular files with no-follow flags, keeps directory handles during inspection, checks owner/mode/link count and compares path/descriptor device, inode, timestamps and size before and after use. It rejects writable group/world permissions, set-ID modes, hardlinked files, leaf/ancestor symlinks, missing ACL evidence, unexpected replacement/truncation and out-of-scope relative paths.
+New production modules:
 
-Reads/hashes have explicit byte bounds. Inventory enumerates links as metadata without following their targets and does not open unlisted file data. Tests use real temporary trees including spaces, mode changes, hardlinks, symlinks and file replacement; no store credential is involved. Reads can update filesystem access times; no promise of unchanged atime is made.
+- `packages/macos-lifecycle/src/adapters/macos-service-probes.ts`
+- `packages/macos-lifecycle/src/adapters/trusted-presence.ts`
 
-The internal anchor/prefix parameters are not operator-supplied CLI/MCP options. Tests anchor at runner-owned temporary directories. A future deployment must anchor at `/`, require root ownership through every fixed-path ancestor and independently trust the ACL helper. Temporary fixture success does not prove `/Library` deployment trust. Concurrent malicious administrator/root mutation is outside the threat model; these checks do not claim to sandbox trusted root.
+Five accompanying test files add 73 tests to the previous 190-test package: 42 service-output cases, 10 override-spelling cases, 15 real temporary-filesystem presence cases, and 6 actual-Mac service/port/plist cases. The native ACL/account/file/release implementation at baseline `6611c556` already existed and was reused rather than rewritten.
 
-## 3. Sealed release validation
+No dependency, original CI, WSL file, shared M2 contract, database schema, credential, account, TCC permission or launchd job was changed. This continuation does not use or copy GPT-Bridge.
 
-`release-inspection.ts` first matches the operator-reviewed SHA-256 against the exact manifest bytes, then validates the closed manifest schema, required core/lifecycle/Node/lockfile entries, tool metadata `['agent_health']`, file inventory, executable modes, link targets and actual file hashes. Changed manifests, altered bytes, duplicate/escaping paths, unlisted files, wrong lock identity and invalid compatibility ranges fail closed.
+## 3. Native service and port observations
 
-Links are resolved against the verified inventory component by component, before processing `..`, with bounded work/expansions. No real link target is opened. Root-alias escapes, file-as-directory traversal and loops are rejected; a correctly contained internal pnpm-style link remains supported.
+Only fixed read-only commands are issued, with a 2-second timeout, 1 MiB output cap, minimal C-locale environment and no shell:
 
-A manifest hash is not self-authentication. The expected digest is supplied independently. Manifest tool names do not prove the running MCP tool surface; that remains Task 4. `schemaCompatibility` metadata does not establish compatibility of an actual database; Task 6 must examine its recorded migrations. Fixture Node/supervisor paths contain inert text and are never executed by release inspection.
-
-## 4. Actual Apple ACL helper
-
-`platform/macos/native/file-acl.c` accepts only an already-open descriptor on fd 3. It uses native metadata/ACL calls, returns only a schema version, safe boolean and device/inode identity, and never receives a pathname, reads file data, seeks the descriptor, changes permissions or opens a network connection.
-
-`adapters/macos-acl.ts` passes that descriptor to the trusted helper with a minimal environment and no shell. It bounds output to 4 KiB and runtime to 2 seconds, requires exact metadata identity, and suppresses raw output/errors. Unknown/native-error results are false. ACL policy is deliberately conservative: every allow-write ACE is rejected irrespective of principal or ordering; restrictive deny entries are left intact. This is not a complete effective-access evaluator.
-
-**Trust gate:** the helper executable must be independently provisioned and authenticated, not chosen from the release it is validating. The current helper-path parameter is an internal port, not a public command. A trusted deployment/helper-loading composition is not implemented. Do not point it at an arbitrary executable and interpret its answer as authority.
-
-Native tests compile the helper without administrator privileges in a runner temporary directory. Only test files receive temporary ACL changes, which are removed afterward. No launchd service, account, TCC permission or real keychain is changed.
-
-## 5. Local account inspection
-
-`adapters/macos-inspection.ts` reads the actual process platform/architecture/Node version. For account lookup it calls only fixed `dscl`, `id` and `dsmemberutil` argument vectors for `gram-agent`, with bounded output/time and a minimal C-locale environment. It requires a matching local directory record, UID/GID, primary-group membership and an interpretable administrator-membership result. Missing, inconsistent or unparseable data yields null, not an assumed safe account.
-
-Parser tests cover synthetic positive/negative OS outputs. Native CI also invokes the actual lookup without creating the account; that smoke assertion does not prove a properly provisioned `gram-agent` positive path. The user's dedicated-account acceptance remains NOT_RUN.
-
-## 6. Verification evidence
-
-Code checkpoint `0702ec2` passed focused run `35733022837` and the existing PR-root workflow `35733022842`.
-
-| Observed verification | Result |
+| Purpose | Fixed command |
 |---|---|
-| Exact-head native Apple Silicon Mac job `106763107674` | SUCCESS; actual darwin/arm64, macOS 15.7.9, Node24.20.0 |
-| Mac focused lifecycle tests | 11 files / 190 tests passed, zero failed or skipped |
-| Mac root tests | 19 files / 238 tests passed, zero failed or skipped |
-| Exact-head Ubuntu job `106763107212` | SUCCESS; Apple-only ACL tests explicitly skipped |
-| Root lint, typecheck, build on both focused jobs | SUCCESS |
-| Native compiled fd3 helper | All six actual ACL/descriptor cases passed in focused and root collection |
-| Compiled plist structure and native `plutil -lint` | Both fixture roles valid; 12 invalid structures rejected |
+| Core registration | `/bin/launchctl print system/com.haar.gram-agent.core` |
+| Tunnel registration | `/bin/launchctl print system/com.haar.gram-agent.tunnel` |
+| Disabled overrides | `/bin/launchctl print-disabled system` |
+| Numeric TCP snapshot | `/usr/sbin/netstat -an -p tcp` |
+| In-memory plist validation | `/usr/bin/plutil -lint -`, XML supplied on stdin |
 
-Both focused job step lists and the full native Mac log were read. The existing root workflow uses GitHub's synthetic merge preview, not an actual merge. Documentation-only head checks following this code checkpoint are recorded separately in PR #138.
+No caller-supplied executable, arbitrary launchd label, network endpoint or secret is accepted. Native output is interpreted internally rather than returned as raw command output. The parsers reject failed, oversized, malformed or unexpected observations.
 
-The original baseline has 48 root-collected tests. MAC-01 and Windows M2 are still separate branches and are not included in these counts. Linux explicitly skips Apple-only ACL tests; skipped tests are never counted as native passes.
+A job is absent only for the specific observed launchctl not-found status/message for the exact fixed label and system domain. Permission errors, empty output and an unknown response are not absence. A matching registration does not establish executable ownership, startup identity, health or authorization.
 
-| Development step | Observed result |
+Disabled-state parsing preserves three outcomes per role: explicitly disabled, explicitly enabled, or no override. It accepts the known boolean spelling and the `enabled`/`disabled` spelling observed on the native CI runner. `disabled`/`true` mean disabled; `enabled`/`false` mean enabled. Unknown words and duplicate entries are rejected. An unset override is not assumed to mean that a service is safely stopped.
+
+TCP inspection reports `free`, `occupied` or `unknown` for fixed ports 3847 and 8080. IPv4/IPv6/wildcard and bound non-listening sockets are treated conservatively. An unrelated remote port or numeric suffix is not confused with a fixed local port. No connection or authentication data is sent to a listener.
+
+**Hard boundary:** occupancy is not OWNED. Do not turn a matching label, PID or open port into permission to send credentials. Task 4 still owns live peer verification. A snapshot is not a reservation; eventual apply/start must revalidate. Diagnostic text is OS-version-sensitive: unrecognized formats fail closed rather than broadening acceptance.
+
+## 4. Descriptor-bound path presence
+
+`probeTrustedPath` distinguishes a regular file, a directory and a genuinely missing path without reading file contents or creating missing parents. Every existing ancestor is opened with no-follow flags and checked for expected owner, mode, link type/count and ACL. Handles remain open while the path is inspected. Path and descriptor metadata are compared before and after checking.
+
+Only ENOENT below an already validated anchor may produce `absent`. A missing anchor, ENOTDIR, permissions/ACL failure, symlink, hardlink, wrong owner or replacement yields the fixed `UNSAFE_PATH` error. Raw exception text is not propagated.
+
+The anchor and ACL callback are internal trust dependencies, not CLI/MCP options. Deployment must use `/`, owner 0, fixed paths and an independently trusted ACL verifier. Tests use temporary runner-owned anchors and a synthetic ACL callback; native ACL behavior is verified separately by the existing helper suite. These checks do not claim atomic exclusion of concurrent trusted-root changes. No atime guarantee is made.
+
+Real-filesystem tests verify that missing parents are not created and existing fixture content and directory membership remain unchanged. They also cover unsafe ancestors, symlinks, hardlinks, wrong ownership, ACL refusal, file-as-parent and replacement during validation.
+
+## 5. Existing components retained
+
+`trusted-files.ts` retains descriptor-bound bounded reads/hashes and metadata inventory. `release-inspection.ts` checks the independently supplied exact-manifest SHA-256, closed schema, required core/Node/lifecycle entries, complete inventory, executable flags, internal link resolution and actual file hashes. No staged binary is executed to discover its identity.
+
+`platform/macos/native/file-acl.c` consumes fd 3, reads native metadata/ACL only, and returns bounded safe/device/inode information. `macos-acl.ts` contains its output/errors and checks descriptor identity. The ACL rule is intentionally conservative: allow-write ACEs are refused, not evaluated as a full effective-access engine. The helper must not establish its own trust using the release under inspection.
+
+`macos-inspection.ts` uses fixed dscl/id/dsmemberutil calls for `gram-agent`, requiring consistent UID/GID and group evidence. Native lookup tests do not provision or prove a correctly configured dedicated account. Manifest tool metadata is not authenticated MCP health, and database compatibility metadata is not a real migration/rollback check.
+
+## 6. Verified code evidence
+
+At exact code commit `bbeeb4cd3b6d403bea4270fca1b1735374b45b29`:
+
+- Focused run `35762388130`: both native Mac and Ubuntu jobs completed successfully.
+- Mac job `106863374178`: actual macOS 15.7.9, darwin/arm64, Node24.20.0; full log read.
+- Mac package: **16 files / 263 passed, zero failed or skipped**.
+- Mac root collection: **24 files / 311 passed, zero failed or skipped**.
+- Ubuntu job `106863374459`: all enabled steps succeeded. Apple-only tests are explicitly skipped, not counted as native passes.
+- Root lint, typecheck and build succeeded on both focused jobs.
+- Actual Mac probes verified clean-runner registration/override queries, a temporary loopback listener with zero accepted connections, and plutil stdin validation. No launchd service was installed or started.
+- Existing compiled-plist structural checks passed for both roles and rejected 12 altered structures; native `plutil -lint` passed.
+- Existing root workflow `35762388195`: completed/success for this PR head. It uses a synthetic merge preview, not a real merge.
+
+The 311 root tests include the pinned main's 48 tests plus the 263 lifecycle tests. They do not include the unmerged Windows M2 or MAC-01 branches. Documentation-only head verification, if newer, is recorded separately in PR #138.
+
+Evidence:
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35762388130
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35762388195
+
+## 7. RED/GREEN and corrective evidence
+
+| Step | Observed result |
 |---|---|
-| Real-file/release RED `7cdd8c1` | Run `35730787883`: 41 new assertions failed, 124 existing passed |
-| First file/release implementation `4f9ad20` | Behavior 165 passed, lint failed; not reported as full success |
-| Native account/ACL RED `84ea938` | Mac run `35731360000`: 7 failed, 180 passed against nonimplementing probes |
-| Lint/native header correction | Linux full checks succeeded at `4149aa6`; Mac required the proper `fcntl.h` declarations; no warnings/assertions were disabled |
-| Symlink semantics RED `7bd617c` | Mac run `35732698773`: three path-semantics failures, 187 passed; all six real native ACL cases passed |
-| Component-expansion correction `0702ec2` | See exact-code verification above and final PR head checks |
+| Probe RED `909e94d3` | Run `35760936219`, Mac job `106858501383`: 17 failures / 218 passes against explicit nonimplementing probes |
+| Initial probe implementation `8fc5888c` | Mac run `35761225300`: 1 failure / 234 passes; registry failed, real port/plutil checks passed |
+| Format diagnosis `6fcb4cc5` | Mac run `35761384566`: 2 failures / 236 passes; safe diagnostics showed successful command output using enabled/disabled |
+| Explicit spelling fix `25df7212` | Behavioral tests passed; a new test formatting lint error remained. Not reported as full success |
+| Presence RED and lint correction `4597fc78` | Run `35762041650`, Mac job `106862202520`: all 15 new presence assertions failed; 248 previous assertions passed |
+| Presence implementation `bbeeb4cd` | Both final focused jobs and root CI succeeded, as recorded above |
 
-Previous Task 1/preflight evidence remains in Git history and PR #138: configuration RED `35510630523`, input-isolation RED `35511455906`, frozen-label RED `35511976729`, prior green head `8571b27` runs `35512040703` / `35512040708`.
+The ten added spelling cases extend coverage; the native failure was observed before the spelling correction. The lint rule and assertions were not disabled. The investigation used only bounded, redacted format metadata from a disposable runner, not raw production service details.
 
-## 7. Execution and review boundaries
+Earlier implementation and verification records remain available at the previous checkpoint:
+https://github.com/jskjw157/gram-coding-agent/blob/6611c5562746b1aa1612a3e2eb9d7f8e652a3d19/docs/operations/macos-service-lifecycle.md
 
-Local authoring has Node22 and no pnpm; direct GitHub/npm DNS was unavailable. No complete local checkout or local Node24 repository run is claimed. Authoritative tests run in the existing read-only GitHub Actions exact-head detached worktrees, with Node24/pnpm10.34.5. No new workflow permission, external package, runtime privilege, paid API or automated merge was added in this continuation.
+In particular, code `0702ec2` had 190 native package / 238 native root tests and corrected internal-link parent traversal. Task 1/preflight/frozen-label history remains in that checkpoint, Git history and PR #138. It is historical evidence, not a replacement for the new runs above.
 
-The previous empty-importer lockfile normalization rule is unchanged. Persist and validate the generated `packages/macos-lifecycle: {}` importer before sealed packaging; do not call the temporary installed checkout pristine.
+## 8. Execution and review boundaries
 
-Review in this continuation is author self-review, not an independent reviewer. The symlink parent-traversal issue was reproduced and corrected. Unknown deployment/helper provenance and installed-job/port proof are explicit remaining gates, not waived findings. Keep the PR Draft and unmerged.
+The local authoring environment has Node22/TypeScript but no pnpm, and direct GitHub/npm DNS was unavailable. There is no complete local checkout or claimed local Node24 repository test run. Actual verification uses the existing read-only GitHub Actions exact-head detached worktrees. Local syntax-only transpilation is not represented as repository typecheck.
 
-## 8. Exact continuation point
+No workflow permissions, dependency versions, runtime privilege, paid AI API, automatic deployment or merge were introduced. The existing empty-importer normalization rule is unchanged: frozen installation may add only the empty `packages/macos-lifecycle: {}` importer in the temporary checkout. Persist that importer through a reviewed change before sealed packaging; do not call the temporary checkout pristine.
 
-Finish Task 2 by implementing native installed-manifest/plist/launchd identity, owned/free port observations and the fixed-root trusted Inspector composition. Prove helper provenance without trusting the bundle under inspection, and verify complete preview no-mutation behavior. Do not redo the implemented config/file/release/ACL/account modules from scratch.
+This increment received author source/test review, not an independent reviewer. No independent approval is claimed. Keep PR #138 Draft and unmerged. Even on a supported Mac, these exported library functions are not a runnable lifecycle CLI or deployment tool.
 
-Then continue Tasks 3–8 of the approved plan. No new general plan approval is needed for existing development scope; real administrator installation, actual test-tunnel credentials/access, production accounts and merge remain separate gates.
+## 9. Exact continuation point
 
-**NOT_RUN:** user-Mac provisioning, complete native preview against its installation, launchd start/stop/reboot, peer ownership, Keychain/TCC, real tunnel, browser and HAAR operations. Generated plists still reference an absent `supervisor-cli.js`: they are NOT DEPLOYABLE.
+Do not rebuild the config, file/release, native ACL/account, registry/port or path-presence components. Finish Task 2 integration by binding the fixed installed manifest/plist paths to verified installation identity, establishing helper provenance and composing the six native Inspector ports without caller-provided success facts. Complete preview must prove no writes/credential reads, and must refuse foreign/unknown installations.
 
-The Windows M2 branch advanced externally to `c5225dd8b8f6f014ed6dc036abc63e55945d39b6` before this continuation. It was only read, not edited. Refresh every branch ref at the next handoff; older c7fc805 snapshots are historical.
+Task 4 owns established-peer authentication; Task 6 owns the journal/installation manifest and idempotent administrative apply. Resolve their read-contract boundaries before treating an existing running installation as OWNED. Do not invent that proof from this increment's mere registration or TCP occupancy. Then continue Tasks 3–8 of the approved plan. No renewed general plan approval is needed for already-approved development scope.
 
-## 9. Platform reference basis
+**NOT_RUN:** user-Mac provisioning; complete preview against its installation; launchd start/stop/reboot; live peer ownership; Keychain/TCC; actual tunnel; browser; HAAR operations. Real administrative changes, credentials and merge retain separate authorization gates. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
 
-The helper is original code using Apple SDK interfaces. Apple source was consulted for declarations and API behavior, not copied as an implementation:
-- filesec declarations: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
-- Darwin ACL entry iteration: https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_entry.c
-- Native descriptor metadata facilities: https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
+At this continuation's initial ref inspection, main was `fdf5dda`, Windows M2 was `c5225dd8`, MAC-01 was `a98c8ff`, and docs were `3c643d4`. Only the MAC-02 feature branch was written. Refresh all refs at handoff; c7fc805 Windows snapshots are historical.
 
-SDK source review is not runtime evidence; the actual native tests above provide the limited execution evidence claimed here.
+## 10. Primary platform references
+
+Native code uses Apple SDK/system interfaces; platform source review is not execution evidence:
+- https://github.com/apple-oss-distributions/network_cmds/blob/main/netstat.tproj/inet.c
+- https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+- https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_entry.c
+- https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c
+
+Actual observed-format and filesystem/native tests, with their limits, are recorded above.
