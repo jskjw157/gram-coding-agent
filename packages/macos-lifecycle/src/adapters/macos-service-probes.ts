@@ -82,10 +82,10 @@ export function parseDisabledOverrides(value: unknown): DisabledOverrides | null
   if (lines[0] !== 'disabled services = {' || lines.at(-1) !== '}') return null;
   const seen = new Set<string>(); const overrides: DisabledOverrides = { core: null, tunnel: null };
   for (const line of lines.slice(1, -1)) {
-    const match = /^"([^"\r\n]{1,255})"[ \t]+=>[ \t]+(true|false)$/u.exec(line);
+    const match = /^"([^"\r\n]{1,255})"[ \t]+=>[ \t]+(true|false|enabled|disabled)$/u.exec(line);
     if (!match?.[1] || seen.has(match[1])) return null;
     seen.add(match[1]);
-    for (const role of ['core', 'tunnel'] as const) if (match[1] === labels[role]) overrides[role] = match[2] === 'true';
+    for (const role of ['core', 'tunnel'] as const) if (match[1] === labels[role]) overrides[role] = match[2] === 'true' || match[2] === 'disabled';
   }
   return overrides;
 }
