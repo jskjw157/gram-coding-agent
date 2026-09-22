@@ -1,0 +1,132 @@
+import { describe, expect, it, vi } from 'vitest';
+import {
+  PublishingService,
+  RemotePushConfirmationError,
+  type PublishingTaskContext,
+} from './publishing-service.js';
+
+const taskId = '018d8a73-6b4e-7000-8000-000000000001';
+const sha = 'a'.repeat(40);
+
+function context(overrides: Partial<PublishingTaskContext> = {}): PublishingTaskContext {
+  return {
+    taskId,
+    repoId: 84722133,
+    worktree: '/home/user/.gram-agent/worktrees/84722133/task',
+    branch: 'feat/task-000001-publish',
+    paths: ['src/app.ts'],
+    commitMessage: 'feat: publish verified change',
+    remote: 'origin',
+    lock: {
+      release: vi.fn(async () => undefined),
+    },
+    ...overrides,
+  };
+}
+
+describe('PublishingService critical lock boundary', () => {
+  it('does not release the Repo Lock when exact remote confirmation fails', async () => {
+    const events: string[] = [];
+    const lock = {
+      release: vi.fn(async () => {
+        events.push('lock.release');
+      }),
+    };
+    const service = new PublishingService({
+      verification: {
+        assertPassed: vi.fn(async () => {
+          events.push('verification.assertPassed');
+        }),
+      },
+      commits: {
+        commitExplicit: vi.fn(async () => {
+          events.push('commit');
+          return sha;
+        }),
+      },
+      remote: {
+        push: vi.fn(async () => {
+          events.push('push');
+        }),
+        confirmRemoteSha: vi.fn(async () => {
+          events.push('remote.confirm');
+          return false;
+        }),
+      },
+      persistence: {
+        recordCommit: vi.fn(),
+        markRemoteConfirmed: vi.fn(),
+      },
+      audit: {
+        append: vi.fn(),
+      },
+    });
+
+    await expect(service.publish(context({ lock }))).rejects.toBeInstanceOf(
+      RemotePushConfirmationError,
+    );
+
+    expect(events).toEqual([
+      'verification.assertPassed',
+      'commit',
+      'push',
+      'remote.confirm',
+    ]);
+    expect(lock.release).not.toHaveBeenCalled();
+  });
+
+  it('releases the Repo Lock only after verification, commit, push, and exact remote confirmation', async () => {
+    const events: string[] = [];
+    const lock = {
+      release: vi.fn(async () => {
+        events.push('lock.release');
+      }),
+    };
+    const service = new PublishingService({
+      verification: {
+        assertPassed: vi.fn(async () => {
+          events.push('verification.assertPassed');
+        }),
+      },
+      commits: {
+        commitExplicit: vi.fn(async () => {
+          events.push('commit');
+          return sha;
+        }),
+      },
+      remote: {
+        push: vi.fn(async () => {
+          events.push('push');
+        }),
+        confirmRemoteSha: vi.fn(async () => {
+          events.push('remote.confirm');
+          return true;
+        }),
+      },
+      persistence: {
+        recordCommit: vi.fn(),
+        markRemoteConfirmed: vi.fn(),
+      },
+      audit: {
+        append: vi.fn(),
+      },
+    });
+
+    const published = await service.publish(context({ lock }));
+
+    expect(events).toEqual([
+      'verification.assertPassed',
+      'commit',
+      'push',
+      'remote.confirm',
+      'lock.release',
+    ]);
+    expect(published).toMatchObject({
+      taskId,
+      repoId: 84722133,
+      sha,
+      branch: 'feat/task-000001-publish',
+      remote: 'origin',
+    });
+  });
+});
