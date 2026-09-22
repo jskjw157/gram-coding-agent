@@ -10,3 +10,4 @@ export * from './repositories/verification-repository.js';
 export * from './repositories/git-commit-repository.js';
 export * from './repositories/pull-request-repository.js';
 export * from './repositories/pull-request-evidence-repository.js';
+export * from './repositories/ci-run-repository.js';
