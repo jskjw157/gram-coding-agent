@@ -9,7 +9,7 @@ import { createTrustedFiles } from './adapters/trusted-files.js';
 
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 let root: string;
-const entries = ['bin/node', 'apps/agent/dist/main.js', 'packages/macos-lifecycle/dist/supervisor-cli.js', 'pnpm-lock.yaml'];
+const entries = ['bin/node', 'apps/agent/dist/main.js', 'packages/macos-lifecycle/dist/supervisor-cli.js', 'pnpm-lock.yaml'] as const;
 let manifest: { schemaVersion: number; releaseId: string; sourceCommit: string; lockDigest: string;
   files: Array<{ path: string; sha256?: string; executable?: boolean; target?: string }>;
   coreTools: string[]; schemaCompatibility: { minimum: number; maximum: number } };
@@ -28,7 +28,7 @@ async function fixture() {
   const bytes = JSON.stringify(manifest); await writeFile(join(root, 'release.json'), bytes, { mode: 0o600 });
   const digest = sha(bytes);
   const config = parseConfig({ schemaVersion: 1, mode: 'LAB_ONLY', runtimeUser: 'gram-agent', releaseId: 'lab-001', releaseDigest: digest, tunnel: { enabled: false } });
-  return { config, digest, files: createTrustedFiles(root, process.getuid!(), async () => true) };
+  return { config, digest, files: createTrustedFiles(root, process.getuid?.() ?? -1, async () => true) };
 }
 describe('independently anchored sealed release', () => {
   it('verifies exact manifest and actual inventory hashes without running binaries', async () => {
@@ -47,7 +47,7 @@ describe('independently anchored sealed release', () => {
     await expect(inspectRelease(f.config, f.digest, f.files)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
   });
   it('rejects tampered file data', async () => {
-    const f = await fixture(); await writeFile(join(root, entries[1]!), 'altered');
+    const f = await fixture(); await writeFile(join(root, entries[1]), 'altered');
     await expect(inspectRelease(f.config, f.digest, f.files)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
   });
   it('rejects unlisted sensitive files before opening their data', async () => {
@@ -57,16 +57,17 @@ describe('independently anchored sealed release', () => {
     await expect(inspectRelease(f.config, f.digest, files)).rejects.toThrow(/^UNTRUSTED_RELEASE$/); expect(reads).toEqual([]);
   });
   it.each(['broader tools', 'duplicate path', 'escaping path', 'missing required file', 'wrong lock', 'bad schema range'])('rejects %s in a reviewed but invalid manifest', async kind => {
+    const first = manifest.files[0]; if (first === undefined) throw new Error('MISSING_FIXTURE');
     if (kind === 'broader tools') manifest.coreTools.push('shell_exec');
-    if (kind === 'duplicate path') manifest.files.push({ ...manifest.files[0]! });
-    if (kind === 'escaping path') manifest.files[0]!.path = '../outside';
+    if (kind === 'duplicate path') manifest.files.push({ ...first });
+    if (kind === 'escaping path') first.path = '../outside';
     if (kind === 'missing required file') manifest.files.shift();
     if (kind === 'wrong lock') manifest.lockDigest = '0'.repeat(64);
     if (kind === 'bad schema range') manifest.schemaCompatibility.maximum = 0;
     const f = await fixture(); await expect(inspectRelease(f.config, f.digest, f.files)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
   });
   it('rejects executable mode drift', async () => {
-    const f = await fixture(); await chmod(join(root, entries[1]!), 0o700);
+    const f = await fixture(); await chmod(join(root, entries[1]), 0o700);
     await expect(inspectRelease(f.config, f.digest, f.files)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
   });
   it('accepts an inventoried internal directory link without following it', async () => {

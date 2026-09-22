@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createTrustedFiles, type AclProbe } from './trusted-files.js';
 
 let root: string;
-const uid = process.getuid!();
+const uid = process.getuid?.() ?? -1;
 const safe: AclProbe = async () => true;
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'gram sealed ')));

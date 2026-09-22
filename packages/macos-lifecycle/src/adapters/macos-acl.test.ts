@@ -28,7 +28,7 @@ describe.skipIf(process.platform !== 'darwin')('native Apple descriptor ACL (nev
     finally { await handle.close(); }
   });
   it('checks actual directory ACLs and composes with descriptor reads', async () => {
-    const files = createTrustedFiles(dir, process.getuid!(), fd => checkMacAcl(fd, helper));
+    const files = createTrustedFiles(dir, process.getuid?.() ?? -1, fd => checkMacAcl(fd, helper));
     expect((await files.read('sample', 64)).toString()).toBe('synthetic-file-not-a-secret');
   });
   it('does not read data or advance the inherited descriptor offset', async () => {

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import type { ServiceConfig } from './contracts.js';
 import { parseConfig } from './config.js';
-import { relativeParts, type InventoryEntry, type ReleaseFiles } from './adapters/trusted-files.js';
+import { hasControls, relativeParts, type InventoryEntry, type ReleaseFiles } from './adapters/trusted-files.js';
 
 export interface ReleaseEvidence { verified: true; safePaths: true; digest: string; sourceCommit: string; lockDigest: string; entries: readonly string[] }
 type Entry = { path: string; sha256: string; executable: boolean } | { path: string; target: string };
@@ -35,7 +35,7 @@ function manifestEntries(value: unknown): Entry[] {
     if (Object.hasOwn(e, 'target')) {
       exact(e, ['path', 'target']);
       if (typeof e.target !== 'string' || e.target.length === 0 || e.target.length > 4096
-        || /[\\\u0000-\u001f\u007f]/u.test(e.target) || posix.isAbsolute(e.target)) return refuse();
+        || e.target.includes('\\') || hasControls(e.target) || posix.isAbsolute(e.target)) return refuse();
       return { path: e.path, target: e.target };
     }
     exact(e, ['path', 'sha256', 'executable']);

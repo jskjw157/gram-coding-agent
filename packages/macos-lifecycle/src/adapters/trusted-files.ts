@@ -12,9 +12,12 @@ export interface ReleaseFiles {
 }
 const MAX_BYTES = 256 * 1024 * 1024;
 function unsafe(): never { throw new Error('UNSAFE_PATH'); }
+export function hasControls(value: string): boolean {
+  return [...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
+}
 export function relativeParts(path: string): string[] {
   if (typeof path !== 'string' || path.length === 0 || path.length > 4096 || isAbsolute(path)
-    || /[\\\u0000-\u001f\u007f]/u.test(path)) unsafe();
+    || path.includes('\\') || hasControls(path)) unsafe();
   const parts = path.split('/');
   if (parts.length > 64 || parts.some(part => part === '' || part === '.' || part === '..')) unsafe();
   return parts;
@@ -35,7 +38,7 @@ function modeSafe(s: BigIntStats, uid: number): boolean {
  * Root/admin is trusted: this does not promise atomic exclusion of root changes.
  */
 export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclProbe, prefix = ''): ReleaseFiles {
-  if (!isAbsolute(anchor) || resolve(anchor) !== anchor || /[\u0000-\u001f\u007f]/u.test(anchor)
+  if (!isAbsolute(anchor) || resolve(anchor) !== anchor || hasControls(anchor)
     || !Number.isSafeInteger(ownerUid) || ownerUid < 0 || ownerUid >= 0xffff_ffff) unsafe();
   const prefixParts = prefix === '' ? [] : relativeParts(prefix);
   type Snapshot = { path: string; file: FileHandle; stat: BigIntStats };
@@ -45,7 +48,7 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
       let path = anchor;
       const all = [...prefixParts, ...parts];
       for (let i = -1; i < all.length; i++) {
-        if (i >= 0) path = join(path, all[i]!);
+        if (i >= 0) { const part = all[i]; if (part === undefined) unsafe(); path = join(path, part); }
         const isDir = i < all.length - 1 || directory;
         const before = await lstat(path, { bigint: true });
         if (!modeSafe(before, ownerUid) || (isDir ? !before.isDirectory() : !before.isFile())
@@ -57,7 +60,8 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
           || !same(before, await file.stat({ bigint: true }))
           || !same(before, await lstat(path, { bigint: true }))) unsafe();
       }
-      const last = held.at(-1)!;
+      const last = held.at(-1);
+      if (last === undefined) unsafe();
       const result = await use(last.file, last.stat, last.path);
       for (const snapshot of held) {
         if (!same(snapshot.stat, await snapshot.file.stat({ bigint: true }))
