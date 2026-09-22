@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/acl.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
