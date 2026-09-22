@@ -46,24 +46,31 @@ function manifestEntries(value: unknown): Entry[] {
 function verifyLinks(inventory: InventoryEntry[]): void {
   const byPath = new Map(inventory.map(e => [e.path, e]));
   for (const link of inventory.filter(e => e.kind === 'link')) {
-    let pending = posix.join(posix.dirname(link.path), link.target);
-    let resolved = false;
-    for (let attempt = 0; attempt < 64; attempt++) {
-      if (pending === '.' || pending === '') { resolved = true; break; }
-      const parts = relativeParts(pending);
-      let switched = false;
-      for (let i = 0; i < parts.length; i++) {
-        const prefix = parts.slice(0, i + 1).join('/'); const target = byPath.get(prefix);
-        if (!target) refuse();
-        if (target.kind === 'link') {
-          pending = posix.join(posix.dirname(prefix), target.target, ...parts.slice(i + 1));
-          switched = true; break;
-        }
-        if (i < parts.length - 1 && target.kind !== 'directory') refuse();
+    // Do not normalize '..' lexically: preceding symlinks change its meaning.
+    // Resolve only the verified inventory; never follow an on-disk link.
+    let pending = [...link.path.split('/').slice(0, -1), ...link.target.split('/')];
+    const resolved: string[] = [];
+    let expansions = 0; let steps = 0;
+    while (pending.length > 0) {
+      if (++steps > 8192 || pending.length > 4096) refuse();
+      const part = pending.shift();
+      if (part === undefined) refuse();
+      if (part === '' || part === '.') continue;
+      if (part === '..') {
+        if (resolved.length === 0) refuse();
+        resolved.pop(); continue;
       }
-      if (!switched) { resolved = true; break; }
+      if (relativeParts(part).length !== 1) refuse();
+      const entry = byPath.get([...resolved, part].join('/'));
+      if (!entry) refuse();
+      if (entry.kind === 'link') {
+        if (++expansions > 64 || posix.isAbsolute(entry.target)) refuse();
+        pending = [...entry.target.split('/'), ...pending];
+      } else {
+        if (entry.kind === 'file' && pending.length > 0) refuse();
+        resolved.push(part);
+      }
     }
-    if (!resolved) refuse();
   }
 }
 
