@@ -23,6 +23,7 @@ describe('@gram/github package boundary', () => {
     );
 
     expect(files).toContain('pull-request-service.ts');
+    expect(files).toContain('checks-service.ts');
 
     for (const path of files) {
       const source = readFileSync(new URL(path, import.meta.url), 'utf8');
