@@ -19,7 +19,10 @@ describe('GitHubClient credential scope', () => {
         headers: Record<string, string>;
         body?: string;
       },
-    ) => ({
+    ) => {
+      void _url;
+      void init;
+      return {
       ok: true,
       status: 200,
       async text() {
@@ -37,7 +40,8 @@ describe('GitHubClient credential scope', () => {
           },
         ];
       },
-    }));
+    };
+    });
 
     const client = new GitHubClient({
       secrets,
