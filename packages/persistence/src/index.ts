@@ -7,3 +7,4 @@ export * from './repositories/lock-repository.js';
 export * from './repositories/workspace-repository.js';
 export * from './repositories/command-run-repository.js';
 export * from './repositories/verification-repository.js';
+export * from './repositories/git-commit-repository.js';
