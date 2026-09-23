@@ -54,10 +54,10 @@ export class TelemetryStore {
       const [old] = previous;
       if (old !== null && old !== undefined) {
         const saved = decodeStatus(old); if (saved.role !== role) invalid();
+        // A wall-clock millisecond is not a unique observation sequence.
+        // Sequential same-tick transitions are allowed; CAS still fences races.
         if (status.observedAtMs < saved.observedAtMs || (status.generation === saved.generation
-          && (status.releaseDigest !== saved.releaseDigest || (status.observedAtMs === saved.observedAtMs && !bytes.equals(old))))) {
-          throw new Error('STATE_CONFLICT');
-        }
+          && status.releaseDigest !== saved.releaseDigest)) throw new Error('STATE_CONFLICT');
       }
       await this.statusFiles.compareAndSwap(role, previous.map(digest), 0, bytes);
     } catch (error) { safe(error); }
