@@ -24,7 +24,14 @@ describe('bounded three-slot event logs', () => {
       const next = planEventAppend(slots, 'core', event(2000)); expect(next.slot).toBe(nextSequence % 3);
       expect(next.bytes.length).toBeLessThanOrEqual(LOG_MAX_BYTES);
       expect(decodeEventSegment(next.bytes, 'core', next.slot).sequence).toBe(nextSequence);
-      expect(slots).toEqual(before);
+      for (let i = 0; i < 3; i++) {
+        const actual = slots[i]; const expected = before[i];
+        if (expected === null) expect(actual).toBe(null);
+        else {
+          if (!actual || !expected) throw new Error('MISSING_TEST_SEGMENT');
+          expect(actual.equals(expected)).toBe(true);
+        }
+      }
     }
     const next = planEventAppend([segment(3), b, c], 'core', event(2000)); expect(next.slot).toBe(0);
   }, 15000);
