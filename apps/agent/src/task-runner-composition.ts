@@ -1,4 +1,4 @@
-import type { TaskId, TaskStatus } from '@gram/domain';
+import { canTransitionTaskStatus, type TaskId, type TaskStatus } from '@gram/domain';
 import {
   ChecksService,
   type ChecksClientPort,
@@ -8,6 +8,7 @@ import {
 } from '@gram/github';
 import type { AuditRepository } from '@gram/persistence';
 import {
+  InvalidTaskTransitionError,
   TaskRunner,
   type AnalyzePort,
   type CiObservePort,
@@ -532,6 +533,13 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       complete: async (taskId) => {
         const stored = requireTask(taskId, 'Complete');
         if (stored.status === 'COMPLETED') return;
+        // Fail closed like PersistentCiCompletion: only PUBLISHING may
+        // complete. canTransitionTaskStatus(from, 'COMPLETED') is true
+        // solely for PUBLISHING, so any other state throws here with the
+        // task state left unchanged.
+        if (canTransitionTaskStatus(stored.status, 'COMPLETED') === false) {
+          throw new InvalidTaskTransitionError(stored.status, 'COMPLETED');
+        }
         tasks.transition(taskId, stored.status, 'COMPLETED');
       },
     };

@@ -52,6 +52,7 @@ interface Controls {
   ciOutcome?: 'SUCCESS' | 'FAILURE' | 'PENDING';
   omitInstructions?: boolean;
   useDefaultComplete?: boolean;
+  initialStatus?: TaskStatus;
   currentHeadSha?: string;
   planHeadSha?: string | null;
   headShaSequence?: string[];
@@ -95,7 +96,7 @@ function createHarness(controls: Controls = {}) {
   const repairEvents: string[] = [];
   const transitions: Array<{ from: TaskStatus; to: TaskStatus }> = [];
   const auditEvents: string[] = [];
-  let status: TaskStatus = 'QUEUED';
+  let status: TaskStatus = controls.initialStatus ?? 'QUEUED';
 
   const seen = {
     resolvedBranch: '',
@@ -357,12 +358,23 @@ describe('task-runner composition', () => {
     expect(events.indexOf('lock.release')).toBeLessThan(events.indexOf('pr.ensure'));
   });
 
-  it('delegates final success to CompletePort exactly once with the default state transition', async () => {
-    const { runner, transitions } = createHarness({ useDefaultComplete: true });
+  it('rejects default completion from QUEUED as an illegal transition with state unchanged', async () => {
+    const { runner, transitions, tasks } = createHarness({ useDefaultComplete: true });
+
+    await expect(runner.run(TASK_ID)).rejects.toThrow(/not allowed|illegal-transition/i);
+    expect(transitions.filter((t) => t.to === 'COMPLETED')).toHaveLength(0);
+    expect(tasks.get(TASK_ID)?.status).toBe('QUEUED');
+  });
+
+  it('completes via the default CompletePort from PUBLISHING exactly once', async () => {
+    const { runner, transitions } = createHarness({
+      useDefaultComplete: true,
+      initialStatus: 'PUBLISHING',
+    });
 
     await runner.run(TASK_ID);
 
-    expect(transitions.filter((t) => t.to === 'COMPLETED')).toHaveLength(1);
+    expect(transitions).toEqual([{ from: 'PUBLISHING', to: 'COMPLETED' }]);
   });
 
   it('prevents publication when verification rejects', async () => {
