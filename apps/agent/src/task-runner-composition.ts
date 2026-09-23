@@ -6,7 +6,6 @@ import {
   type CiRunPersistencePort,
   type DelayPort,
 } from '@gram/github';
-import type { AuditRepository } from '@gram/persistence';
 import {
   InvalidTaskTransitionError,
   TaskRunner,
@@ -67,7 +66,7 @@ export interface CompositionAuditPort {
     eventType: string;
     payload?: unknown;
     createdAt?: string;
-  }): unknown;
+  }): number;
 }
 
 /** Structural subset of RepoResolver.resolve output. */
@@ -618,7 +617,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
   };
 
   return new TaskRunner({
-    audit: audit as AuditRepository,
+    audit,
     locks,
     workspaces,
     mutations,

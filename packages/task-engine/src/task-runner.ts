@@ -1,5 +1,4 @@
 import type { TaskId } from '@gram/domain';
-import type { AuditRepository } from '@gram/persistence';
 import type {
   AnalyzePort,
   CiObservePort,
@@ -10,6 +9,7 @@ import type {
   PublishPort,
   RepoFetchPort,
   RepoResolvePort,
+  TaskAuditPort,
   VerifyPort,
   WorkspaceCreatePort,
 } from './task-runner-ports.js';
@@ -62,7 +62,7 @@ export interface RepairCycleCiPort {
 }
 
 export interface TaskRunnerOptions {
-  audit: AuditRepository;
+  audit: TaskAuditPort;
   locks: RepairCycleLockPort;
   workspaces: RepairCycleWorkspacePort;
   mutations: RepairCycleMutationPort;

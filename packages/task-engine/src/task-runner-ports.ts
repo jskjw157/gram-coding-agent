@@ -118,3 +118,17 @@ export interface CiObservePort {
 export interface CompletePort {
   complete(taskId: TaskId): Promise<void>;
 }
+
+// Narrow audit port for the task runner repair cycle. Mirrors the
+// persistence append params + return type without importing the
+// concrete persistence class, keeping task-engine ports-only.
+export interface TaskAuditEvent {
+  taskId?: TaskId | null;
+  eventType: string;
+  payload?: unknown;
+  createdAt?: string;
+}
+
+export interface TaskAuditPort {
+  append(event: TaskAuditEvent): number;
+}
