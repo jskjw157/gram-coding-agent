@@ -54,8 +54,8 @@ describe('owned core health protocol', () => {
     expect(f.trace.filter(t => ['health', 'initialize', 'initialized', 'tools', 'call'].includes(t)))
       .toEqual(['health', 'initialize', 'initialized', 'tools', 'call']);
   });
-  it.each([[], ['task_create'], ['agent_health', 'task_create'], ['agent_health', 'agent_health']])(
-    'blocks an unexpected tool surface %j', async names => {
+  it.each([[], ['task_create'], ['agent_health', 'task_create'], ['agent_health', 'agent_health']].map(names => ({ names })))(
+    'blocks an unexpected tool surface $names', async ({ names }) => {
       const f = fixture((kind, r) => kind === 'tools' ? { ...r,
         body: Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: names.map(name => ({ name })) } })) } : r);
       expect(await probeCore(child(), f.connections, f.credentials)).toMatchObject({ state: 'BLOCKED', code: 'TOOL_SURFACE_MISMATCH' });
@@ -93,8 +93,7 @@ describe('owned core health protocol', () => {
     }
   });
   it('refuses nonhealthy source values, extra health fields and tool errors', async () => {
-    const values = [{ status: 'healthy', database: 'bad', mcp: 'ready' }, { ...healthy, extra: true },
-      { status: 'healthy' }];
+    const values = [{ status: 'healthy', database: 'bad', mcp: 'ready' }, { ...healthy, extra: true }, { status: 'healthy' }];
     for (const value of values) {
       const f = fixture((kind, r) => kind === 'call' ? { ...r, body: Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 3,
         result: { content: [{ type: 'text', text: JSON.stringify(value) }] } })) } : r);
@@ -127,9 +126,8 @@ describe('owned core health protocol', () => {
   it('bounds a hung connection before any credentials are obtained', async () => {
     vi.useFakeTimers(); const f = fixture();
     f.connections.openOwnedConnection = async () => new Promise(() => undefined);
-    const pending = probeCore(child(), f.connections, f.credentials);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect((await pending).state).toBe('UNKNOWN'); expect(f.stats().uses).toBe(0);
+    const check = expect(probeCore(child(), f.connections, f.credentials)).resolves.toMatchObject({ state: 'UNKNOWN' });
+    await vi.advanceTimersByTimeAsync(2000); await check; expect(f.stats().uses).toBe(0);
   });
   it('does not start when already aborted and does not echo abort reasons', async () => {
     const f = fixture(); const controller = new AbortController(); controller.abort('SYNTHETIC_TEST_SECRET');
