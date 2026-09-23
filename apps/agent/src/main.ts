@@ -7,6 +7,7 @@ import { AuditRepository, openDatabase, runMigrations, TaskRepository } from '@g
 import { PolicyEngine } from '@gram/policy';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
 import { TaskService } from '@gram/task-engine';
+import { createTaskRunner } from './task-runner-composition.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -45,6 +46,11 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   const taskService = new TaskService(taskRepository, auditRepository);
   const policyEngine = new PolicyEngine();
   void policyEngine;
+
+  // TaskRunner scheduling is deferred to a later slice; construction here
+  // verifies the composition root wiring without changing runtime behavior.
+  const taskRunner = createTaskRunner({ audit: auditRepository, tasks: taskRepository });
+  void taskRunner;
 
   const secretProvider = new FileSecretProvider(options.secretDirectory);
   const secretLease = await secretProvider.getForUse('mcp-internal-secret');
