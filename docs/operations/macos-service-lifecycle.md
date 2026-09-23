@@ -1,114 +1,114 @@
-# MAC-02 Service Lifecycle — Restart Accounting and Private State Persistence
+# MAC-02 Service Lifecycle — Safe Status, Events and Child-Output Handling
 
 **Updated:** 2026-09-23 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Not an installed service, runnable supervisor or completed MAC-02.  
+**Status:** IN_PROGRESS / PARTIAL; component code is not an installed or deployable service.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft and unmerged.  
-**Product implementation checkpoint:** `206798f2e10f0bc45a72e8415115de13035c3d1c`.  
-**Latest code/test checkpoint:** `3ea9b296b77fad1d683130d971cf29d4b5c62a90`.  
-**Resume baseline:** `0e32fd4bccf1fff684b38b11752e4cbcdf8347c7`.  
+**Verified product/code-test checkpoint:** `b608def267011a7227d98a44c2edc58faa409c07`.  
+**Resume baseline:** `ee4a4c67e7b9618beade6f205dffe6f3347a9691`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
 **Implementation merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
 
-## 1. Current scope and sequencing ruling
+## 1. Current progress, not deployment readiness
 
 | Task | Actual state |
 |---|---|
-| Task 1 | Implemented: strict LAB_ONLY configuration, frozen labels and fixed plist rendering |
-| Task 2 | PARTIAL: file/release/ACL/account/registry/port inspection, static installation identity and six-port preview composition exist |
-| Task 2 outstanding | Independent ACL-verifier provenance/bootstrap, live-instance identity through Task 4, real fixed-root positive acceptance |
-| Task 3 | PARTIAL: pure restart accounting, canonical history store and real private-file compare-and-swap persistence implemented |
-| Task 3 outstanding | Closed status records/writeStatus, safe appendEvent and three 5 MiB logs per role, bounded raw-child-output drain, process/supervisor integration |
-| Tasks 4–7 | Authenticated established-peer health, supervisors, administrative apply/rollback/uninstall, runnable CLI and sealed packaging not implemented |
-| Task 8 | Component/native CI exists; full lifecycle, independent review and user-device acceptance remain incomplete |
+| Task 1 | Configuration, frozen labels and fixed LAB_ONLY plist renderer implemented |
+| Task 2 | Native inspection/static identity/preview composition implemented; independent helper provenance, fixed-root acceptance and live peer identity still gated |
+| Task 3 | Restart accounting plus canonical history, status/event schema, bounded event files and discard-only byte-pipe handling implemented and component-tested |
+| Task 3 integration gates | Trusted production run/log directory binding, current-owner enforcement in the supervisor, abandoned writer-lock recovery and lifecycle integration remain open |
+| Tasks 4–7 | Established-peer health, supervisors, administrative apply/rollback/uninstall, CLI and sealed packaging remain unimplemented |
+| Task 8 | Component/native CI exists; full installed lifecycle, independent review and user-device acceptance remain incomplete |
 
-**Ruling:** retain the Task 2 deployment trust gate and develop independent Task 3 accounting/persistence behind internal ports. Do not derive trust from an unverified helper's own output, its own release manifest, or a caller-supplied success boolean. This does not mark Task 2 complete or authorize bypassing it. The cost of this sequencing is explicit: tested persistence is not operational service readiness.
+The prior sequencing ruling remains: implement independent components without pretending the missing deployment trust has been established. No callback type, candidate-helper hash or helper-produced success value authenticates that helper. Task 2 and integrated Task 3 are not marked complete by this checkpoint.
 
-MAC-03–05 documents were prepared separately on `docs/macos-operations-agent-design` at `31e66aa21b705b1793f11122c1b12d5ebf41715c`. This continuation resumes MAC-02 only and implements none of those later capabilities.
+MAC-03–05 documents remain separate at `31e66aa21b705b1793f11122c1b12d5ebf41715c`. They were not implemented or edited here. There is still no `supervisor-cli.js`; generated plists are **NOT DEPLOYABLE**.
 
-## 2. New modules and preserved work
+## 2. Files added and existing behavior preserved
 
-Three production modules:
+Six new production modules, all under `packages/macos-lifecycle/src/`:
 
-- `packages/macos-lifecycle/src/circuit.ts`: pure bounded restart history and transitions.
-- `packages/macos-lifecycle/src/lifecycle-store.ts`: canonical encoding, digest-bound snapshots and durable transition ordering.
-- `packages/macos-lifecycle/src/adapters/service-files.ts`: trusted private-directory reads and cooperative exclusive file replacement.
+| File | Responsibility |
+|---|---|
+| `telemetry.ts` | Closed safe event/status parsing, canonical status bytes, identity/freshness filtering |
+| `child-output.ts` | Exclusive byte-pipe discard, one bounded shutdown drain, listener cleanup |
+| `event-log.ts` | Validate bounded canonical segments and choose a one-slot rotation |
+| `telemetry-store.ts` | Read/write status and append safe events via awaited whole-group CAS |
+| `adapters/private-record-files.ts` | Shared fixed-family private-directory, descriptor, lock and atomic-file mechanics |
+| `adapters/telemetry-files.ts` | Bind separate internal run/log directory capabilities to fixed status/event files |
 
-Five test files:
+`adapters/service-files.ts` now delegates to the shared engine while preserving its existing `createCircuitFilesAt` API, exported policy/I/O types, circuit filenames, limits and errors. Existing circuit/history/file tests remain unchanged. No alternate history engine was added.
 
-- `packages/macos-lifecycle/src/circuit.test.ts`: 42 cases.
-- `packages/macos-lifecycle/src/lifecycle-store.test.ts`: 22 cases.
-- `packages/macos-lifecycle/src/adapters/service-files.test.ts`: 24 real-filesystem cases.
-- `packages/macos-lifecycle/src/adapters/service-files-failure.test.ts`: 2 additional failure cases.
-- `packages/macos-lifecycle/src/adapters/service-files.native.test.ts`: 2 actual macOS ACL/persistence cases, explicitly skipped elsewhere.
+Seven test files add **67 cases**: telemetry 30; child output 8; log planner 5; telemetry store 8; real telemetry files 13; same-tick status regression 1; native telemetry ACL integration 2. The previous 405 lifecycle tests are retained.
 
-This adds 92 tests to the previous 313-test lifecycle package. Existing configuration, trusted-files, release validation, native ACL/account/service probes, static installed identity and native-inspector code are reused without modification. No original package, dependency, lockfile, workflow, WSL path or shared M2 contract is changed. No GPT-Bridge integration is introduced.
+No original shared package, WSL path, dependency, lockfile, workflow, schema migration or GPT-Bridge integration changed in this increment.
 
-## 3. Restart history and transition contract
-
-`CircuitHistory` is closed data with exactly these fields:
+## 3. Safe records and freshness
 
 ```ts
-interface CircuitHistory {
+interface SafeEvent {
   schemaVersion: 1;
-  blocked: boolean;
-  lastSeenMs: number;
-  exitsMs: number[];
-  lastGeneration: string | null;
-  activeAttempt: null | { generation: string; startedAtMs: number };
+  role: 'core' | 'tunnel';
+  generation: string;
+  releaseDigest: string;
+  code: SafeCode;
+  observedAtMs: number;
+  attemptCount: number;
 }
+interface ServiceStatus extends SafeEvent { state: ServiceState }
 ```
 
-This is a new, not-yet-deployed format. `lastGeneration` is mandatory and initially null; no implicit migration of an older deployed format is claimed. The future supervisor must allocate fresh opaque generations locally. These fields are not a channel for user-entered text or credentials.
+Only own enumerable data properties with exact keys are accepted. Accessors, symbols, unknown fields, invalid prototypes and arbitrary messages are refused with `INVALID_TELEMETRY`. IDs use the existing bounded generation grammar; the release digest is exactly 64 lowercase hexadecimal characters. Time is a nonnegative safe integer and attempt count is 0–5. The exact existing SafeCode vocabulary is reused.
 
-- `freshHistory(nowMs)` is explicit new-installation construction, never fallback for missing/corrupt recovered state.
-- `parseHistory(value)` validates own enumerable data properties, supported schema, finite nonnegative safe-integer times, dense bounded ordered exit arrays, generation syntax and active/last-generation consistency. It rejects accessors, symbols, unknown fields and nonstandard object prototypes. Returned objects/arrays are detached.
-- `recordExit(history, nowMs, intentional)` counts only unexpected exits, keeps at most five recent exit timestamps and clears the active marker. The rolling window is `(nowMs - 300000, nowMs]`: an exit exactly 300000 ms old is excluded.
-- The fifth unexpected exit in that window opens a sticky circuit. Elapsed time, reload and recovery do not close it.
-- `beginAttempt(history, generation, nowMs)` refuses blocked or unresolved active state and immediate generation reuse. Its returned marker must be durably saved before any child spawn.
-- `recoverAttempt(history, nowMs)` accounts for an unresolved active marker once, clearing it in the returned transition. Exactly-once accounting across repeated recovery depends on successfully committing that transition; an ambiguous failed write requires reload.
-- `resetFailure(history, expectedGeneration, nowMs)` is only a pure reset proposal. It rejects unresolved active attempts and stale generation acknowledgements. It does not spawn a child or grant permission. Task 6 must independently establish a stopped installation and local authorization before calling it.
+Core and tunnel have different state vocabularies. `LOCAL_CORE_HEALTHY` and `TRANSPORT_READY` require code `OK`; `BLOCKED_RESTART_BUDGET` requires `RESTART_BUDGET`. This validates record consistency, not the truth of an observation.
 
-Reversed time, future timestamps relative to stored observation time, impossible shapes and invalid generation values are `INVALID_HISTORY`. The caller must not replace that error with a fresh history. The parser is validation, not cryptographic authentication against trusted root or same-user modification.
+Status is canonical UTF-8 JSON plus one newline, at most 65536 bytes. Decode/re-encode byte equality rejects duplicate keys, BOMs and noncanonical bytes. `currentStatus` returns null for invalid, future, mismatched role/generation/release or age >=30000ms. A malformed decoded status becomes unknown when read, never repaired. Filesystem/size/access errors are fixed errors and must also be treated as unavailable by future callers.
 
-## 4. Store and durable-write boundary
+The future supervisor must mint identifiers locally and establish live current-owner identity. A string matching the identifier grammar is not secret redaction or authorization; do not copy child/site/user messages into approved identifier fields. Status freshness alone does not prove process ownership, authenticated core health, website login or business readiness.
 
-`LifecycleStore` consumes the internal `CircuitFiles` port:
+`writeStatus` validates/copies before asynchronous I/O, refuses corrupt existing bytes and reversed observation time, and awaits exact-byte CAS. Same-generation release changes are refused. Sequential changes within one wall-clock millisecond are permitted; the whole-record digest, not timestamp uniqueness, fences concurrent writers. Current-generation authorization belongs to Task 4/5, not to caller-supplied serialized claims.
 
-```ts
-interface CircuitFiles {
-  read(role: 'core' | 'tunnel'): Promise<Buffer | null>;
-  compareAndSwap(
-    role: 'core' | 'tunnel', expectedDigest: string | null, bytes: Buffer
-  ): Promise<void>;
-}
+## 4. Bounded structured event logs
+
+Under the separately supplied private log directory, fixed names are:
+
+```text
+core.events.0.jsonl       tunnel.events.0.jsonl
+core.events.1.jsonl       tunnel.events.1.jsonl
+core.events.2.jsonl       tunnel.events.2.jsonl
 ```
 
-`encodeHistory` serializes normalized JSON plus a newline. `decodeHistory` accepts only canonical UTF-8 bytes, at most 65536 bytes, and compares the decoded/re-encoded bytes. Duplicate JSON keys, a BOM, unknown fields and noncanonical whitespace are rejected rather than silently normalized during recovery.
+Each retained segment is <=5242880 bytes (5 MiB), including its canonical `schemaVersion`/`sequence` header. The slot is `sequence % 3`; validated event lines follow the header. Missing sequence gaps, duplicate/wrong slots, extra fields, malformed bytes, wrong roles, reversed times and overflow are refused rather than silently reset.
 
-`HistorySnapshot` contains role, exact-byte SHA-256 digest and detached history. `write` requires that digest to match the supplied history and role, then consumes a closed `begin`, `exit`, `recover` or `reset` mutation. An exit must acknowledge the current active generation; duplicate or stale reports are rejected. Arbitrary replacement history is not the normal store interface.
+An append fits in the newest segment or atomically replaces the next slot with a new header/event. The two other segments remain byte-for-byte unchanged. CAS compares all three prior digests under one role/event-group lock; destination-only comparison would incorrectly permit stale appends after a rotation.
 
-`read` returns `MISSING_HISTORY` for absence; it does not write. `initializeNew` performs a create-only compare-and-swap against absence and cannot overwrite corrupt existing bytes. Its use belongs to the future independently authorized new-installation path, not general recovery.
+**Ruling:** use one-slot replacement rather than a chain of three file renames. This keeps interrupted rotation from publishing a partially renamed set. Cost: each event validates/copies bounded retained data and rewrites at most one 5 MiB segment. This is a conservative LAB_ONLY design, not a high-throughput logging claim.
 
-The store awaits durable CAS before returning a successful begin marker. Concurrent writes against the same old digest produce a conflict rather than silently erasing a failure. If a provider reports failure after replacing bytes, the store returns `STATE_IO` and does not retry old state. Reload and reconcile the current record before any next transition.
+The retained bound is 15 MiB per role, excluding a transient same-directory replacement file and small lock. Crashed temporary files/locks are not automatically purged. Stopped ownership-verified recovery remains required before claiming an overall disk-space or unattended recovery guarantee.
 
-Fixed internal errors include `INVALID_HISTORY`, `MISSING_HISTORY`, `RESTART_BUDGET`, `ACTIVE_ATTEMPT`, `STATE_CONFLICT`, `STATE_IO`, `UNSAFE_PATH` and `BUSY`. Unknown provider error text is not propagated. These codes are not yet a public MCP/CLI schema; future external mapping must be explicit.
+## 5. Atomic private files and failure behavior
 
-## 5. Real private-file persistence
+`createTelemetryFilesAt(runPolicy, logPolicy, io)` is internal, not a CLI/MCP configuration surface. Its already-provisioned directories and ACL verifier must be independently trusted. It creates no account, directory, credential, socket or service.
 
-`createCircuitFilesAt(policy, io)` is an internal capability constructor, not CLI/MCP input. Its directory/UID/ACL dependencies must already be trusted. It provisions no account or directories. A future production wrapper must bind `/`, administrator-owned fixed ancestors, the actual non-admin service UID, the fixed run path and an independently trusted ACL verifier. That wrapper is not shipped in this increment.
+The shared engine supports only fixed `circuit`, `status` and `events` families. Circuit/status use one slot; events use three. It checks trusted ancestors, separate service-owned leaf, 0700 directories, regular 0600 singly linked files, descriptor/path identity and ACLs. Per-role family locks are exclusive and never stolen by age or PID.
 
-Every directory component is opened without following links and held while the operation runs. Administrator-owned ancestors and the service-owned leaf have distinct UID checks. The leaf must be exactly mode 0700; parent unsafe writes, ownership mismatch and ACL refusal block operations. State files must be regular mode-0600 files owned by the designated service UID with exactly one hard link. Bounded descriptor reads compare file/path identity and mutation-sensitive metadata before/after reading.
+Status files are `core.status.json` and `tunnel.status.json` in the run directory, separate from unchanged `*.circuit.json`. The appropriate `.status.lock`, `.events.lock` and `.circuit.lock` protect separate groups. No public arbitrary filename or validation callback is added.
 
-Only these role filenames are generated: `core.circuit.json`, `tunnel.circuit.json`, and their corresponding `.circuit.lock` writer locks. A genuinely absent target is returned only below a verified existing directory. Symlinks, hardlinks, unexpected directories, oversized files and path replacements are not treated as absence.
+A write copies validated input, acquires its group lock, rechecks all expected files, creates a private temporary file, writes and syncs it, rechecks files/lock/directory, renames one slot, then syncs the directory. Cleanup removes only its own still-matching temporary/lock inode. File replacement, wrong links, foreign locks and stale snapshots are refused.
 
-CAS uses an exclusive per-role lock, rechecks the current digest, writes a private same-directory temporary file, syncs it, rechecks state/lock/directory identity, renames it atomically, and awaits directory sync. Cleanup removes only paths still referring to its held temporary/lock inode. A replaced foreign lock is preserved; no process is killed.
+Pre-rename failure preserves the prior complete record. Failure after rename can leave a complete newer record with uncertain durability; return `STATE_IO`, reload, and reconcile. Neither status nor event stores retry automatically or overwrite malformed state. Root and same-UID code remain trusted; repeated checks are not a sandbox or cryptographic authentication. OS sync calls are not hardware power-loss certification.
 
-**Failure semantics:** failure before rename leaves the previous complete record. Directory-sync failure after rename can leave a complete newer record with unconfirmed durability; it is reported as failure, not rolled back or called success. Caller buffers are copied before asynchronous I/O. The test suite injects actual partial temporary writes and sync/rename failures.
+The existing restart accounting semantics remain unchanged: five unexpected exits in the rolling 300000ms window, sticky block, durable begin-before-spawn marker, generation-bound exit/reset and once-per-committed-recovery accounting. Missing/corrupt history is not a new installation. Detailed prior history evidence remains at the baseline runbook in Git history.
 
-**Limits:** locks coordinate cooperating writers. A crash while holding a lock leaves `BUSY`; there is no age/PID-based lock stealing, stale-lock cleanup or journal recovery here. Temporary remnants may need separately verified stopped recovery. Trusted root and same-UID code are outside this isolation guarantee. Repeated path checks are not an OS sandbox or atomic protection against those principals replacing paths/ACLs. OS sync calls and passing tests are not a hardware power-loss guarantee.
+## 6. Discard-only child output
 
-## 6. Task 2 and Task 6 contracts retained
+`attachChildOutput(stdout, stderr)` takes exclusive ownership of byte-mode readable pipes. It immediately resumes/discards bytes without retaining, concatenating, decoding or logging their content. Duplicate/object-mode inputs are rejected. The supervisor must not also attach a raw logger or competing reader to these pipes.
+
+`finish()` starts one 20000ms shutdown deadline; startup has no drain timeout. Repeated finish calls share the same promise/deadline. The result is only `DRAINED`, `TIMED_OUT`, `ABORTED` or `STREAM_ERROR`. Abort reasons and stream-error messages are never returned. An error guard remains until close, then owned listeners are removed.
+
+Timeout/abort destroys owned pipes, not arbitrary processes. The future supervisor separately manages process signals, owned child identity and the 20-second termination contract. Tests use actual PassThrough streams, fragmented synthetic secrets, environment-shaped strings, a 2 MiB chunk, timer boundaries and listener cleanup. End-to-end deployed process handling is not claimed.
+
+## 7. Task 2 and Task 6 contracts retained
 
 `inspectInstallation` continues to accept a genuinely pristine installation or an explicitly disabled, unregistered installation with verified static files. Manifest/account/config/release/plist identities must match; actual plist bytes must equal the fixed renderer, not merely a manifest-provided hash. Orphans, unknown registrations and incomplete journals are refused. Static identity is not live process ownership.
 
@@ -130,57 +130,50 @@ If a journal remains, it has exactly `schemaVersion:1`, `stage:'COMMITTED'` and 
 
 The installation manifest/journal, restart history and composite preview digest are different records. None substitutes for Task 4 established-peer identity or grants permission to send credentials to an occupied port.
 
-## 7. Actual verification and scope
+## 8. Fresh verification evidence
 
-Final code/test commit: `3ea9b296b77fad1d683130d971cf29d4b5c62a90`.
+Exact code/test commit: `b608def267011a7227d98a44c2edc58faa409c07`.
 
-| Check | Observed result |
+| Check | Observed evidence |
 |---|---|
-| Focused exact-head workflow | `35782176376`, completed/success |
-| Native Mac job | `106930105936`, full log read; macOS 15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
-| Native lifecycle package | 23 files / **405 passed**, zero failed or skipped |
-| Native root collection | 31 files / **453 passed**, zero failed or skipped |
-| Ubuntu job | `106930105762`, all applicable steps successful; Apple-only tests explicitly skipped |
-| Root lint/typecheck/build | Successful on both focused jobs |
-| Compiled plist structure | Both roles accepted; 12 altered structures rejected |
-| Native plist syntax | Both generated files passed `plutil -lint`; no jobs installed |
-| Existing root CI | `35782176433`, completed/success; synthetic PR merge preview, not an actual merge |
+| Focused exact-head run | `35803572343`, Mac and Ubuntu jobs completed/success |
+| Native Mac job | `106999195155`, full log read; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
+| Mac lifecycle | 30 files / **472 passed**, zero failed/skipped |
+| Mac root collection | 38 files / **520 passed**, zero failed/skipped |
+| Ubuntu job | `106999195458`, all applicable steps successful; Apple-only cases explicitly skipped |
+| Root lint, typecheck, tests, build, diff | Passed on both focused jobs |
+| Plist structure and native syntax | Two roles passed; 12 altered structures rejected; native plutil passed |
+| Existing root CI | `35803572300`, completed/success; synthetic PR merge preview, not an actual merge |
 
-Evidence:
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35782176376
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35782176433
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35803572343
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/35803572300
 
-The 453 root tests are the pinned main's 48 tests plus 405 lifecycle tests. They exclude the unmerged MAC-01 and Windows M2 branches. A subsequent documentation-only head receives separately reported checks.
+The root total is main's 48 tests plus 472 lifecycle tests. MAC-01 and Windows M2 are still separate/unmerged and not included. A later documentation-only head receives separate CI evidence.
 
-The filesystem tests operate on real temporary files, including file/rename/directory-sync fault injection, replacement, concurrency and store reloads. Most use a synthetic ACL callback. The two native integration cases compile the existing fd3 helper into an isolated temporary fixture, perform actual file sync/recovery with it, and verify that an actual macOS allow-write ACL rejects reading/replacing a record without changing its bytes.
+New native telemetry cases compile the existing descriptor ACL helper into temporary fixtures, persist/reload safe records, and refuse an actual allow-write ACL without changing the log bytes. This proves component interoperability, not independent helper provenance or fixed `/Library` deployment. Most filesystem fault tests use controlled ACL ports; all operate only on temporary test paths.
 
-That native helper build proves component interoperability, not independently authenticated production provenance. The tests do not install launchd jobs, create `gram-agent`, kill/restart the deployed supervisor, reboot the host, connect a real tunnel or access Keychain/store credentials. They do not claim machine-power-loss recovery.
+## 9. RED/GREEN and review ledger
 
-## 8. RED/GREEN and corrective record
-
-| Increment | Observed evidence |
+| Checkpoint | Actual result |
 |---|---|
-| Circuit RED `1fc85b6` | Run `35780128847`, native job `106923222790`: 42 failed / 313 passed against explicit nonimplementing scaffold |
-| Circuit implementation `c8cf6aa` | Focused `35780412140` and root `35780412133` successful; native step results read |
-| Store RED `bfc069a` | Run `35780568037`, native job `106924734471`: 22 failed / 355 passed |
-| Store implementation `5b69e22` | Native run `35781082797`, job `106926433559`: 377 behavioral tests passed, then two new-test lint errors; not full success |
-| File adapter RED `7f38e44` | Run `35781345170`, Ubuntu job `106927307242`: 24 failed / 365 passed / 12 Apple-only skipped |
-| File implementation `206798f` | Focused `35781742012`, native job `106928653818`: 401 package / 449 root passed; lint/types/build/native plist checks successful |
-| Additional coverage `3ea9b29` | Two native ACL cases plus partial-write/foreign-lock cases; final 405/453 results above, no product-code change |
+| Telemetry/output RED `44b4182` | Native run35801911666/job106993942281: 38 failed/405 prior passed |
+| Telemetry/output implementation `185c711` | Focused35802133573/root35802133572 successful |
+| Store/planner RED `4e4e61e` | Native run35802333849/job106995265076: 13 failed/443 passed |
+| Store/planner `fc038a1` | 455 passed/one full-size test timed out; not full success |
+| Test comparison correction `7c0aa94` | Full-byte Buffer.equals replaced per-byte object traversal; same 15s limit, focused35802796876/root35802796813 successful |
+| File integration RED `432f325` | Native run35802971879/job106997290303: 13 failed/456 passed |
+| File integration `c346274` | Focused35803172647/root35803172741 successful; prior circuit tests unchanged |
+| Same-tick regression `e3b3f2e` | Native run35803388715/job106998614195: one STATE_CONFLICT failure/471 passed; two new native cases passed |
+| Corrective implementation `b608def` | Final472/520 and full verification above |
 
-The two lint findings were an unused test assignment and a non-null assertion. They were corrected without weakening lint rules or assertions. The four final cases are added coverage, not a claimed newly reproduced/fixed production defect. Earlier implementation evidence is preserved at:
-https://github.com/jskjw157/gram-coding-agent/blob/0e32fd4bccf1fff684b38b11752e4cbcdf8347c7/docs/operations/macos-service-lifecycle.md
+Author self-review covered fixed filenames, whole-group CAS, retained bounds, corrupt/unknown I/O, listener cleanup, timestamp equality and unresolved trust. **Independent review NOT_PERFORMED.** The same-tick finding was reproduced before correction; other added native cases are coverage, not a claimed security fix. No test/lint rule, assertion, size bound or timeout was disabled.
 
-## 9. Review, isolation and continuation
+## 10. Isolation and exact continuation
 
-Author self-review checked generation/reset boundaries, stale snapshots, unknown commit outcomes, directory/file identity, fixed role names, exclusive-writer cleanup and missing trust. **Independent review: NOT_PERFORMED.** No security certification or reviewer approval is claimed.
+Only the MAC-02 feature branch is modified. Main `fdf5dda`, Windows M2 `c5225dd8`, MAC-01 `a98c8ff`, and docs `31e66aa` were the separate starting refs. Refresh all heads before further writes; do not overwrite concurrent work.
 
-Local authoring has Node22/global TypeScript, no pnpm and unavailable direct GitHub/npm DNS; git access was attempted. No complete local checkout/worktree or local Node24 repository run is claimed. Actual tests use the existing read-only GitHub Actions exact-head detached worktrees. No paid AI API, write-enabled CI, new dependency or alternate tunnel is introduced.
+Local authoring has Node22/global TypeScript, no pnpm and unavailable direct GitHub/npm DNS. No complete local checkout/worktree or local Node24 repository run is claimed. Actual verification uses the existing read-only GitHub Actions exact-head detached worktrees. The unchanged empty-importer normalization remains a packaging gate; do not call the generated lockfile pristine.
 
-The existing empty-workspace-importer normalization remains unchanged: resolve it through a reviewed generated lockfile update before sealed packaging. Do not disguise temporary normalization as a pristine frozen install.
+**Next safe implementation:** Task 4 owned-connection/authenticated health tests, beginning with an unknown/foreign peer receiving zero credential bytes. Reuse these status/event/output modules; do not implement them again. Maintain Task 2 independent helper provenance/fixed-root acceptance, Task 5 live-generation/5-second observation/process integration, Task 6 authorized stopped recovery and abandoned-lock handling, and Task 7 packaging as explicit gates. No security-sensitive shortcut is authorized by green component tests.
 
-At the latest pre-documentation ref inspection, main was `fdf5dda`, Windows M2 `c5225dd8`, MAC-01 `a98c8ff`, docs `31e66aa`. Only MAC-02 advanced. No merge, rebase, force push, branch deletion, Windows issue closure, account provisioning or system-security change was performed.
-
-**Next safe code work:** finish Task 3 closed status/event schemas, status persistence, safe bounded log rotation and raw-child-output draining against the written plan; reuse circuit/store/file modules. Define owned stopped recovery for abandoned writer locks before claiming automatic lifecycle recovery. Independently complete Task 2 helper trust and fixed-root acceptance; retain Task 4 live peer and Task 6 local-admin authorization gates. Do not mark either Task 2 or Task 3 complete from this checkpoint.
-
-**NOT_RUN:** user's account provisioning; trusted-helper fixed-root positive preview; production state-directory binding; real launchd start/stop/reboot; live peer ownership; Keychain/TCC; real tunnel; browser and HAAR operations. Actual admin writes, real credentials, deployment and merging retain their separate gates. Generated plists still reference the absent `supervisor-cli.js` and remain **NOT DEPLOYABLE**.
+**NOT_RUN:** user's account provisioning, independently trusted helper/fixed-root preview, production run/log binding, installed launchd start/stop/reboot, established-peer proof, live tunnel, Keychain/TCC, browser or HAAR operations. No account, secret, permission or live store was changed; no merge, force push, rebase, branch deletion or Windows issue closure. Generated service files remain **NOT DEPLOYABLE**.
