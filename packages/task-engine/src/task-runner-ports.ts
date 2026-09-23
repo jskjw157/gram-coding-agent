@@ -11,6 +11,7 @@ export interface ResolvedTask {
   readonly repoId: number;
   readonly branch: string;
   readonly remote: string;
+  readonly localBasePath: string;
 }
 
 export interface TaskWorkspace {
@@ -58,7 +59,7 @@ export interface RepoResolvePort {
 }
 
 export interface RepoFetchPort {
-  fetch(input: { readonly remote: string; readonly branch: string }): Promise<void>;
+  fetch(task: ResolvedTask): Promise<void>;
 }
 
 export interface WorkspaceCreatePort {

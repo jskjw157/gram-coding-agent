@@ -108,6 +108,7 @@ interface RunDeps {
 const REPO_ID = 84722133;
 const BRANCH = "fix/task-0201-excel-download-url";
 const REMOTE = "origin";
+const LOCAL_BASE_PATH = "/base/mamf-web";
 const SHA = "a91c34f0a91c34f0a91c34f0a91c34f0a91c34f0";
 const LINUX_PATH = "/home/agent/.gram-agent/worktrees/84722133/task-uuid";
 
@@ -124,7 +125,7 @@ function createRunDeps(
       resolve: async (id: TaskId) => {
         calls.resolve += 1;
         events.push("repo.resolve");
-        return { taskId: id, repoId: REPO_ID, branch: BRANCH, remote: REMOTE };
+        return { taskId: id, repoId: REPO_ID, branch: BRANCH, remote: REMOTE, localBasePath: LOCAL_BASE_PATH };
       },
     },
     locks: {

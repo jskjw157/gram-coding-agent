@@ -252,19 +252,15 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
     return { stored, profile };
   };
 
-  // RepoFetchPort carries no task id, but run() always resolves before
-  // fetching, so the fetch adapter uses the most recently resolved checkout.
-  let resolvedBasePath: string | undefined;
-
   const repoResolve: RepoResolvePort = {
     resolve: async (taskId) => {
       const { stored, profile } = await resolveProfile(taskId, 'RepoResolve');
-      resolvedBasePath = profile.localBasePath;
       return {
         taskId,
         repoId: profile.githubRepositoryId,
         branch: taskBranchFor(stored),
         remote: ORIGIN_REMOTE,
+        localBasePath: profile.localBasePath,
       };
     },
   };
@@ -282,20 +278,20 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
   };
 
   const repoFetch: RepoFetchPort = {
-    fetch: async () => {
-      if (resolvedBasePath === undefined) {
-        throw new TaskRunnerConfigurationError(
-          'RepoFetch',
-          'no repository has been resolved yet in this run',
-        );
-      }
+    fetch: async (task) => {
       if (options.git === undefined) {
         throw new TaskRunnerConfigurationError(
           'RepoFetch',
           'git fetch (GitService) is not wired in the agent composition root',
         );
       }
-      await options.git.fetch(resolvedBasePath);
+      if (typeof task.localBasePath !== 'string' || task.localBasePath.trim().length === 0) {
+        throw new TaskRunnerConfigurationError(
+          'RepoFetch',
+          `resolved task ${task.taskId} has no local base path`,
+        );
+      }
+      await options.git.fetch(task.localBasePath);
     },
   };
 

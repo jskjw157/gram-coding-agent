@@ -138,7 +138,7 @@ export class TaskRunner {
 
     const resolved = await repoResolve.resolve(taskId);
     const lease = await this.options.locks.acquire(resolved.repoId, taskId);
-    await repoFetch.fetch({ remote: resolved.remote, branch: resolved.branch });
+    await repoFetch.fetch(resolved);
     const workspace = await workspaceCreate.create(taskId);
     const instructions = await instructionsPort.load(workspace);
     const analysis = await analyzePort.analyze({

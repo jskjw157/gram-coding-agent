@@ -426,6 +426,170 @@ describe('task-runner composition', () => {
     expect(auditEvents).toContain('REPAIR_CYCLE_COMPLETED');
   });
 
+  it('isolates concurrent repository fetches per task with no shared resolution state', async () => {
+    const TASK_A = 'task-aaaaaaaa-0b1a-4d2e-8f3a-9c4d5e6f7a8b' as TaskId;
+    const TASK_B = 'task-bbbbbbbb-0b1a-4d2e-8f3a-9c4d5e6f7a8b' as TaskId;
+    const REPO_A = 11111111;
+    const REPO_B = 22222222;
+    const PATH_A = '/base/repo-a';
+    const PATH_B = '/base/repo-b';
+
+    function deferred() {
+      let resolve!: () => void;
+      const promise = new Promise<void>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+    const aResolveDone = deferred();
+    const bResolveDone = deferred();
+
+    const statuses = new Map<TaskId, TaskStatus>([
+      [TASK_A, 'QUEUED'],
+      [TASK_B, 'QUEUED'],
+    ]);
+    const records = new Map<TaskId, { seq: number; goal: string; repoSelector: string }>([
+      [TASK_A, { seq: 301, goal: 'Task A goal', repoSelector: 'repo-a' }],
+      [TASK_B, { seq: 302, goal: 'Task B goal', repoSelector: 'repo-b' }],
+    ]);
+    const tasksStore = {
+      get: (id: TaskId) => {
+        const rec = records.get(id);
+        const status = statuses.get(id);
+        if (rec === undefined || status === undefined) return null;
+        return { id, seq: rec.seq, goal: rec.goal, repoSelector: rec.repoSelector, status, taskType: 'CODING' };
+      },
+      transition: (id: TaskId, from: TaskStatus, to: TaskStatus) => {
+        const current = statuses.get(id);
+        if (current !== from) throw new Error(`unexpected transition ${current} -> ${to} for ${id}`);
+        statuses.set(id, to);
+      },
+    };
+    const auditStub = { append: () => undefined };
+
+    const reposAB = {
+      resolve: async (selector: string) => {
+        if (selector === 'repo-a') {
+          const profile = {
+            githubRepositoryId: REPO_A,
+            owner: 'acme',
+            name: 'repo-a',
+            defaultBranch: 'main',
+            localBasePath: PATH_A,
+          };
+          aResolveDone.resolve();
+          return profile;
+        }
+        // Force deterministic A resolve -> B resolve ordering.
+        await aResolveDone.promise;
+        const profile = {
+          githubRepositoryId: REPO_B,
+          owner: 'acme',
+          name: 'repo-b',
+          defaultBranch: 'main',
+          localBasePath: PATH_B,
+        };
+        bResolveDone.resolve();
+        return profile;
+      },
+    };
+
+    const locksAB = {
+      acquire: async (repoId: number, taskId: TaskId) => {
+        if (taskId === TASK_A) {
+          // Pause A past B's resolve so both fetches happen after both resolves.
+          await bResolveDone.promise;
+        }
+        return { release: async () => undefined };
+      },
+    };
+
+    const fetchedPaths: string[] = [];
+    const gitAB = {
+      fetch: async (repoPath: string) => {
+        fetchedPaths.push(repoPath);
+      },
+      status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+    };
+
+    const worktreesAB = {
+      create: async (input: { taskId: TaskId; branch: string }) => ({
+        linuxPath: `/wt/${input.taskId}`,
+        branch: input.branch,
+      }),
+    };
+
+    const verificationAB = { requiredChecksPassed: () => true };
+    const publishingAB = {
+      publish: async (context: { taskId: TaskId; branch: string; remote: string; lock: { release(): Promise<void> } }) => {
+        await context.lock.release();
+        return { sha: SHA, branch: context.branch, remote: context.remote };
+      },
+    };
+    const pullRequestsAB = {
+      ensureForTask: async () => ({ number: 7, url: 'https://example.com/pr/7' }),
+    };
+    const checksAB = {
+      client: { listRequiredChecks: async () => successSnapshots() },
+      persistence: { upsertCheck: () => undefined },
+      delay: { wait: async () => undefined },
+    };
+    const ciContextAB = {
+      resolve: async (taskId: TaskId) => ({
+        taskId,
+        pullRequestId: 1,
+        owner: 'acme',
+        name: 'repo',
+        number: 7,
+        headSha: SHA,
+        baseBranch: 'main',
+      }),
+    };
+    const capabilitiesAB: Record<string, unknown> = {
+      instructions: { load: async () => ({ content: '# instructions', source: 'AGENTS.md' }) },
+      analyze: { analyze: async () => ({ summary: 's', files: ['src/app.ts'] }) },
+      modify: { modify: async () => ({ sha: SHA }) },
+      repairMutations: { repair: async () => undefined },
+    };
+    const workspacesAB = {
+      getByTaskId: (taskId: TaskId) => ({ linuxPath: `/wt/${taskId}`, branch: 'b' }),
+    };
+    const remoteAB = { push: async () => SHA, confirmRemoteSha: async () => true };
+    const completeAB = {
+      complete: async (taskId: TaskId) => {
+        const current = tasksStore.get(taskId);
+        if (current === null) throw new Error(`unknown task: ${taskId}`);
+        if (current.status === 'COMPLETED') return;
+        tasksStore.transition(taskId, current.status, 'COMPLETED');
+      },
+    };
+
+    const runnerAB = createTaskRunner({
+      audit: auditStub,
+      tasks: tasksStore,
+      repos: reposAB,
+      locks: locksAB,
+      git: gitAB,
+      worktrees: worktreesAB,
+      verification: verificationAB,
+      publishing: publishingAB,
+      pullRequests: pullRequestsAB,
+      checks: checksAB,
+      ciContext: ciContextAB,
+      capabilities: capabilitiesAB,
+      workspaces: workspacesAB,
+      remote: remoteAB,
+      complete: completeAB,
+    } as never);
+
+    await Promise.all([runnerAB.run(TASK_A), runnerAB.run(TASK_B)]);
+
+    // Each fetch must receive its own task identity: one fetch per localBasePath.
+    expect(fetchedPaths).toHaveLength(2);
+    expect(fetchedPaths.filter((p) => p === PATH_A)).toHaveLength(1);
+    expect(fetchedPaths.filter((p) => p === PATH_B)).toHaveLength(1);
+  });
+
   it('fails closed with a typed configuration error when repo resolution is unwired', async () => {
     const { tasks } = createHarness();
     const audit = { append: () => undefined };
