@@ -1,10 +1,12 @@
-import type { PolicyDecisionKind } from '@gram/domain';
+import type { PolicyDecisionKind, PublishMode } from '@gram/domain';
 import type { NormalizedOperation } from './command-parser.js';
 
 export interface PolicyContext {
   taskId: string;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
+  targetBranch?: string;
+  publishMode?: PublishMode;
 }
 
 export interface ClassifiedRisk {
@@ -117,7 +119,7 @@ function classifyGit(args: readonly string[], context: PolicyContext): Classifie
     return allow('POL-GIT-PUSH', 'normal explicit non-protected branch publishing is allowed');
   }
 
-  if (['status', 'diff', 'log', 'blame', 'fetch', 'pull', 'branch', 'show', 'rev-parse'].includes(subcommand)) {
+  if (['status', 'diff', 'log', 'blame', 'fetch', 'pull', 'branch', 'show', 'rev-parse', 'ls-remote'].includes(subcommand)) {
     return allow('POL-GIT-READ-NORMAL', 'normal Git inspection and synchronization is allowed');
   }
   if (['add', 'commit', 'checkout', 'switch'].includes(subcommand)) {

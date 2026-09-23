@@ -202,3 +202,33 @@ export function normalizeShellCommand(command: string, cwd: string): NormalizedO
     }];
   });
 }
+
+
+export function normalizeExecutableCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): NormalizedOperation {
+  if (executable.trim().length === 0) {
+    throw new Error('Executable must not be empty');
+  }
+
+  const normalizedCwd = resolve(cwd);
+  const requestedTargets = requestedPathTargets(executable, args);
+  const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(
+    requestedTargets,
+    normalizedCwd,
+  );
+
+  return {
+    type: 'SHELL_COMMAND',
+    raw: [executable, ...args].join(' '),
+    executable,
+    args: [...args],
+    cwd: normalizedCwd,
+    precededBy: null,
+    requestedTargets,
+    canonicalTargets,
+    pathResolutionFailed,
+  };
+}

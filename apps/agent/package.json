@@ -11,11 +11,19 @@
   },
   "dependencies": {
     "@gram/domain": "workspace:*",
+    "@gram/git": "workspace:*",
+    "@gram/github": "workspace:*",
     "@gram/mcp": "workspace:*",
     "@gram/observability": "workspace:*",
     "@gram/persistence": "workspace:*",
     "@gram/policy": "workspace:*",
-    "@gram/secrets": "workspace:*"
+    "@gram/publishing": "workspace:*",
+    "@gram/repo-lock": "workspace:*",
+    "@gram/repo-registry": "workspace:*",
+    "@gram/secrets": "workspace:*",
+    "@gram/task-engine": "workspace:*",
+    "@gram/verification": "workspace:*",
+    "@gram/workspace": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.0",

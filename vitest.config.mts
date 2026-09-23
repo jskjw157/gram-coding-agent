@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     passWithNoTests: true,
     projects: ['packages/*/vitest.config.ts'],
+    exclude: ['**/node_modules/**', '**/dist/**'],
   },
 });

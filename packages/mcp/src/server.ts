@@ -7,12 +7,21 @@ import {
 } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
+import { registerCodeTools, type CodeToolsPort } from './tools/code-tools.js';
+import {
+  registerGitHubPullRequestTools,
+  type GitHubPullRequestToolsPort,
+} from './tools/github-tools.js';
+import { registerTaskTools, type TaskCreatePort } from './tools/task-tools.js';
 
 export interface CreateMcpHttpServerOptions {
   host: string;
   port: number;
   internalSecret: string;
   health?: () => unknown | Promise<unknown>;
+  taskCreate?: TaskCreatePort;
+  codeTools?: CodeToolsPort;
+  githubPullRequests?: GitHubPullRequestToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -55,6 +64,11 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
         return { content: [{ type: 'text' as const, text: JSON.stringify(health) }] };
       },
     );
+    if (options.taskCreate !== undefined) registerTaskTools(server, options.taskCreate);
+    if (options.codeTools !== undefined) registerCodeTools(server, options.codeTools);
+    if (options.githubPullRequests !== undefined) {
+      registerGitHubPullRequestTools(server, options.githubPullRequests);
+    }
     return server;
   });
   const nodeHandler = toNodeHandler(mcpHandler);

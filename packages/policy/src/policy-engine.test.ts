@@ -28,6 +28,7 @@ afterEach(() => {
 describe('Policy Engine v1 rule matrix', () => {
   it.each([
     ['git status', 'ALLOW'],
+    ['git ls-remote origin refs/heads/feature', 'ALLOW'],
     ['pnpm test', 'ALLOW'],
     ['sudo apt install jq', 'ALLOW'],
     ['powershell.exe -Command Get-ChildItem', 'NEEDS_APPROVAL'],
@@ -59,11 +60,27 @@ describe('Policy Engine v1 rule matrix', () => {
   it('requires the direct-main grant for protected destinations expressed as refspecs', () => {
     expect(decide('git push origin HEAD:main').kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:refs/heads/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin HEAD:refs/heads/main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: false,
+      targetBranch: 'main',
+      publishMode: 'PULL_REQUEST',
+    }).kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:main', {
       taskId: 'task-1',
       protectedBranches: ['main'],
       directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
     }).kind).toBe('ALLOW');
+    expect(decide('git push --force-with-lease origin HEAD:main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
+    }).kind).toBe('DENY');
   });
 
   it('uses the highest risk decision across composed commands', () => {
