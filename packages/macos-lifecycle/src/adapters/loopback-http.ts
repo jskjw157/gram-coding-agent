@@ -98,19 +98,25 @@ export async function bindOwnedConnection(socket: Socket, child: OwnedChild, ver
   if (!(socket instanceof Socket)) return null;
   const guard = () => undefined; socket.on('error', guard); socket.once('close', () => socket.off('error', guard));
   let owned: OwnedChild;
+  const bindingDeadline = new AbortController();
+  const bindingTimer = setTimeout(() => bindingDeadline.abort(), 2000);
+  const bindingSignal = AbortSignal.any([signal, bindingDeadline.signal]);
   try {
     owned = copyCoreChild(child);
-    if (!verifier || signal.aborted || !connected(socket)
-      || !await abortable(verifier.current(owned), signal)
-      || await abortable(verifier.verify(socket, owned, signal), signal) !== 'OWNED'
-      || signal.aborted || !connected(socket)) { socket.destroy(); return null; }
+    if (!verifier || bindingSignal.aborted || !connected(socket)
+      || !await abortable(verifier.current(owned), bindingSignal)
+      || await abortable(verifier.verify(socket, owned, bindingSignal), bindingSignal) !== 'OWNED'
+      || !await abortable(verifier.current(owned), bindingSignal)
+      || bindingSignal.aborted || !connected(socket)) { socket.destroy(); return null; }
   } catch { socket.destroy(); return null; }
+  finally { clearTimeout(bindingTimer); }
   const proof = verifier; let used = false; let closed = false;
   const close = () => { closed = true; socket.destroy(); };
   const assertOwned = async (abort: AbortSignal) => {
     if (closed || abort.aborted || !connected(socket) || socket.readableLength !== 0) fail();
     if (!await abortable(proof.current(owned), abort)
-      || await abortable(proof.verify(socket, owned, abort), abort) !== 'OWNED') fail();
+      || await abortable(proof.verify(socket, owned, abort), abort) !== 'OWNED'
+      || !await abortable(proof.current(owned), abort)) fail();
     if (closed || abort.aborted || !connected(socket) || socket.readableLength !== 0) fail();
   };
   return Object.freeze({
@@ -149,7 +155,7 @@ export function createLoopbackConnections(verifier?: ConnectedPeerVerifier): Cor
       await abortable(new Promise<void>((resolve, reject) => {
         active.once('error', reject); active.once('connect', () => { active.removeListener('error', reject); active.pause(); resolve(); });
       }), signal);
-      return await bindOwnedConnection(active, owned, verifier, parent);
+      return await bindOwnedConnection(active, owned, verifier, signal);
     } catch { socket?.destroy(); return null; }
     finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
   } });
