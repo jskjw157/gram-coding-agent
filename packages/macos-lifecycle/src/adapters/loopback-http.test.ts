@@ -65,6 +65,8 @@ describe('same-socket credential boundary (synthetic verifier, not native owners
   it('does not reconnect when the checked socket dies during credential acquisition', async () => {
     const f = await fixture(); const socket = await connected(f.port);
     const c = await bindOwnedConnection(socket, child(), verifier(), signal()); if (!c) throw new Error('binding');
+    await new Promise(resolve => setImmediate(resolve));
+    expect(f.accepted()).toBe(1);
     const cdt: CoreCredentials = { async withValue(use) { socket.destroy(); return use(secret); } };
     await expect(c.request('initialize', cdt, undefined, signal())).rejects.toThrow(/^HEALTH_UNKNOWN$/);
     expect(f.accepted()).toBe(1); expect(f.bytes()).toBe(0);
