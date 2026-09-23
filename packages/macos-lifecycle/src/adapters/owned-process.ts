@@ -122,7 +122,7 @@ function verdict(value: string | null): PeerVerdict {
  * Its output is a closed token; paths, credentials, protocol bodies and native
  * error text are never returned through this port. */
 export function createNativePeerProof(helper: string): NativePeerProofPort {
-  return Object.freeze({
+  const port: NativePeerProofPort = {
     async capture(request, signal) {
       const args = baseArgs(request); if (args === null) return null;
       const output = await runHelper(helper, args, signal);
@@ -139,7 +139,8 @@ export function createNativePeerProof(helper: string): NativePeerProofPort {
         || !Number.isSafeInteger(request.clientPort) || request.clientPort < 1 || request.clientPort > 65535) return 'UNKNOWN';
       return verdict(await runHelper(helper, [...args, String(request.serverPort), String(request.clientPort)], signal));
     },
-  });
+  };
+  return Object.freeze(port);
 }
 
 export async function sealMacOwnedChild(handle: LiveProcessHandle, input: SealInput, proof: NativePeerProofPort,
