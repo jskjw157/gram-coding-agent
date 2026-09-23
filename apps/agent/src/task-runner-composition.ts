@@ -88,10 +88,11 @@ export interface CompositionLocks {
   acquire(repoId: number, taskId: TaskId): Promise<{ release(): Promise<void> }>;
 }
 
-/** Structural subset of GitService (fetch + status). */
+/** Structural subset of GitService (fetch + status + HEAD resolution). */
 export interface CompositionGit {
   fetch(repoPath: string): Promise<void>;
   status(worktree: string): Promise<{ entries: readonly { path: string }[] }>;
+  headSha?(worktree: string): Promise<string>;
 }
 
 /** Structural subset of WorktreeService.create. */
@@ -104,9 +105,9 @@ export interface CompositionWorktrees {
   }): Promise<{ linuxPath: string; branch: string }>;
 }
 
-/** Structural subset of CompletionEvaluator. */
+/** Structural subset of CompletionEvaluator bound to a worktree HEAD. */
 export interface CompositionVerification {
-  requiredChecksPassed(taskId: TaskId): boolean | Promise<boolean>;
+  requiredChecksPassed(taskId: TaskId, headSha?: string): boolean | Promise<boolean>;
 }
 
 /** Structural subset of PublishingService.publish. */
@@ -218,6 +219,41 @@ function taskBranchFor(task: { seq: number; goal: string; taskType: string }): s
 export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRunner {
   const { audit, tasks } = options;
   const profileCache = new Map<TaskId, CompositionRepoProfile>();
+  const FULL_SHA_RE = /[0-9a-f]{40}/;
+
+  const isFullSha = (value: string): boolean => {
+    return value.length === 40 && FULL_SHA_RE.test(value);
+  };
+
+  const resolveHeadSha = async (worktree: string, adapter: string): Promise<string> => {
+    const gitPort = options.git;
+    const headFn = gitPort === undefined ? undefined : gitPort.headSha;
+    if (headFn === undefined) {
+      throw new TaskRunnerConfigurationError(
+        adapter,
+        'git HEAD resolution (GitService rev-parse) is not wired in the agent composition root',
+      );
+    }
+    const sha = await headFn.call(gitPort, worktree);
+    if (isFullSha(sha) === false) {
+      throw new Error(adapter + ' resolved an invalid HEAD SHA for ' + worktree + ': ' + sha);
+    }
+    return sha;
+  };
+
+  const resolveWorkspacePath = async (taskId: TaskId, adapter: string): Promise<string> => {
+    if (options.workspaces === undefined) {
+      throw new TaskRunnerConfigurationError(
+        adapter,
+        'workspace lookup (WorkspaceRepository) is not wired in the agent composition root',
+      );
+    }
+    const stored = await options.workspaces.getByTaskId(taskId);
+    if (stored === undefined) {
+      throw new TaskRunnerConfigurationError(adapter, 'no workspace recorded for task ' + taskId);
+    }
+    return stored.linuxPath;
+  };
 
   const requireTask = (taskId: TaskId, adapter: string): CompositionTaskRecord => {
     const stored = tasks.get(taskId);
@@ -356,22 +392,42 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
           'verification (CompletionEvaluator/VerificationRunner) is not wired in the agent composition root',
         );
       }
-      const passed = await options.verification.requiredChecksPassed(taskId);
+      // Bind verification evidence to the exact HEAD under test: resolve the
+      // current worktree HEAD, then plan/execute verification for that SHA and
+      // collect evidence for it. The returned headSha lets publish require
+      // equality immediately before any side effect.
+      const worktreePath = await resolveWorkspacePath(taskId, 'Verify');
+      const headSha = await resolveHeadSha(worktreePath, 'Verify');
+      const passed = await options.verification.requiredChecksPassed(taskId, headSha);
       return {
         passed,
         output: passed
-          ? `required verification checks passed for task ${taskId}`
-          : `required verification checks did not pass for task ${taskId}`,
+          ? `required verification checks passed for task ${taskId} at ${headSha}`
+          : `required verification checks did not pass for task ${taskId} at ${headSha}`,
+        headSha,
+        approvedPaths: [],
       };
     },
   };
 
   const publish: PublishPort = {
     publish: async (task, workspace, verification, lease) => {
-      // The verification result is informational here: PublishingService
-      // re-asserts verification through its own completion port before
-      // committing, so a stale pass can never publish.
-      void verification;
+      // Bind verification evidence and publish to the same HEAD: verification
+      // must have passed with evidence bound to verification.headSha, and the
+      // worktree HEAD must still equal that SHA immediately before any publish
+      // side effect. A stale pass from another HEAD can never publish.
+      if (verification.passed !== true) {
+        throw new Error('verification has not passed for task ' + task.taskId);
+      }
+      if (typeof verification.headSha !== 'string' || isFullSha(verification.headSha) === false) {
+        throw new Error('verification has no bound HEAD for task ' + task.taskId);
+      }
+      const currentHeadSha = await resolveHeadSha(workspace.linuxPath, 'Publish');
+      if ((currentHeadSha === verification.headSha) === false) {
+        throw new Error(
+          'verification HEAD ' + verification.headSha + ' does not match current HEAD ' + currentHeadSha + ' for task ' + task.taskId,
+        );
+      }
       if (options.publishing === undefined) {
         throw new TaskRunnerConfigurationError(
           'Publish',

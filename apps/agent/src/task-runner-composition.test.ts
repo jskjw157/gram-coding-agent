@@ -52,6 +52,9 @@ interface Controls {
   ciOutcome?: 'SUCCESS' | 'FAILURE' | 'PENDING';
   omitInstructions?: boolean;
   useDefaultComplete?: boolean;
+  currentHeadSha?: string;
+  planHeadSha?: string | null;
+  headShaSequence?: string[];
 }
 
 function successSnapshots() {
@@ -157,11 +160,29 @@ function createHarness(controls: Controls = {}) {
     },
   };
 
+  const headShaCalls: string[] = [];
+  let headShaIndex = 0;
+  const publishCalls: string[] = [];
   const git = {
     fetch: async () => {
       events.push('repo.fetch');
     },
     status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+    headSha: async (worktree: string) => {
+      expect(worktree).toBe('/wt/mamf-web');
+      if (controls.headShaSequence !== undefined && controls.headShaSequence.length > 0) {
+        const sha =
+          controls.headShaSequence[
+            Math.min(headShaIndex, controls.headShaSequence.length - 1)
+          ] ?? SHA;
+        headShaIndex += 1;
+        headShaCalls.push(sha);
+        return sha;
+      }
+      const sha = controls.currentHeadSha ?? SHA;
+      headShaCalls.push(sha);
+      return sha;
+    },
   };
 
   const worktrees = {
@@ -199,9 +220,20 @@ function createHarness(controls: Controls = {}) {
   }
 
   const verification = {
-    requiredChecksPassed: () => {
+    requiredChecksPassed: (taskId: TaskId, headSha?: string) => {
+      expect(taskId).toBe(TASK_ID);
       events.push('verify');
       if (controls.verifyError !== undefined) throw controls.verifyError;
+      // F2C HEAD binding: stale unbound reads pass (pre-fix behavior), but
+      // bound reads only pass when a plan exists for that exact HEAD.
+      if (controls.planHeadSha !== undefined) {
+        if (controls.planHeadSha === null) {
+          if (headSha === undefined) return true;
+          return false;
+        }
+        if (headSha === undefined) return true;
+        return headSha === controls.planHeadSha;
+      }
       return true;
     },
   };
@@ -213,6 +245,7 @@ function createHarness(controls: Controls = {}) {
       remote: string;
       lock: { release(): Promise<void> };
     }) => {
+      publishCalls.push(context.taskId);
       events.push('commit');
       if (controls.publishError !== undefined) throw controls.publishError;
       events.push('push');
@@ -304,7 +337,7 @@ function createHarness(controls: Controls = {}) {
   }
 
   const runner = createTaskRunner(options as never);
-  return { runner, events, repairEvents, transitions, auditEvents, tasks, seen };
+  return { runner, events, repairEvents, transitions, auditEvents, tasks, seen, publishCalls, headShaCalls };
 }
 
 describe('task-runner composition', () => {
@@ -510,6 +543,7 @@ describe('task-runner composition', () => {
         fetchedPaths.push(repoPath);
       },
       status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+      headSha: async () => SHA,
     };
 
     const worktreesAB = {
@@ -607,5 +641,32 @@ describe('task-runner composition', () => {
     expect(error).toBeInstanceOf(TaskRunnerConfigurationError);
     expect((error as Error).message).toMatch(/Instructions/);
     expect((error as TaskRunnerConfigurationError).adapter).toBe('Instructions');
+  });
+
+  it('blocks publish when no verification plan exists for the current HEAD', async () => {
+    const OTHER_SHA = 'b2c34f0ab2c34f0ab2c34f0ab2c34f0ab2c34f0a';
+    const { runner, events, publishCalls } = createHarness({
+      currentHeadSha: OTHER_SHA,
+      planHeadSha: null,
+    });
+
+    await expect(runner.run(TASK_ID)).rejects.toThrow();
+    expect(publishCalls).toHaveLength(0);
+    expect(events).not.toContain('commit');
+    expect(events).not.toContain('push');
+    expect(events).not.toContain('pr.ensure');
+    expect(events).not.toContain('complete');
+  });
+
+  it('blocks publish when verification HEAD differs from current HEAD', async () => {
+    const OTHER_SHA = 'c3d45f1bc3d45f1bc3d45f1bc3d45f1bc3d45f1b';
+    const { runner, events, publishCalls } = createHarness({
+      headShaSequence: [SHA, OTHER_SHA],
+    });
+
+    await expect(runner.run(TASK_ID)).rejects.toThrow(/HEAD|verification|stale/i);
+    expect(publishCalls).toHaveLength(0);
+    expect(events).not.toContain('pr.ensure');
+    expect(events).not.toContain('complete');
   });
 });

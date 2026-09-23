@@ -36,6 +36,8 @@ export interface ModificationResult {
 export interface VerificationResult {
   readonly passed: boolean;
   readonly output: string;
+  readonly headSha?: string;
+  readonly approvedPaths?: readonly string[];
 }
 
 export interface PublishedTask {
