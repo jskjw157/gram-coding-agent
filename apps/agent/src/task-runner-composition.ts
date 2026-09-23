@@ -220,7 +220,6 @@ function taskBranchFor(task: { seq: number; goal: string; taskType: string }): s
  */
 export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRunner {
   const { audit, tasks } = options;
-  const profileCache = new Map<TaskId, CompositionRepoProfile>();
   const FULL_SHA_RE = /[0-9a-f]{40}/;
 
   const isFullSha = (value: string): boolean => {
@@ -265,13 +264,11 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
     return stored;
   };
 
+  // No shared mutable cache: every adapter step resolves fresh from the
+  // registry (one cheap read). This bans hidden closure state and any
+  // stale/leak vectors between steps outright.
   const resolveProfile = async (taskId: TaskId, adapter: string) => {
     const stored = requireTask(taskId, adapter);
-    const cached = profileCache.get(taskId);
-    // One underlying discovery per task: run() resolves once, and the
-    // workspace/PR adapters reuse the same profile so the exact
-    // TaskRunner event order is preserved.
-    if (cached !== undefined) return { stored, profile: cached };
     if (options.repos === undefined) {
       throw new TaskRunnerConfigurationError(
         adapter,
@@ -286,7 +283,6 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       );
     }
     const profile = await options.repos.resolve(selector);
-    profileCache.set(taskId, profile);
     return { stored, profile };
   };
 

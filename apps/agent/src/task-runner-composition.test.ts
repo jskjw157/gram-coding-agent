@@ -26,10 +26,13 @@ type RunEvent =
   | 'ci.observe'
   | 'complete';
 
+// No shared profile cache (FV2-1): every adapter step resolves fresh,
+// so repo.resolve recurs before workspace.create and before pr.ensure.
 const EXPECTED_HAPPY_ORDER: RunEvent[] = [
   'repo.resolve',
   'lock.acquire',
   'repo.fetch',
+  'repo.resolve',
   'workspace.create',
   'instructions.load',
   'analyze',
@@ -39,6 +42,7 @@ const EXPECTED_HAPPY_ORDER: RunEvent[] = [
   'push',
   'remote.confirm',
   'lock.release',
+  'repo.resolve',
   'pr.ensure',
   'ci.observe',
   'complete',
@@ -408,6 +412,7 @@ describe('task-runner composition', () => {
       'repo.resolve',
       'lock.acquire',
       'repo.fetch',
+      'repo.resolve',
       'workspace.create',
       'instructions.load',
       'analyze',
@@ -730,6 +735,18 @@ describe('task-runner composition', () => {
     expect(events).not.toContain('commit');
     expect(events).not.toContain('pr.ensure');
     expect(events).not.toContain('complete');
+  });
+
+  it('resolves the repository profile fresh on every adapter step with no shared cache', async () => {
+    const { runner, events } = createHarness({
+      approvedPaths: ['src/app.ts'],
+    });
+
+    await runner.run(TASK_ID);
+
+    // RepoResolve + WorkspaceCreate + PrEnsure each resolve fresh:
+    // the underlying registry read must run once per adapter step.
+    expect(events.filter((e) => e === 'repo.resolve')).toHaveLength(3);
   });
 
   it('passes deleted/renamed diff-review paths through verbatim without status reconstruction', async () => {
