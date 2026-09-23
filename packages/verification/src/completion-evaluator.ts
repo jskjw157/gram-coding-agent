@@ -19,9 +19,14 @@ export class CompletionEvaluator {
   constructor(private readonly checks: VerificationCheckReadPort) {}
 
   requiredChecksPassed(taskId: string): boolean {
-    return this.checks
-      .listForTask(taskId)
-      .filter((check) => check.required)
-      .every((check) => check.status === 'PASS' && check.hasEvidence);
+    const checks = this.checks.listForTask(taskId);
+    if (checks.length === 0) {
+      return false;
+    }
+    const required = checks.filter((check) => check.required);
+    if (required.length === 0) {
+      return false;
+    }
+    return required.every((check) => check.status === 'PASS' && check.hasEvidence);
   }
 }

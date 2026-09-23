@@ -12,6 +12,16 @@ function evaluator(checks: VerificationCheckSnapshot[]): CompletionEvaluator {
   });
 }
 
+const TASK_ID = '018f0000-0000-7000-8000-000000000001';
+
+function authorizesCompletion(passed: boolean): boolean {
+  return passed;
+}
+
+function authorizesPublication(passed: boolean): boolean {
+  return passed;
+}
+
 describe('CompletionEvaluator', () => {
   it('passes only when every required check has PASS evidence', () => {
     expect(
@@ -49,5 +59,22 @@ describe('CompletionEvaluator', () => {
         { required: false, status: 'NOT_REQUIRED', hasEvidence: false },
       ]).requiredChecksPassed('018f0000-0000-7000-8000-000000000001'),
     ).toBe(true);
+  });
+
+  it('rejects completion and publication when no verification plan exists', () => {
+    const passed = evaluator([]).requiredChecksPassed(TASK_ID);
+    expect(passed).toBe(false);
+    expect(authorizesCompletion(passed)).toBe(false);
+    expect(authorizesPublication(passed)).toBe(false);
+  });
+
+  it('rejects completion and publication when the plan has zero required checks', () => {
+    const passed = evaluator([
+      { required: false, status: 'NOT_REQUIRED', hasEvidence: false },
+      { required: false, status: 'SKIPPED', hasEvidence: false },
+    ]).requiredChecksPassed(TASK_ID);
+    expect(passed).toBe(false);
+    expect(authorizesCompletion(passed)).toBe(false);
+    expect(authorizesPublication(passed)).toBe(false);
   });
 });
