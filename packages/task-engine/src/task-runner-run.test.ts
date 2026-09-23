@@ -83,6 +83,7 @@ function createRunCalls(): RunCalls {
 
 interface RunControls {
   verifyError?: Error;
+  verifyPassed?: boolean;
   publishError?: Error;
   confirmResult?: boolean;
   prError?: Error;
@@ -179,7 +180,7 @@ function createRunDeps(
         calls.verify += 1;
         events.push("verify");
         if (controls.verifyError !== undefined) throw controls.verifyError;
-        return { passed: true, output: "ok" };
+        return { passed: controls.verifyPassed ?? true, output: "ok" };
       },
     },
     publish: {
@@ -306,6 +307,36 @@ describe("TaskRunner.run", () => {
     const runner: TaskRunner = createRunner(fixture.audit, deps);
 
     await expect(runner.run(fixture.taskId)).rejects.toThrow("verification failed");
+
+    expect(events).toEqual([
+      "repo.resolve",
+      "lock.acquire",
+      "repo.fetch",
+      "workspace.create",
+      "instructions.load",
+      "analyze",
+      "modify",
+      "verify",
+    ]);
+    expect(calls.commit).toBe(0);
+    expect(calls.push).toBe(0);
+    expect(calls.confirm).toBe(0);
+    expect(calls.release).toBe(0);
+    expect(calls.pr).toBe(0);
+    expect(calls.observe).toBe(0);
+    expect(calls.complete).toBe(0);
+  });
+
+  it("fails closed without publishing when verification reports passed:false", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {
+      verifyPassed: false,
+    });
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow(/verification failed/i);
 
     expect(events).toEqual([
       "repo.resolve",

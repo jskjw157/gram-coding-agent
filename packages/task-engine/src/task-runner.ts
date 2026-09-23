@@ -113,6 +113,13 @@ export class RemoteConfirmFailedError extends Error {
   }
 }
 
+export class VerificationFailedError extends Error {
+  constructor(taskId: TaskId, output: string) {
+    super(`Verification failed for task ${taskId}: ${output}`);
+    this.name = 'VerificationFailedError';
+  }
+}
+
 function requireRunPort<T>(value: T | undefined, name: string): T {
   if (value === undefined) {
     throw new Error(`TaskRunner.run missing port: ${name}`);
@@ -148,6 +155,9 @@ export class TaskRunner {
     });
     await modifyPort.modify({ task: resolved, workspace, analysis });
     const verification = await verifyPort.verify(taskId);
+    if (!verification.passed) {
+      throw new VerificationFailedError(taskId, verification.output);
+    }
     const published = await publishPort.publish(resolved, workspace, verification, lease);
     await prEnsurePort.ensure(resolved, published);
     const outcome = await ciObservePort.observe(taskId);
