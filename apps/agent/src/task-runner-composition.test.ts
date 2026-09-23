@@ -56,6 +56,8 @@ interface Controls {
   currentHeadSha?: string;
   planHeadSha?: string | null;
   headShaSequence?: string[];
+  approvedPaths?: readonly string[];
+  statusEntries?: ReadonlyArray<{ path: string }>;
 }
 
 function successSnapshots() {
@@ -165,11 +167,16 @@ function createHarness(controls: Controls = {}) {
   const headShaCalls: string[] = [];
   let headShaIndex = 0;
   const publishCalls: string[] = [];
+  const publishedPaths: Array<readonly string[]> = [];
+  let statusCalls = 0;
   const git = {
     fetch: async () => {
       events.push('repo.fetch');
     },
-    status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+    status: async () => {
+      statusCalls += 1;
+      return { entries: controls.statusEntries ?? [{ path: 'src/app.ts' }] };
+    },
     headSha: async (worktree: string) => {
       expect(worktree).toBe('/wt/mamf-web');
       if (controls.headShaSequence !== undefined && controls.headShaSequence.length > 0) {
@@ -239,6 +246,13 @@ function createHarness(controls: Controls = {}) {
       }
       return true;
     },
+    listApprovedPaths: async (taskId: TaskId, headSha?: string) => {
+      expect(taskId).toBe(TASK_ID);
+      void headSha;
+      // Pre-existing happy-path harnesses predate approved-path scoping:
+      // default to the single reviewed path unless a test overrides it.
+      return controls.approvedPaths ?? ['src/app.ts'];
+    },
   };
 
   const publishing = {
@@ -246,9 +260,11 @@ function createHarness(controls: Controls = {}) {
       taskId: TaskId;
       branch: string;
       remote: string;
+      paths: readonly string[];
       lock: { release(): Promise<void> };
     }) => {
       publishCalls.push(context.taskId);
+      publishedPaths.push([...context.paths]);
       events.push('commit');
       if (controls.publishError !== undefined) throw controls.publishError;
       events.push('push');
@@ -340,7 +356,7 @@ function createHarness(controls: Controls = {}) {
   }
 
   const runner = createTaskRunner(options as never);
-  return { runner, events, repairEvents, transitions, auditEvents, tasks, seen, publishCalls, headShaCalls };
+  return { runner, events, repairEvents, transitions, auditEvents, tasks, seen, publishCalls, headShaCalls, publishedPaths, getStatusCalls: () => statusCalls };
 }
 
 describe('task-runner composition', () => {
@@ -570,7 +586,7 @@ describe('task-runner composition', () => {
       }),
     };
 
-    const verificationAB = { requiredChecksPassed: () => true };
+    const verificationAB = { requiredChecksPassed: () => true, listApprovedPaths: () => ['src/app.ts'] };
     const publishingAB = {
       publish: async (context: { taskId: TaskId; branch: string; remote: string; lock: { release(): Promise<void> } }) => {
         await context.lock.release();
@@ -685,5 +701,48 @@ describe('task-runner composition', () => {
     expect(publishCalls).toHaveLength(0);
     expect(events).not.toContain('pr.ensure');
     expect(events).not.toContain('complete');
+  });
+
+  it('publishes only diff-review-approved paths and excludes unrelated modified + untracked entries', async () => {
+    const APPROVED = 'src/app.ts';
+    const { runner, publishedPaths, getStatusCalls } = createHarness({
+      approvedPaths: [APPROVED],
+      statusEntries: [{ path: APPROVED }, { path: 'src/unrelated.ts' }, { path: 'notes/scratch.txt' }],
+    });
+
+    await runner.run(TASK_ID);
+
+    expect(publishedPaths).toHaveLength(1);
+    expect(publishedPaths[0]).toEqual([APPROVED]);
+    expect(publishedPaths[0]).not.toContain('src/unrelated.ts');
+    expect(publishedPaths[0]).not.toContain('notes/scratch.txt');
+    void getStatusCalls;
+  });
+
+  it('blocks publish when verification approves no paths', async () => {
+    const { runner, events, publishCalls } = createHarness({
+      approvedPaths: [],
+      statusEntries: [{ path: 'src/app.ts' }],
+    });
+
+    await expect(runner.run(TASK_ID)).rejects.toThrow(/approved paths|no approved/i);
+    expect(publishCalls).toHaveLength(0);
+    expect(events).not.toContain('commit');
+    expect(events).not.toContain('pr.ensure');
+    expect(events).not.toContain('complete');
+  });
+
+  it('passes deleted/renamed diff-review paths through verbatim without status reconstruction', async () => {
+    const DELETED = 'src/removed.ts';
+    const { runner, publishedPaths } = createHarness({
+      approvedPaths: [DELETED],
+      statusEntries: [{ path: 'src/unrelated.ts' }],
+    });
+
+    await runner.run(TASK_ID);
+
+    expect(publishedPaths).toHaveLength(1);
+    expect(publishedPaths[0]).toEqual([DELETED]);
+    expect(publishedPaths[0]).not.toContain('src/unrelated.ts');
   });
 });

@@ -108,6 +108,8 @@ export interface CompositionWorktrees {
 /** Structural subset of CompletionEvaluator bound to a worktree HEAD. */
 export interface CompositionVerification {
   requiredChecksPassed(taskId: TaskId, headSha?: string): boolean | Promise<boolean>;
+  /** Diff-review-approved paths for the bound HEAD. Absent providers approve nothing. */
+  listApprovedPaths?(taskId: TaskId, headSha?: string): readonly string[] | Promise<readonly string[]>;
 }
 
 /** Structural subset of PublishingService.publish. */
@@ -399,13 +401,20 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       const worktreePath = await resolveWorkspacePath(taskId, 'Verify');
       const headSha = await resolveHeadSha(worktreePath, 'Verify');
       const passed = await options.verification.requiredChecksPassed(taskId, headSha);
+      // Diff-review-approved paths are the sole publish input downstream.
+      // Providers that expose no approved-path listing approve nothing.
+      const listApproved = options.verification.listApprovedPaths;
+      const approvedPaths: readonly string[] =
+        typeof listApproved === 'function'
+          ? [...(await listApproved.call(options.verification, taskId, headSha))]
+          : [];
       return {
         passed,
         output: passed
           ? `required verification checks passed for task ${taskId} at ${headSha}`
           : `required verification checks did not pass for task ${taskId} at ${headSha}`,
         headSha,
-        approvedPaths: [],
+        approvedPaths,
       };
     },
   };
@@ -434,20 +443,22 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
           'publication (PublishingService) is not wired in the agent composition root',
         );
       }
-      if (options.git === undefined) {
-        throw new TaskRunnerConfigurationError(
-          'Publish',
-          'git status (GitService) is not wired in the agent composition root',
-        );
+      // Path safety (Task 7 commitExplicit): the ONLY publish input is the
+      // diff-review-approved path list carried by verification evidence.
+      // Never sweep git.status here: a sweep would reintroduce unrelated
+      // modified/untracked entries. Deleted/renamed entries keep their
+      // diff-review representation verbatim; no status reconstruction.
+      const approvedPaths = verification.approvedPaths;
+      if (approvedPaths === undefined || approvedPaths.length === 0) {
+        throw new Error('verification has no approved paths for task ' + task.taskId);
       }
       const stored = requireTask(task.taskId, 'Publish');
-      const status = await options.git.status(workspace.linuxPath);
       const published = await options.publishing.publish({
         taskId: task.taskId,
         repoId: task.repoId,
         worktree: workspace.linuxPath,
         branch: task.branch,
-        paths: status.entries.map((entry) => entry.path),
+        paths: [...approvedPaths],
         commitMessage: `task ${task.taskId}: ${stored.goal}`,
         remote: task.remote,
         // Sole lock-release owner: the lease passes straight through to
