@@ -1,9 +1,9 @@
 # MAC-02 Service Lifecycle — Owned-Connection Health Components
 
 **Updated:** 2026-09-23 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Final transport CI has not executed; this is not deployable or independently reviewed.  
+**Status:** IN_PROGRESS / PARTIAL. Task 4 native owned-peer/authenticated-health components are exact-head CI verified; the service is still not deployable or independently reviewed.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft and unmerged.  
-**Current code checkpoint:** `ee803ee74ac8f2d5dcf678cb88e913c93bbcd766`.  
+**Verified exact-head code/test checkpoint:** `40d9dfbbf6a2aa8dd924d95bb2e09779ddac1d8d`.  
 **Resume baseline:** `ef0d31c80cb6ed5f387afd5428349c988cd7414f`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
@@ -16,11 +16,11 @@
 | Task 1 | Strict LAB_ONLY configuration and fixed plist renderer implemented |
 | Task 2 | Native inspection/static identity/preview components exist; independent ACL-helper provenance, fixed-root acceptance and live identity remain gated |
 | Task 3 | Restart history, private persistence, safe status/events/log rotation and discard-only output components exist; production bindings, current-owner enforcement, abandoned locks and supervisor integration remain open |
-| Task 4 | Protocol evaluator and same-socket HTTP transport implemented behind an internal verifier; native ownership provider and final integration acceptance NOT COMPLETE |
+| Task 4 | Authenticated health, same-socket transport, live-process sealing and native libproc accepted-peer verification are component-implemented and exact-head CI verified; supervisor spawn/registration/stop wiring remains Task 5 |
 | Tasks 5–7 | Supervisor, admin install/rollback/uninstall, runnable CLI and sealed packaging not implemented |
 | Task 8 | Component tests exist; full installed lifecycle, independent review and user-device acceptance remain incomplete |
 
-**Immediate resume:** re-establish an executing exact-head CI run and inspect the actual repository MCP compatibility tests. Do not assume they passed. Then implement and independently validate the native accepted-peer/process identity provider described in Task 4. Do not implement a verifier that always returns OWNED, infer it from a PID/port, or substitute persisted status for live identity.
+**Immediate resume:** begin Task 5 supervisor state-machine work from the verified Task 4 ports. The supervisor must create and retain the actual ChildProcess handle, seal its start/UID/executable identity, compose the native accepted-peer verifier and never substitute PID/port/persisted status for live ownership. Keep Task 2 helper provenance/fixed-root and Task 3 production-binding/abandoned-lock gates open.
 
 No `supervisor-cli.js` exists. Generated plists remain **NOT DEPLOYABLE**. No real credential, account, Keychain entry, OS permission, tunnel or storefront was provisioned. MAC-03–05 documents remain separate at `31e66aa21b705b1793f11122c1b12d5ebf41715c`; none was implemented or edited here.
 
@@ -155,3 +155,56 @@ Only this MAC-02 branch was written. Starting separate refs: main `fdf5dda`, Win
 Reference semantics (not deployment evidence):
 - Node 24 HTTP custom connection factory: https://nodejs.org/download/release/latest-v24.x/docs/api/http.html
 - Pinned MCP transport: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+
+
+## 8. Task 4 native ownership checkpoint — exact-head verification
+
+This section supersedes the older pending-CI language in sections 2, 5 and 7 for Task 4 only. Earlier RED records remain historical evidence.
+
+### Added implementation
+
+- `adapters/owned-process.ts` now seals an actual live child handle to PID, UID, kernel start sec/usec, generation, release digest and executable device/inode. The caller cannot supply the start identity as a trusted fact.
+- `platform/macos/native/peer-owner.c` uses Apple libproc process/FD/socket inspection. Current identity checks PID, UID, process start time and executable device/inode. Accepted-peer proof additionally scans the target process FDs and requires an established IPv4 loopback TCP socket matching the already-open client's server/client port tuple.
+- The native helper has no arbitrary command selector and receives only bounded numeric identity/tuple arguments. Its output vocabulary is `START <sec> <usec>`, `OWNED`, `FOREIGN` or `UNKNOWN`. Missing/ambiguous inspection fails closed.
+- `createMacConnectedPeerVerifier` rechecks the live child before and after accepted-socket proof. A dead/replaced handle, changed generation/release, executable mismatch, foreign socket or unknown proof cannot become `OWNED`.
+- The existing same-socket transport remains the only path that can obtain the synthetic internal credential. The checked connection is one-use; there is no authenticated reconnect to a replacement listener.
+
+### TDD and corrective record
+
+| Checkpoint | Observed evidence |
+|---|---|
+| Native ownership RED `804ac22` | Ubuntu exact-head behavioral run showed 6 new `NOT_IMPLEMENTED` failures with prior applicable tests still passing; this isolated the new contract before implementation |
+| Native fixture RED `04a245c` | macOS run compiled the test suite but failed because `platform/macos/native/peer-owner.c` did not yet exist; the desired native dependency was therefore proven absent before implementation |
+| Native implementation `d1a4ea2` | macOS behavioral phase compiled the helper and passed all three real process/socket fixture tests; subsequent full typecheck exposed six implicit-any errors in the new proof factory |
+| Contextual typing correction `fa8f5a1` | minimal typed-object correction removed the TypeScript defect; native behavioral tests continued to pass |
+| Existing test-race correction `40d9dfb` | the no-reconnect test now waits until the server has observed the initial connection before destroying the client during credential acquisition; it still requires accepted-count exactly 1 and zero request bytes, so the security assertion is not weakened |
+
+The intermittent prior `accepted() === 0` failure was a test scheduling race: client `connect` can resolve before the server-side `connection` callback increments the fixture counter. It was unrelated to the native verifier and reproduced only on the assertion timing. The correction establishes the initial accepted connection before testing that no second connection appears.
+
+### Fresh exact-head evidence
+
+Exact head: `40d9dfbbf6a2aa8dd924d95bb2e09779ddac1d8d`.
+
+- Root CI run `35828930247`: completed/success.
+- Focused lifecycle run `35828930223`: macOS and Ubuntu jobs completed/success.
+- Native macOS job `107076807999`: macOS arm64, Node 24.20.0; lifecycle **35 files / 533 tests passed, zero failed/skipped**.
+- The same Mac job's root collection: **43 files / 581 tests passed, zero failed/skipped**; lint, typecheck, build and diff checks passed.
+- Ubuntu job `107076808139`: applicable lifecycle **514 passed / 19 Apple-only skipped**; root **562 passed / 19 Apple-only skipped**; lint, typecheck and build passed.
+- Generated plist structure accepted two roles and rejected 12 altered structures; native `plutil -lint` passed both generated plists. No service was installed.
+- Native ownership tests compiled `peer-owner.c` using the installed Apple SDK and exercised real child-process start identity, executable inode/device, accepted loopback socket ownership, foreign server rejection, executable mismatch and post-exit invalidation.
+- Real repository MCP compatibility tests also passed at this exact head: correct credential produced healthy evidence and wrong credential remained blocked.
+
+The earlier zero-step Actions failures at `3563e4b` were rerun against the exact same SHA and then executed successfully, separating runner availability from code correctness. No workflow or security assertion was weakened to obtain this result.
+
+### Remaining gates after Task 4
+
+Task 4 component behavior is ready for Task 5 consumption, but MAC-02 is **not** complete. Still open:
+
+- Task 2 independently trusted ACL-helper provenance/bootstrap and real fixed-root acceptance.
+- Task 3 production run/log directory binding and ownership-verified recovery of abandoned writer locks.
+- Task 5 actual fixed-role supervisor spawn/stop, live generation ownership, circuit integration, 5-second observations and gated test-tunnel startup.
+- Task 6 local-admin apply/rollback/uninstall and stopped authorized reset/recovery.
+- Task 7 runnable CLI and sealed packaging, including helper inventory/provenance.
+- Task 8 installed launchd/reboot/user-device acceptance and independent review.
+
+No actual account, Keychain/TCC setting, FileVault/SSH setting, tunnel credential, browser session, HAAR store action or administrator installation was touched in this checkpoint.
