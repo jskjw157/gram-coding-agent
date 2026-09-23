@@ -1,5 +1,18 @@
 import type { TaskId } from '@gram/domain';
 import type { AuditRepository } from '@gram/persistence';
+import type {
+  AnalyzePort,
+  CiObservePort,
+  CompletePort,
+  InstructionsPort,
+  ModifyPort,
+  PrEnsurePort,
+  PublishPort,
+  RepoFetchPort,
+  RepoResolvePort,
+  VerifyPort,
+  WorkspaceCreatePort,
+} from './task-runner-ports.js';
 
 export type RepairCycleEvent =
   | 'ci.failed'
@@ -56,6 +69,17 @@ export interface TaskRunnerOptions {
   verification: RepairCycleVerifyPort;
   git: RepairCycleGitPort;
   ci: RepairCycleCiPort;
+  repoResolve?: RepoResolvePort;
+  repoFetch?: RepoFetchPort;
+  workspaceCreate?: WorkspaceCreatePort;
+  instructions?: InstructionsPort;
+  analyze?: AnalyzePort;
+  modify?: ModifyPort;
+  verify?: VerifyPort;
+  publish?: PublishPort;
+  prEnsure?: PrEnsurePort;
+  ciObserve?: CiObservePort;
+  complete?: CompletePort;
 }
 
 export interface RepairCycleInput {
@@ -89,8 +113,48 @@ export class RemoteConfirmFailedError extends Error {
   }
 }
 
+function requireRunPort<T>(value: T | undefined, name: string): T {
+  if (value === undefined) {
+    throw new Error(`TaskRunner.run missing port: ${name}`);
+  }
+  return value;
+}
+
 export class TaskRunner {
   constructor(private readonly options: TaskRunnerOptions) {}
+
+  async run(taskId: TaskId): Promise<void> {
+    const repoResolve = requireRunPort(this.options.repoResolve, 'repoResolve');
+    const repoFetch = requireRunPort(this.options.repoFetch, 'repoFetch');
+    const workspaceCreate = requireRunPort(this.options.workspaceCreate, 'workspaceCreate');
+    const instructionsPort = requireRunPort(this.options.instructions, 'instructions');
+    const analyzePort = requireRunPort(this.options.analyze, 'analyze');
+    const modifyPort = requireRunPort(this.options.modify, 'modify');
+    const verifyPort = requireRunPort(this.options.verify, 'verify');
+    const publishPort = requireRunPort(this.options.publish, 'publish');
+    const prEnsurePort = requireRunPort(this.options.prEnsure, 'prEnsure');
+    const ciObservePort = requireRunPort(this.options.ciObserve, 'ciObserve');
+    const completePort = requireRunPort(this.options.complete, 'complete');
+
+    const resolved = await repoResolve.resolve(taskId);
+    const lease = await this.options.locks.acquire(resolved.repoId, taskId);
+    await repoFetch.fetch({ remote: resolved.remote, branch: resolved.branch });
+    const workspace = await workspaceCreate.create(taskId);
+    const instructions = await instructionsPort.load(workspace);
+    const analysis = await analyzePort.analyze({
+      task: resolved,
+      workspace,
+      instructions,
+    });
+    await modifyPort.modify({ task: resolved, workspace, analysis });
+    const verification = await verifyPort.verify(taskId);
+    const published = await publishPort.publish(resolved, workspace, verification, lease);
+    await prEnsurePort.ensure(resolved, published);
+    const outcome = await ciObservePort.observe(taskId);
+    if (outcome === 'SUCCESS') {
+      await completePort.complete(taskId);
+    }
+  }
 
   async runRepairCycle(
     input: RepairCycleInput,
