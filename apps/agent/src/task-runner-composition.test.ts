@@ -101,6 +101,7 @@ function createHarness(controls: Controls = {}) {
   const seen = {
     resolvedBranch: '',
     createdBranch: '',
+    baseRef: '',
     publishedBranch: '',
     prHeadBranch: '',
   };
@@ -187,9 +188,10 @@ function createHarness(controls: Controls = {}) {
   };
 
   const worktrees = {
-    create: async (input: { taskId: TaskId; branch: string }) => {
+    create: async (input: { taskId: TaskId; branch: string; baseRef: string }) => {
       events.push('workspace.create');
       seen.createdBranch = input.branch;
+      seen.baseRef = input.baseRef;
       return { linuxPath: '/wt/mamf-web', branch: input.branch };
     },
   };
@@ -354,6 +356,9 @@ describe('task-runner composition', () => {
     expect(seen.createdBranch.length).toBeGreaterThan(0);
     expect(seen.publishedBranch).toBe(seen.createdBranch);
     expect(seen.prHeadBranch).toBe(seen.createdBranch);
+    // W4-F4 RED: worktree adapter must receive remote-tracking origin/main, never bare local branch.
+    expect(seen.baseRef).toBe('origin/main');
+    expect(seen.baseRef).not.toBe('main');
     // PublishingService remains the sole lock-release owner: release precedes PR.
     expect(events.indexOf('lock.release')).toBeLessThan(events.indexOf('pr.ensure'));
   });

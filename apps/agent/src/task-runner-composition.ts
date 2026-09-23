@@ -348,7 +348,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
           githubRepositoryId: profile.githubRepositoryId,
           localBasePath: profile.localBasePath,
         },
-        baseRef: profile.defaultBranch,
+        baseRef: ORIGIN_REMOTE + '/' + profile.defaultBranch,
         branch,
       });
       return { linuxPath: workspace.linuxPath, branch: workspace.branch };
