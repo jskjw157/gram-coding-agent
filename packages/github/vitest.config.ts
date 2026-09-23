@@ -9,5 +9,6 @@ export default defineConfig({
       '@gram/secrets': fileURLToPath(new URL('../secrets/src/index.ts', import.meta.url)),
     },
   },
-  test: { environment: 'node' },
+  test: {
+    exclude: ['**/node_modules/**', '**/dist/**'], environment: 'node' },
 });
