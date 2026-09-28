@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import type { Role } from '../contracts.js';
 import { decodeHistory } from '../lifecycle-store.js';
 import { decodeStatus } from '../telemetry.js';
+import { decodeExecution } from '../execution-lease.js';
 import { decodeEventSegment, LOG_MAX_BYTES } from '../event-log.js';
 import type { RecordFiles } from '../telemetry-store.js';
 import { hasControls, relativeParts, type AclProbe } from './trusted-files.js';
@@ -14,8 +15,8 @@ export interface StateDirectoryPolicy {
   anchor: string; relative: string; ancestorUid: number; stateUid: number; acl: AclProbe;
 }
 export type CircuitFileIo = Pick<typeof fs, 'open' | 'lstat' | 'rename' | 'unlink'>;
-type RecordKind = 'circuit' | 'status' | 'events';
-const codes = new Set(['UNSAFE_PATH', 'INVALID_HISTORY', 'INVALID_TELEMETRY', 'STATE_IO', 'STATE_CONFLICT', 'BUSY']);
+type RecordKind = 'circuit' | 'status' | 'events' | 'execution';
+const codes = new Set(['UNSAFE_PATH', 'INVALID_HISTORY', 'INVALID_TELEMETRY', 'INVALID_EXECUTION', 'STATE_IO', 'STATE_CONFLICT', 'BUSY']);
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
 function fail(code: string): never { throw new Error(code); }
 function nativeCode(e: unknown): unknown {
@@ -44,8 +45,8 @@ type ReadRecord = { bytes: Buffer; stat: BigIntStats } | null;
  * Crash-abandoned locks remain BUSY. No auto-repair or root/same-UID sandbox.
  */
 export function createPrivateRecordFiles(kind: RecordKind, policy: StateDirectoryPolicy, io: CircuitFileIo = fs): RecordFiles {
-  if (kind !== 'circuit' && kind !== 'status' && kind !== 'events') fail('INVALID_TELEMETRY');
-  const invalid = kind === 'circuit' ? 'INVALID_HISTORY' : 'INVALID_TELEMETRY';
+  if (kind !== 'circuit' && kind !== 'status' && kind !== 'events' && kind !== 'execution') fail('INVALID_TELEMETRY');
+  const invalid = kind === 'circuit' ? 'INVALID_HISTORY' : kind === 'execution' ? 'INVALID_EXECUTION' : 'INVALID_TELEMETRY';
   const size = kind === 'events' ? 3 : 1;
   const maxBytes = kind === 'events' ? LOG_MAX_BYTES : 65536;
   const p = Object.freeze({ ...policy });
@@ -58,6 +59,7 @@ export function createPrivateRecordFiles(kind: RecordKind, policy: StateDirector
   const validate = (bytes: Buffer, role: Role, slot: number): void => {
     if (kind === 'circuit') decodeHistory(bytes);
     else if (kind === 'status') { if (decodeStatus(bytes).role !== role) fail(invalid); }
+    else if (kind === 'execution') { if (decodeExecution(bytes).role !== role) fail(invalid); }
     else decodeEventSegment(bytes, role, slot);
   };
   async function directory<T>(use: (dir: Directory) => Promise<T>): Promise<T> {

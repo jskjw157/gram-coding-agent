@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import { configDigest, parseConfig } from '../config.js';
 import { root, type AccountIdentity, type OwnedChild, type ServiceConfig } from '../contracts.js';
 import { attachChildOutput, type OutputDrain } from '../child-output.js';
+import { withExclusiveCore } from '../exclusive-core.js';
+import type { ExecutionLeaseStore } from '../execution-lease.js';
 import { copyCoreChild, probeCore, type CoreCredentials, type CoreEvidence } from '../health-probe.js';
 import type { ManagedChild, SupervisorDeps } from '../supervisor.js';
 import { createLoopbackConnections } from './loopback-http.js';
@@ -24,6 +26,9 @@ export interface CoreAuthority {
 export interface NativeCoreOptions {
   authority?: CoreAuthority;
   credentials?: CoreCredentials;
+  /** Required for the default native launcher. Bootstrap must bind all factories
+   * to the same independently trusted, explicitly initialized run directory. */
+  execution?: ExecutionLeaseStore;
   /** Trusted in-process dependency for isolated fixtures, not a config/CLI tool. */
   launch?: (plan: Readonly<CoreLaunchPlan>) => ChildProcess;
 }
@@ -139,19 +144,19 @@ function unknown(): CoreEvidence {
   return { state: 'UNKNOWN', code: 'HEALTH_UNKNOWN', generation: '', releaseDigest: '', observedAtMs: Date.now() };
 }
 
-/** One factory/one start attempt. Real system-wide exclusivity remains an
- * authority/bootstrap requirement. Child handles stay private and are retained
- * on ambiguous launch. A rejected start never asserts absence of a live child:
- * if it cannot be proven/safely stopped, start stays pending until actual exit.
- */
+/** One factory/one start attempt. Default native execution additionally requires
+ * a shared durable reservation store. Fixed-root binding remains bootstrap's
+ * responsibility. An ambiguous child remains tracked until actual exit. */
 export function createNativeCorePort(options: NativeCoreOptions = {}): SupervisorDeps['core'] {
   const authority = options.authority; const credentials = options.credentials;
+  const execution = options.execution;
+  const permitted = options.launch !== undefined || execution !== undefined;
   const launch = options.launch ?? nativeLaunch;
   let claimed = false; let custody: Custody | null = null;
   const records = new WeakMap<ManagedChild, Custody>();
   const port: SupervisorDeps['core'] = {
     async spawn(input, generation, signal) {
-      if (claimed || signal.aborted || !authority || !credentials) startFailed();
+      if (claimed || signal.aborted || !authority || !credentials || !permitted) startFailed();
       claimed = true;
       try {
         const config = parseConfig(input); Object.freeze(config.tunnel); Object.freeze(config);
@@ -208,5 +213,5 @@ export function createNativeCorePort(options: NativeCoreOptions = {}): Superviso
       } catch { return stopUnknown(); }
     },
   };
-  return Object.freeze(port);
+  return execution ? withExclusiveCore(Object.freeze(port), execution) : Object.freeze(port);
 }
