@@ -1,5 +1,5 @@
 import { configDigest, parseConfig } from './config.js';
-import type { ExecutionLease, ExecutionLeaseStore } from './execution-lease.js';
+import type { ExecutionLeaseStore } from './execution-lease.js';
 import type { ManagedChild, SupervisorDeps } from './supervisor.js';
 import { copyCoreChild, type CoreEvidence } from './health-probe.js';
 import type { OwnedChild } from './contracts.js';
@@ -30,32 +30,31 @@ export function withExclusiveCore(core: SupervisorDeps['core'], leases: Executio
   return Object.freeze({
     async spawn(input, generation, signal) {
       if (attempted || signal.aborted) fail(true); attempted = true;
-      let lease: ExecutionLease | null = null;
-      let received = false;
       try {
         const config = parseConfig(input); Object.freeze(config.tunnel); Object.freeze(config);
-        lease = await leases.acquire('core', generation, configDigest(config), config.releaseDigest);
+        const lease = await leases.acquire('core', generation, configDigest(config), config.releaseDigest);
         if (signal.aborted) { await leases.release(lease); fail(true); }
         let raw: ManagedChild;
         try { raw = await core.spawn(config, generation, signal); }
         catch { await leases.release(lease); fail(true); }
-        received = true;
         const child = Object.freeze(copyCoreChild(raw.child));
         if (child.generation !== generation || child.releaseDigest !== config.releaseDigest
           || !(raw.exited instanceof Promise)) fail(true);
-        const held = lease;
         const record: Active = { raw, outward: raw, ended: false, stopping: null };
         const completed = raw.exited.then(async () => {
-          record.ended = true; await leases.release(held);
-        }).catch(() => fail(false));
+          record.ended = true; await leases.release(lease);
+        }).catch(() => {
+          // An ambiguous exit or failed release makes this generation unavailable.
+          // It does not grant permission to free or overwrite the durable slot.
+          record.ended = true; return fail(false);
+        });
         // Observe spontaneous-exit release errors even before a consumer waits.
         void completed.catch(() => undefined);
         const outward = Object.freeze({ child, exited: completed }); record.outward = outward; active = record;
         return outward;
       } catch {
-        // An invalid fulfilled result is ambiguous, not a definite no-child
-        // failure. Its slot remains HELD. No PID-based cleanup is attempted.
-        if (!received && lease === null) { /* A failed CAS may already have committed: do not reset. */ }
+        // An invalid fulfilled result or uncertain CAS is not a definite no-child
+        // failure. Keep its slot. No PID-based cleanup or reset is attempted.
         return fail(true);
       }
     },
