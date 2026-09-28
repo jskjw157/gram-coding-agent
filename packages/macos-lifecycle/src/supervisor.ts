@@ -101,7 +101,11 @@ export async function runSupervisor(role: Role, input: ServiceConfig, deps: Supe
   };
   if (signal.aborted) return 0;
   let config: ServiceConfig;
-  try { config = parseConfig(input); } catch { return idle(); }
+  try {
+    config = parseConfig(input);
+    Object.freeze(config.tunnel);
+    Object.freeze(config);
+  } catch { return idle(); }
   if (role === 'tunnel' && !config.tunnel.enabled) return 0;
   let history: HistorySnapshot | null = null;
   let generation = 'unstarted';
@@ -128,7 +132,8 @@ export async function runSupervisor(role: Role, input: ServiceConfig, deps: Supe
     if (history.history.blocked) return block('BLOCKED_RESTART_BUDGET', 'RESTART_BUDGET');
     if (now() < history.history.lastSeenMs) return block('BLOCKED_CONFIGURATION', 'INVALID_HISTORY');
     if (history.history.activeAttempt !== null) {
-      if (!deps.confirmStopped || !await limited(10000, signal, s => deps.confirmStopped?.(role, s) ?? Promise.resolve(false))) {
+      if (!deps.confirmStopped || (await limited(10000, signal,
+        s => deps.confirmStopped?.(role, s) ?? Promise.resolve(false))) !== true) {
         return block('UNKNOWN', 'FOREIGN_SERVICE');
       }
       history = await deps.lifecycle.write(role, history, { kind: 'recover', nowMs: now() });
@@ -149,7 +154,16 @@ export async function runSupervisor(role: Role, input: ServiceConfig, deps: Supe
             return block('BLOCKED_CONFIGURATION', 'TUNNEL_COMPATIBILITY_REQUIRED');
           }
           compatibility = Object.freeze({ digest: compatibility.digest });
-          if (!await limited(2000, signal, () => deps.tunnel.credentialAvailable('test-tunnel-key'))) {
+          const beforeCredential = healthy(await limited(10000, signal, s => deps.currentCore(s)),
+            config.releaseDigest, now(), coreEvidence.generation);
+          if (!beforeCredential) {
+            await emit('WAITING_CORE', 'HEALTH_UNKNOWN');
+            await waitFor(deps.clock.sleep(dependencyDelayMs(attempt), signal), signal);
+            attempt = Math.min(attempt + 1, 5);
+            continue;
+          }
+          coreEvidence = beforeCredential;
+          if ((await limited(2000, signal, () => deps.tunnel.credentialAvailable('test-tunnel-key'))) !== true) {
             return block('AUTH_BLOCKED', 'AUTH_BLOCKED');
           }
           const checked = healthy(await limited(10000, signal, s => deps.currentCore(s)),
