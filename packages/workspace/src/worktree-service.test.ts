@@ -59,6 +59,7 @@ class GitCliTestPort implements GitWorktreePort {
     worktreePath: string;
     baseRef: string;
     branch: string;
+    taskId: string;
   }): Promise<{ headSha: string }> {
     git([
       '-C',
@@ -71,6 +72,18 @@ class GitCliTestPort implements GitWorktreePort {
       input.baseRef,
     ]);
     return { headSha: git(['-C', input.worktreePath, 'rev-parse', 'HEAD']) };
+  }
+
+  async removeWorktree(input: {
+    repoPath: string;
+    worktreePath: string;
+    taskId: string;
+  }): Promise<void> {
+    git(['-C', input.repoPath, 'worktree', 'remove', '--force', input.worktreePath]);
+  }
+
+  async pruneWorktrees(input: { repoPath: string; taskId: string }): Promise<void> {
+    git(['-C', input.repoPath, 'worktree', 'prune']);
   }
 }
 
@@ -157,6 +170,8 @@ describe('WorktreeService', () => {
       createWorktree: vi.fn(async () => {
         throw new Error('git worktree add failed');
       }),
+      removeWorktree: vi.fn(async () => {}),
+      pruneWorktrees: vi.fn(async () => {}),
     };
     const service = new WorktreeService({
       homeDir,
@@ -201,5 +216,86 @@ describe('WorktreeService', () => {
         goal: 'Refresh dependencies',
       }),
     ).toBe('chore/task-000203-refresh-dependencies');
+  });
+
+  it('passes task identity into Git worktree creation and path conversion', async () => {
+    const root = tempRoot();
+    const homeDir = join(root, 'home');
+    const { localBasePath } = createCanonicalRepository(root);
+    const { task, workspaces } = setupPersistence(root, localBasePath);
+    const headSha = 'a'.repeat(40);
+    const createWorktree = vi.fn(
+      async (input: {
+        repoPath: string;
+        worktreePath: string;
+        baseRef: string;
+        branch: string;
+        taskId: string;
+      }) => {
+        void input;
+        return { headSha };
+      },
+    );
+    const removeWorktree = vi.fn(async () => {});
+    const pruneWorktrees = vi.fn(async () => {});
+    const fakeGit = { createWorktree, removeWorktree, pruneWorktrees };
+    const toWindows = vi.fn(async (linuxPath: string, taskId: string) => {
+      void linuxPath;
+      void taskId;
+      return 'C:\\mapped';
+    });
+    const service = new WorktreeService({
+      homeDir,
+      git: fakeGit,
+      workspaces,
+      pathMapper: { toWindows },
+    });
+
+    await service.create({
+      taskId: task.id,
+      repo: { githubRepositoryId: 84722133, localBasePath },
+      baseRef: 'origin/main',
+      branch: 'fix/task-000001-excel-download-url',
+    });
+
+    expect(createWorktree).toHaveBeenCalledTimes(1);
+    expect(createWorktree.mock.calls[0]?.[0]).toMatchObject({ taskId: task.id });
+    expect(toWindows).toHaveBeenCalledTimes(1);
+    expect(toWindows.mock.calls[0]?.[1]).toBe(task.id);
+  });
+
+  it('removes and prunes a created worktree when workspace persistence fails', async () => {
+    const root = tempRoot();
+    const homeDir = join(root, 'home');
+    const { localBasePath } = createCanonicalRepository(root);
+    const { task, workspaces } = setupPersistence(root, localBasePath);
+    const headSha = 'b'.repeat(40);
+    const createWorktree = vi.fn(async () => ({ headSha }));
+    const removeWorktree = vi.fn(async () => {
+      throw new Error('rollback failed');
+    });
+    const pruneWorktrees = vi.fn(async () => {});
+    const fakeGit = { createWorktree, removeWorktree, pruneWorktrees };
+    const service = new WorktreeService({
+      homeDir,
+      git: fakeGit,
+      workspaces,
+      pathMapper: { toWindows: async () => 'C:\\mapped' },
+    });
+    vi.spyOn(workspaces, 'create').mockImplementation(() => {
+      throw new Error('workspace persist failed');
+    });
+
+    await expect(
+      service.create({
+        taskId: task.id,
+        repo: { githubRepositoryId: 84722133, localBasePath },
+        baseRef: 'origin/main',
+        branch: 'fix/task-000001-excel-download-url',
+      }),
+    ).rejects.toThrow('workspace persist failed');
+
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    expect(pruneWorktrees).toHaveBeenCalledTimes(1);
   });
 });

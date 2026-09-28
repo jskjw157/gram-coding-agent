@@ -37,11 +37,18 @@ export interface GitWorktreePort {
     worktreePath: string;
     baseRef: string;
     branch: string;
+    taskId: TaskId;
   }): Promise<{ headSha: string }>;
+  removeWorktree(input: {
+    repoPath: string;
+    worktreePath: string;
+    taskId: TaskId;
+  }): Promise<void>;
+  pruneWorktrees(input: { repoPath: string; taskId: TaskId }): Promise<void>;
 }
 
 export interface WorkspacePathMapper {
-  toWindows(linuxPath: string): Promise<string>;
+  toWindows(linuxPath: string, taskId: TaskId): Promise<string>;
 }
 
 export interface WorktreeRepositoryRef {
@@ -83,7 +90,7 @@ export class WorktreeService {
       String(input.repo.githubRepositoryId),
       input.taskId,
     );
-    const windowsPath = await this.options.pathMapper.toWindows(linuxPath);
+    const windowsPath = await this.options.pathMapper.toWindows(linuxPath, input.taskId);
 
     mkdirSync(dirname(linuxPath), { recursive: true, mode: 0o700 });
     const created = await this.options.git.createWorktree({
@@ -91,16 +98,38 @@ export class WorktreeService {
       worktreePath: linuxPath,
       baseRef: input.baseRef,
       branch: input.branch,
+      taskId: input.taskId,
     });
 
-    this.options.workspaces.create({
-      taskId: input.taskId,
-      repoId: input.repo.githubRepositoryId,
-      linuxPath,
-      windowsPath,
-      branch: input.branch,
-      headSha: created.headSha,
-    });
+    try {
+      this.options.workspaces.create({
+        taskId: input.taskId,
+        repoId: input.repo.githubRepositoryId,
+        linuxPath,
+        windowsPath,
+        branch: input.branch,
+        headSha: created.headSha,
+      });
+    } catch (error) {
+      try {
+        await this.options.git.removeWorktree({
+          repoPath: input.repo.localBasePath,
+          worktreePath: linuxPath,
+          taskId: input.taskId,
+        });
+      } catch {
+        // Never mask the original persistence error with a rollback failure.
+      }
+      try {
+        await this.options.git.pruneWorktrees({
+          repoPath: input.repo.localBasePath,
+          taskId: input.taskId,
+        });
+      } catch {
+        // Never mask the original persistence error with a rollback failure.
+      }
+      throw error;
+    }
 
     return {
       taskId: input.taskId,
