@@ -1,13 +1,39 @@
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CommitService, RemoteService } from '@gram/git';
 import { createMcpHttpServer } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
-import { AuditRepository, openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
+import {
+  AuditRepository,
+  CommandRunRepository,
+  GitCommitRepository,
+  LockRepository,
+  openDatabase,
+  PullRequestRepository,
+  RepositoryRepository,
+  runMigrations,
+  TaskRepository,
+  VerificationRepository,
+  WorkspaceRepository,
+} from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
+import { PublishingService } from '@gram/publishing';
+import { RepoLockService } from '@gram/repo-lock';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
+import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
+import { CompletionEvaluator } from '@gram/verification';
+import { PathMapper, WorktreeService } from '@gram/workspace';
+import { PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
+import {
+  PersistentCiContextResolver,
+  PersistentVerificationCompletion,
+  RegisteredRepositoryProfiles,
+} from './persistence-adapters.js';
 import { createTaskRunner } from './task-runner-composition.js';
+import { TaskScheduler } from './task-scheduler.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -43,21 +69,112 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
 
   const taskRepository = new TaskRepository(database);
   const auditRepository = new AuditRepository(database);
+  const repositoryRepository = new RepositoryRepository(database);
+  const lockRepository = new LockRepository(database);
+  const workspaceRepository = new WorkspaceRepository(database);
+  const commandRunRepository = new CommandRunRepository(database);
+  const verificationRepository = new VerificationRepository(database);
+  const gitCommitRepository = new GitCommitRepository(database);
+  const pullRequestRepository = new PullRequestRepository(database);
   const taskService = new TaskService(taskRepository, auditRepository);
   const policyEngine = new PolicyEngine();
-  void policyEngine;
 
-  // TaskRunner scheduling is deferred to a later slice; construction here
-  // verifies the composition root wiring without changing runtime behavior.
-  const taskRunner = createTaskRunner({ audit: auditRepository, tasks: taskRepository });
-  void taskRunner;
+  const repoProfiles = new RegisteredRepositoryProfiles({
+    repositories: repositoryRepository,
+    tasks: taskRepository,
+  });
+  const lockService = new RepoLockService({
+    locks: lockRepository,
+    tasks: taskRepository,
+    lockDirectory: join(options.stateDirectory, 'locks'),
+  });
+  const completionEvaluator = new CompletionEvaluator(verificationRepository);
+  const verification = new PersistentVerificationCompletion(completionEvaluator);
+  const ciContext = new PersistentCiContextResolver({
+    tasks: taskRepository,
+    repositories: repositoryRepository,
+    pullRequests: pullRequestRepository,
+    gitCommits: gitCommitRepository,
+  });
 
   const secretProvider = new FileSecretProvider(options.secretDirectory);
   const secretLease = await secretProvider.getForUse('mcp-internal-secret');
 
   try {
     const composed = await secretLease.withValue(async (internalSecret) => {
-      const logger = new StructuredLogger({ redactor: new SecretRedactor([internalSecret]) });
+      const redactor = new SecretRedactor([internalSecret]);
+      const logger = new StructuredLogger({ redactor });
+      const commandRunner = new CommandRunner({
+        policy: policyEngine,
+        // No approval facility exists in this slice (there is an approvals
+        // table but no repository or UI backing it), so every
+        // NEEDS_APPROVAL command fails closed until approvals are wired.
+        approvals: { consume: async () => false },
+        spawner: new NodeProcessSpawner(),
+        commandRuns: commandRunRepository,
+        outputCapture: new OutputCapture({ homeDir: homedir(), redactor }),
+      });
+      const worktreeService = new WorktreeService({
+        homeDir: homedir(),
+        git: new PolicyWorktreeAdapter({ runner: commandRunner }),
+        workspaces: workspaceRepository,
+        pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: commandRunner })),
+      });
+      const taskRunner = createTaskRunner({
+        audit: auditRepository,
+        tasks: taskRepository,
+        repos: repoProfiles,
+        locks: lockService,
+        worktrees: worktreeService,
+        verification,
+        publishing: {
+          publish: async (context) => {
+            // Per-call task attribution: CommitService and RemoteService
+            // bind one task at construction, and the publish context carries
+            // the running task id, so fresh instances are built per call.
+            const publishing = new PublishingService({
+              verification: {
+                assertPassed: (taskId) => {
+                  if (completionEvaluator.requiredChecksPassed(taskId) === false) {
+                    throw new Error(`verification has not passed for task ${taskId}`);
+                  }
+                },
+              },
+              commits: new CommitService(commandRunner, { taskId: context.taskId }),
+              remote: new RemoteService(
+                commandRunner,
+                { taskId: context.taskId },
+                context.worktree,
+              ),
+              persistence: gitCommitRepository,
+              audit: auditRepository,
+            });
+            const published = await publishing.publish({
+              taskId: context.taskId,
+              repoId: context.repoId,
+              worktree: context.worktree,
+              branch: context.branch,
+              paths: [...context.paths],
+              commitMessage: context.commitMessage,
+              remote: context.remote,
+              lock: context.lock,
+            });
+            return {
+              sha: published.sha,
+              branch: published.branch,
+              remote: published.remote,
+            };
+          },
+        },
+        ciContext,
+        workspaces: workspaceRepository,
+      });
+      const scheduler = new TaskScheduler({
+        tasks: taskRepository,
+        runner: taskRunner,
+        audit: auditRepository,
+        logger,
+      });
       const mcp = await createMcpHttpServer({
         host,
         port,
@@ -67,7 +184,16 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
-      return { logger, mcp };
+      // The scheduler starts only after MCP is ready, so no QUEUED task is
+      // dispatched before the agent can accept submissions. If startup fails
+      // here the MCP server is closed before the database cleanup below.
+      try {
+        scheduler.start();
+      } catch (error) {
+        await mcp.close();
+        throw error;
+      }
+      return { logger, mcp, scheduler };
     });
 
     const exit = options.exit ?? ((code: number) => process.exit(code));
@@ -84,8 +210,14 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       if (closed) return;
       closed = true;
       removeSignalHandlers();
+      // Safety-critical order: stop() synchronously blocks any further
+      // dispatch, then stop accepting submissions, then wait for
+      // already-registered runs (no cancellation, no deadline), and only
+      // then close SQLite.
+      const drained = composed.scheduler.stop();
       mcpReady = false;
       await composed.mcp.close();
+      await drained;
       database.close();
       composed.logger.info('agent stopped');
     };
