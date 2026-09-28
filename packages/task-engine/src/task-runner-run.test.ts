@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { TaskId } from "@gram/domain";
+import type { TaskId, TaskStatus } from "@gram/domain";
 import {
   AuditRepository,
   openDatabase,
@@ -91,6 +91,7 @@ interface RunControls {
   prError?: Error;
   ciOutcome?: TaskCiOutcome;
   ciObserveError?: Error;
+  instructionsError?: Error;
 }
 
 interface RunDeps {
@@ -107,6 +108,9 @@ interface RunDeps {
   prEnsure: PrEnsurePort;
   ciObserve: CiObservePort;
   complete: CompletePort;
+  progress: {
+    transition(taskId: TaskId, from: TaskStatus, to: TaskStatus): Promise<void>;
+  };
 }
 
 const REPO_ID = 84722133;
@@ -122,6 +126,7 @@ function createRunDeps(
   events: RunEvent[],
   calls: RunCalls,
   controls: RunControls = {},
+  transitions: Array<readonly [TaskStatus, TaskStatus]> = [],
 ): RunDeps {
   return {
     audit,
@@ -161,6 +166,7 @@ function createRunDeps(
       load: async () => {
         calls.load += 1;
         events.push("instructions.load");
+        if (controls.instructionsError !== undefined) throw controls.instructionsError;
         return { content: "# instructions", source: "AGENTS.md" };
       },
     },
@@ -227,6 +233,11 @@ function createRunDeps(
       complete: async (): Promise<void> => {
         calls.complete += 1;
         events.push("complete");
+      },
+    },
+    progress: {
+      transition: async (_taskId: TaskId, from: TaskStatus, to: TaskStatus): Promise<void> => {
+        transitions.push([from, to] as const);
       },
     },
   };
@@ -565,5 +576,84 @@ describe("TaskRunner.run", () => {
     expect(calls.complete).toBe(0);
     expect(events.indexOf("lock.release")).toBeLessThan(events.indexOf("pr.ensure"));
     expect(events.indexOf("lock.release")).toBeLessThan(events.indexOf("ci.observe"));
+  });
+
+  it("progresses PREPARING through RUNNING VERIFYING PUBLISHING and completes", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const transitions: Array<readonly [TaskStatus, TaskStatus]> = [];
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {}, transitions);
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await runner.run(fixture.taskId);
+
+    expect(transitions).toEqual([
+      ["PREPARING", "RUNNING"],
+      ["RUNNING", "VERIFYING"],
+      ["VERIFYING", "PUBLISHING"],
+    ]);
+  });
+
+  it("does not request the PREPARING transition already owned by lock acquisition", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const transitions: Array<readonly [TaskStatus, TaskStatus]> = [];
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {}, transitions);
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await runner.run(fixture.taskId);
+
+    const targets: TaskStatus[] = transitions.map(
+      (entry: readonly [TaskStatus, TaskStatus]) => entry[1],
+    );
+    expect(targets).not.toContain("PREPARING");
+    expect(targets).not.toContain("COMPLETED");
+  });
+
+  it("remains VERIFYING when verification reports failure before scheduler classification", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const transitions: Array<readonly [TaskStatus, TaskStatus]> = [];
+    const deps: RunDeps = createRunDeps(
+      fixture.audit,
+      fixture.taskId,
+      events,
+      calls,
+      { verifyPassed: false },
+      transitions,
+    );
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow(/verification failed/i);
+
+    expect(transitions).toEqual([
+      ["PREPARING", "RUNNING"],
+      ["RUNNING", "VERIFYING"],
+    ]);
+  });
+
+  it("leaves the acquired lease held when instruction loading fails", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const transitions: Array<readonly [TaskStatus, TaskStatus]> = [];
+    const loadError: Error = new Error("instructions unavailable");
+    const deps: RunDeps = createRunDeps(
+      fixture.audit,
+      fixture.taskId,
+      events,
+      calls,
+      { instructionsError: loadError },
+      transitions,
+    );
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow("instructions unavailable");
+
+    expect(transitions).toEqual([["PREPARING", "RUNNING"]]);
+    expect(calls.release).toBe(0);
   });
 });

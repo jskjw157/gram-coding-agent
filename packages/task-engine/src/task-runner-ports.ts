@@ -1,4 +1,4 @@
-import type { TaskId } from "@gram/domain";
+import type { TaskId, TaskStatus } from "@gram/domain";
 
 // Typed orchestration DTOs (all readonly) for the task runner vertical slice.
 // These types carry identifiers, paths, and results only. They never carry
@@ -117,6 +117,10 @@ export interface CiObservePort {
 
 export interface CompletePort {
   complete(taskId: TaskId): Promise<void>;
+}
+
+export interface TaskProgressPort {
+  transition(taskId: TaskId, from: TaskStatus, to: TaskStatus): void | Promise<void>;
 }
 
 // Narrow audit port for the task runner repair cycle. Mirrors the

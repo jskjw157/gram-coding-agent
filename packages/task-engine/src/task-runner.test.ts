@@ -120,6 +120,9 @@ function createOptions(audit: AuditRepository, calls: Calls, fake: FakeOptions =
         return fake.ciOutcome ?? 'SUCCESS';
       },
     },
+    progress: {
+      transition: async () => {},
+    },
   };
 }
 

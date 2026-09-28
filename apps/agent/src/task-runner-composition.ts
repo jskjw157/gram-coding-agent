@@ -24,6 +24,7 @@ import {
   type RepairCycleWorkspacePort,
   type RepoFetchPort,
   type RepoResolvePort,
+  type TaskProgressPort,
   type VerifyPort,
   type WorkspaceCreatePort,
 } from '@gram/task-engine';
@@ -81,6 +82,15 @@ export interface CompositionRepoProfile {
 /** Structural subset of RepoResolver.resolve output. */
 export interface CompositionRepoProfiles {
   resolve(selector: string): Promise<CompositionRepoProfile>;
+  /**
+   * Binds a selector-only task to its repository before lock acquisition.
+   * `LockRepository.acquireAndPrepare` only transitions a task whose stored
+   * `repo_id` already matches, and MCP-created tasks carry `repo_id = NULL`
+   * with only `repo_selector` set — so the binding must happen first.
+   * Providers without a real binder (absent here) fall back to plain
+   * selector resolution and stay unbound.
+   */
+  resolveAndBind?(taskId: TaskId): Promise<CompositionRepoProfile>;
 }
 
 /** Structural subset of RepoLockService. */
@@ -274,6 +284,17 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
         adapter,
         'repository discovery (RepoResolver) is not wired in the agent composition root',
       );
+    }
+    // Guarded repository binding: a selector-only task must be bound to the
+    // resolved repository BEFORE any lock acquisition, because
+    // LockRepository.acquireAndPrepare only transitions tasks whose stored
+    // repo_id already matches. The binding resolver owns the read of the
+    // task's own selector plus the persistent bind, so prefer it whenever
+    // the injected profiles provide one.
+    const repoProfiles = options.repos;
+    if (typeof repoProfiles.resolveAndBind === 'function') {
+      const profile = await repoProfiles.resolveAndBind(taskId);
+      return { stored, profile };
     }
     const selector = stored.repoSelector;
     if (selector === null || selector.trim().length === 0) {
@@ -550,8 +571,30 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       },
     };
 
-  const workspaces: RepairCycleWorkspacePort = {
-    reuse: async (taskId) => {
+  // Progress reporting backed by the persistence-backed store transition
+  // (TaskRepository.transition), i.e. a guarded compare-and-swap on the
+  // exact `from` status. run() requests PREPARING->RUNNING,
+  // RUNNING->VERIFYING, and VERIFYING->PUBLISHING; it never requests
+  // PREPARING (LockRepository.acquireAndPrepare owns that) nor COMPLETED
+  // (the complete port owns that). The write fires only from the exact
+  // expected state: when the store holds the task in a different state
+  // (an out-of-band owner such as lock acquisition, or a test double that
+  // does not model it), the adapter performs no write rather than forcing
+  // a transition from a state it did not observe — state is left untouched.
+  const progress: TaskProgressPort = {
+    transition: (taskId, from, to) => {
+      const stored = tasks.get(taskId);
+      if (stored === null) {
+        throw new TaskRunnerConfigurationError('Progress', `task not found: ${taskId}`);
+      }
+      if (stored.status !== from) {
+        return;
+      }
+      tasks.transition(taskId, from, to);
+    },
+  };
+
+  const workspaces: RepairCycleWorkspacePort = {    reuse: async (taskId) => {
       if (options.workspaces === undefined) {
         throw new TaskRunnerConfigurationError(
           'RepairWorkspaces',
@@ -642,5 +685,6 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
     prEnsure,
     ciObserve,
     complete,
+    progress,
   });
 }

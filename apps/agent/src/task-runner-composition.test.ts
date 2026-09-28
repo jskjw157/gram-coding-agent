@@ -55,6 +55,10 @@ interface Controls {
   prError?: Error;
   ciOutcome?: 'SUCCESS' | 'FAILURE' | 'PENDING';
   omitInstructions?: boolean;
+  omitAnalyze?: boolean;
+  omitModify?: boolean;
+  omitRepairMutations?: boolean;
+  omitHeadSha?: boolean;
   useDefaultComplete?: boolean;
   initialStatus?: TaskStatus;
   currentHeadSha?: string;
@@ -173,7 +177,7 @@ function createHarness(controls: Controls = {}) {
   const publishCalls: string[] = [];
   const publishedPaths: Array<readonly string[]> = [];
   let statusCalls = 0;
-  const git = {
+  const gitBase = {
     fetch: async () => {
       events.push('repo.fetch');
     },
@@ -181,22 +185,23 @@ function createHarness(controls: Controls = {}) {
       statusCalls += 1;
       return { entries: controls.statusEntries ?? [{ path: 'src/app.ts' }] };
     },
-    headSha: async (worktree: string) => {
-      expect(worktree).toBe('/wt/mamf-web');
-      if (controls.headShaSequence !== undefined && controls.headShaSequence.length > 0) {
-        const sha =
-          controls.headShaSequence[
-            Math.min(headShaIndex, controls.headShaSequence.length - 1)
-          ] ?? SHA;
-        headShaIndex += 1;
-        headShaCalls.push(sha);
-        return sha;
-      }
-      const sha = controls.currentHeadSha ?? SHA;
+  };
+  const headSha = async (worktree: string) => {
+    expect(worktree).toBe('/wt/mamf-web');
+    if (controls.headShaSequence !== undefined && controls.headShaSequence.length > 0) {
+      const sha =
+        controls.headShaSequence[
+          Math.min(headShaIndex, controls.headShaSequence.length - 1)
+        ] ?? SHA;
+      headShaIndex += 1;
       headShaCalls.push(sha);
       return sha;
-    },
+    }
+    const sha = controls.currentHeadSha ?? SHA;
+    headShaCalls.push(sha);
+    return sha;
   };
+  const git = controls.omitHeadSha === true ? gitBase : { ...gitBase, headSha };
 
   const worktrees = {
     create: async (input: { taskId: TaskId; branch: string; baseRef: string }) => {
@@ -207,23 +212,28 @@ function createHarness(controls: Controls = {}) {
     },
   };
 
-  const capabilities: Record<string, unknown> = {
-    analyze: {
+  const capabilities: Record<string, unknown> = {};
+  if (controls.omitAnalyze !== true) {
+    capabilities['analyze'] = {
       analyze: async () => {
         events.push('analyze');
         return { summary: 'fix excel url', files: ['src/app.ts'] };
       },
-    },
-    modify: {
+    };
+  }
+  if (controls.omitModify !== true) {
+    capabilities['modify'] = {
       modify: async () => {
         events.push('modify');
         return { sha: SHA };
       },
-    },
-    repairMutations: {
+    };
+  }
+  if (controls.omitRepairMutations !== true) {
+    capabilities['repairMutations'] = {
       repair: async () => undefined,
-    },
-  };
+    };
+  }
   if (controls.omitInstructions !== true) {
     capabilities['instructions'] = {
       load: async () => {
@@ -761,5 +771,234 @@ describe('task-runner composition', () => {
     expect(publishedPaths).toHaveLength(1);
     expect(publishedPaths[0]).toEqual([DELETED]);
     expect(publishedPaths[0]).not.toContain('src/unrelated.ts');
+  });
+
+  it('binds a selector-only task to the resolved repository before lock acquisition', async () => {
+    const order: string[] = [];
+    const boundTasks: TaskId[] = [];
+    let status: TaskStatus = 'QUEUED';
+
+    const tasks = {
+      get: (id: TaskId) =>
+        id === TASK_ID
+          ? {
+              id: TASK_ID,
+              seq: 201,
+              goal: 'Fix Excel download URL',
+              repoSelector: 'mamf-web',
+              status,
+              taskType: 'CODING',
+            }
+          : null,
+      transition: (id: TaskId, from: TaskStatus, to: TaskStatus) => {
+        if (id !== TASK_ID) throw new Error(`unknown task: ${id}`);
+        if (status !== from) {
+          throw new Error(`unexpected transition ${status} -> ${to}`);
+        }
+        status = to;
+      },
+    };
+    const audit = { append: () => undefined };
+    const profile = {
+      githubRepositoryId: REPO_ID,
+      owner: 'acme',
+      name: 'mamf-web',
+      defaultBranch: 'main',
+      localBasePath: '/base/mamf-web',
+    };
+    const repos = {
+      resolve: async (selector: string) => {
+        order.push('resolve');
+        expect(selector).toBe('mamf-web');
+        return profile;
+      },
+      resolveAndBind: async (taskId: TaskId) => {
+        order.push('bind');
+        boundTasks.push(taskId);
+        return profile;
+      },
+    };
+    const locks = {
+      acquire: async (repoId: number, taskId: TaskId) => {
+        expect(repoId).toBe(REPO_ID);
+        expect(taskId).toBe(TASK_ID);
+        order.push('lock.acquire');
+        return {
+          release: async () => {
+            order.push('lock.release');
+          },
+        };
+      },
+    };
+    const git = {
+      fetch: async () => undefined,
+      status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+      headSha: async () => SHA,
+    };
+    const worktrees = {
+      create: async (input: { taskId: TaskId; branch: string; baseRef: string }) => ({
+        linuxPath: '/wt/mamf-web',
+        branch: input.branch,
+      }),
+    };
+    const capabilities = {
+      instructions: {
+        load: async () => ({ content: '# instructions', source: 'AGENTS.md' }),
+      },
+      analyze: {
+        analyze: async () => ({ summary: 'fix excel url', files: ['src/app.ts'] }),
+      },
+      modify: {
+        modify: async () => ({ sha: SHA }),
+      },
+      repairMutations: { repair: async () => undefined },
+    };
+    const verification = {
+      requiredChecksPassed: async () => true,
+      listApprovedPaths: async () => ['src/app.ts'],
+    };
+    const publishing = {
+      publish: async (context: {
+        taskId: TaskId;
+        branch: string;
+        remote: string;
+        lock: { release(): Promise<void> };
+      }) => {
+        await context.lock.release();
+        return { sha: SHA, branch: context.branch, remote: context.remote };
+      },
+    };
+    const pullRequests = {
+      ensureForTask: async () => ({ number: 7, url: 'https://example.com/pr/7' }),
+    };
+    const checks = {
+      client: { listRequiredChecks: async () => successSnapshots() },
+      persistence: { upsertCheck: () => undefined },
+      delay: { wait: async () => undefined },
+    };
+    const ciContext = {
+      resolve: async (taskId: TaskId) => ({
+        taskId,
+        pullRequestId: 1,
+        owner: 'acme',
+        name: 'mamf-web',
+        number: 7,
+        headSha: SHA,
+        baseBranch: 'main',
+      }),
+    };
+    const workspaces = {
+      getByTaskId: (taskId: TaskId) => {
+        if (taskId !== TASK_ID) return undefined;
+        return { linuxPath: '/wt/mamf-web', branch: 'fix/task-000201-fix-excel-download-url' };
+      },
+    };
+    const remote = {
+      push: async () => SHA,
+      confirmRemoteSha: async () => true,
+    };
+    const complete = {
+      complete: async (taskId: TaskId) => {
+        const current = tasks.get(taskId);
+        if (current === null) throw new Error(`unknown task: ${taskId}`);
+        if (current.status === 'COMPLETED') return;
+        tasks.transition(taskId, current.status, 'COMPLETED');
+      },
+    };
+
+    const runner = createTaskRunner({
+      audit,
+      tasks,
+      repos,
+      locks,
+      git,
+      worktrees,
+      verification,
+      publishing,
+      pullRequests,
+      checks,
+      ciContext,
+      capabilities,
+      workspaces,
+      remote,
+      complete,
+    } as never);
+
+    // Capture the outcome so the order assertions below evaluate even while
+    // the composition is still RED; the final assertion still requires the
+    // run itself to succeed.
+    const outcome = await runner.run(TASK_ID).then(
+      () => 'ok',
+      (error: unknown) => error,
+    );
+
+    const bindIndex = order.indexOf('bind');
+    const lockIndex = order.indexOf('lock.acquire');
+    expect(boundTasks.length).toBeGreaterThan(0);
+    expect(boundTasks.every((id) => id === TASK_ID)).toBe(true);
+    expect(bindIndex).toBeGreaterThanOrEqual(0);
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(bindIndex).toBeLessThan(lockIndex);
+    expect(outcome).toBe('ok');
+    expect(tasks.get(TASK_ID)?.status).toBe('COMPLETED');
+  });
+
+  it('keeps every deferred capability typed and fail closed without claiming downstream success', async () => {
+    const instructionsHarness = createHarness({ omitInstructions: true });
+    const instructionsError = await instructionsHarness.runner
+      .run(TASK_ID)
+      .catch((e: unknown) => e);
+    expect(instructionsError).toBeInstanceOf(TaskRunnerConfigurationError);
+    expect((instructionsError as TaskRunnerConfigurationError).adapter).toBe('Instructions');
+    expect(instructionsHarness.events).not.toContain('analyze');
+    expect(instructionsHarness.events).not.toContain('commit');
+    expect(instructionsHarness.events).not.toContain('complete');
+
+    const analyzeHarness = createHarness({ omitAnalyze: true });
+    const analyzeError = await analyzeHarness.runner.run(TASK_ID).catch((e: unknown) => e);
+    expect(analyzeError).toBeInstanceOf(TaskRunnerConfigurationError);
+    expect((analyzeError as TaskRunnerConfigurationError).adapter).toBe('Analyze');
+    expect(analyzeHarness.events).not.toContain('modify');
+    expect(analyzeHarness.events).not.toContain('commit');
+    expect(analyzeHarness.events).not.toContain('complete');
+
+    const modifyHarness = createHarness({ omitModify: true });
+    const modifyError = await modifyHarness.runner.run(TASK_ID).catch((e: unknown) => e);
+    expect(modifyError).toBeInstanceOf(TaskRunnerConfigurationError);
+    expect((modifyError as TaskRunnerConfigurationError).adapter).toBe('Modify');
+    expect(modifyHarness.events).not.toContain('verify');
+    expect(modifyHarness.events).not.toContain('commit');
+    expect(modifyHarness.events).not.toContain('complete');
+
+    const repairHarness = createHarness({ omitRepairMutations: true });
+    const repairEvents: string[] = [];
+    const repairError = await repairHarness.runner
+      .runRepairCycle(
+        {
+          taskId: TASK_ID,
+          repoId: REPO_ID,
+          branch: 'fix/task-000201-fix-excel-download-url',
+          remote: 'origin',
+          ciOutcome: 'FAILURE',
+        },
+        (event) => {
+          repairEvents.push(event);
+        },
+      )
+      .catch((e: unknown) => e);
+    expect(repairError).toBeInstanceOf(TaskRunnerConfigurationError);
+    expect((repairError as TaskRunnerConfigurationError).adapter).toBe('RepairMutations');
+    expect(repairEvents).not.toContain('verify');
+    expect(repairEvents).not.toContain('ci.observe');
+    expect(repairHarness.auditEvents).not.toContain('REPAIR_CYCLE_COMPLETED');
+
+    const headHarness = createHarness({ omitHeadSha: true });
+    const headError = await headHarness.runner.run(TASK_ID).catch((e: unknown) => e);
+    expect(headError).toBeInstanceOf(TaskRunnerConfigurationError);
+    expect((headError as TaskRunnerConfigurationError).adapter).toBe('Verify');
+    expect((headError as Error).message).toMatch(/HEAD|rev-parse|not configured/);
+    expect(headHarness.events).not.toContain('commit');
+    expect(headHarness.events).not.toContain('pr.ensure');
+    expect(headHarness.events).not.toContain('complete');
   });
 });

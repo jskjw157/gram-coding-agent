@@ -10,6 +10,7 @@ import type {
   RepoFetchPort,
   RepoResolvePort,
   TaskAuditPort,
+  TaskProgressPort,
   VerifyPort,
   WorkspaceCreatePort,
 } from './task-runner-ports.js';
@@ -80,6 +81,7 @@ export interface TaskRunnerOptions {
   prEnsure?: PrEnsurePort;
   ciObserve?: CiObservePort;
   complete?: CompletePort;
+  progress: TaskProgressPort;
 }
 
 export interface RepairCycleInput {
@@ -142,11 +144,13 @@ export class TaskRunner {
     const prEnsurePort = requireRunPort(this.options.prEnsure, 'prEnsure');
     const ciObservePort = requireRunPort(this.options.ciObserve, 'ciObserve');
     const completePort = requireRunPort(this.options.complete, 'complete');
+    const progressPort = requireRunPort(this.options.progress, 'progress');
 
     const resolved = await repoResolve.resolve(taskId);
     const lease = await this.options.locks.acquire(resolved.repoId, taskId);
     await repoFetch.fetch(resolved);
     const workspace = await workspaceCreate.create(taskId);
+    await progressPort.transition(taskId, 'PREPARING', 'RUNNING');
     const instructions = await instructionsPort.load(workspace);
     const analysis = await analyzePort.analyze({
       task: resolved,
@@ -154,10 +158,12 @@ export class TaskRunner {
       instructions,
     });
     await modifyPort.modify({ task: resolved, workspace, analysis });
+    await progressPort.transition(taskId, 'RUNNING', 'VERIFYING');
     const verification = await verifyPort.verify(taskId);
     if (!verification.passed) {
       throw new VerificationFailedError(taskId, verification.output);
     }
+    await progressPort.transition(taskId, 'VERIFYING', 'PUBLISHING');
     const published = await publishPort.publish(resolved, workspace, verification, lease);
     await prEnsurePort.ensure(resolved, published);
     const outcome = await ciObservePort.observe(taskId);
