@@ -59,4 +59,62 @@ describe('GitCommitRepository publishing state', () => {
       remoteConfirmedAt: '2026-09-22T01:01:00.000Z',
     });
   });
+
+  it('returns the latest persisted commit for task CI context', () => {
+    const db = openDatabase(':memory:');
+    databases.push(db);
+    runMigrations(db);
+
+    new RepositoryRepository(db).upsert({
+      githubRepositoryId: 84722133,
+      owner: 'company',
+      name: 'web',
+      defaultBranch: 'main',
+      localBasePath: '/workspace/company/web',
+    });
+    const taskRepo = new TaskRepository(db);
+    const task = taskRepo.create({
+      goal: 'publish verified change',
+      taskType: 'CODING',
+      publishMode: 'PULL_REQUEST',
+      repoId: 84722133,
+    });
+    const otherTask = taskRepo.create({
+      goal: 'other task',
+      taskType: 'CODING',
+      publishMode: 'PULL_REQUEST',
+      repoId: 84722133,
+    });
+
+    const commits = new GitCommitRepository(db);
+    commits.recordCommit({
+      taskId: task.id,
+      repoId: 84722133,
+      sha: 'b'.repeat(40),
+      branch: 'feat/task-ci-context',
+      remoteName: 'origin',
+      createdAt: '2026-09-22T01:00:00.000Z',
+    });
+    commits.recordCommit({
+      taskId: task.id,
+      repoId: 84722133,
+      sha: 'c'.repeat(40),
+      branch: 'feat/task-ci-context',
+      remoteName: 'origin',
+      createdAt: '2026-09-22T01:01:00.000Z',
+    });
+    commits.recordCommit({
+      taskId: otherTask.id,
+      repoId: 84722133,
+      sha: 'd'.repeat(40),
+      branch: 'feat/other-task',
+      remoteName: 'origin',
+      createdAt: '2026-09-22T01:02:00.000Z',
+    });
+
+    const latest = commits.getLatestForTask(task.id);
+    expect(latest?.sha).toBe('c'.repeat(40));
+    expect(latest?.sha).not.toBe('d'.repeat(40));
+    expect(commits.getLatestForTask('TASK-999999')).toBeUndefined();
+  });
 });

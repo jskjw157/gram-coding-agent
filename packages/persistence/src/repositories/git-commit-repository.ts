@@ -90,6 +90,13 @@ export class GitCommitRepository {
     }
   }
 
+  getLatestForTask(taskId: TaskId): StoredGitCommit | undefined {
+    const row = this.db
+      .prepare('SELECT * FROM git_commits WHERE task_id = ? ORDER BY id DESC LIMIT 1')
+      .get(taskId) as GitCommitRow | undefined;
+    return row === undefined ? undefined : decode(row);
+  }
+
   get(id: number): StoredGitCommit | undefined {
     const row = this.db
       .prepare('SELECT * FROM git_commits WHERE id = ?')
