@@ -21,12 +21,15 @@ async function connected(port: number) {
 }
 async function fixture(handler?: (req: IncomingMessage, res: ServerResponse) => void) {
   let bytes = 0; let accepted = 0; const requests: IncomingMessage[] = [];
+  let firstConnection: () => void = () => {};
+  const acceptedOnce = new Promise<void>(resolve => { firstConnection = resolve; });
   const server = createServer((req, res) => { requests.push(req); if (handler) handler(req, res);
     else { res.setHeader('content-type', 'application/json'); res.end('{}'); } }); servers.push(server);
-  server.on('connection', socket => { sockets.push(socket); accepted++; socket.on('data', chunk => { bytes += chunk.length; }); });
+  server.on('connection', socket => { sockets.push(socket); accepted++; firstConnection();
+    socket.on('data', chunk => { bytes += chunk.length; }); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('fixture address');
-  return { port: address.port, requests, bytes: () => bytes, accepted: () => accepted };
+  return { port: address.port, requests, bytes: () => bytes, accepted: () => accepted, acceptedOnce };
 }
 afterEach(async () => { for (const socket of sockets.splice(0)) socket.destroy();
   for (const server of servers.splice(0)) await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); });
@@ -65,7 +68,7 @@ describe('same-socket credential boundary (synthetic verifier, not native owners
   it('does not reconnect when the checked socket dies during credential acquisition', async () => {
     const f = await fixture(); const socket = await connected(f.port);
     const c = await bindOwnedConnection(socket, child(), verifier(), signal()); if (!c) throw new Error('binding');
-    await new Promise(resolve => setImmediate(resolve));
+    await f.acceptedOnce;
     expect(f.accepted()).toBe(1);
     const cdt: CoreCredentials = { async withValue(use) { socket.destroy(); return use(secret); } };
     await expect(c.request('initialize', cdt, undefined, signal())).rejects.toThrow(/^HEALTH_UNKNOWN$/);
