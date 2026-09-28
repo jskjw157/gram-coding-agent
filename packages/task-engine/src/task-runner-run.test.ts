@@ -85,9 +85,12 @@ interface RunControls {
   verifyError?: Error;
   verifyPassed?: boolean;
   publishError?: Error;
+  pushError?: Error;
+  confirmError?: Error;
   confirmResult?: boolean;
   prError?: Error;
   ciOutcome?: TaskCiOutcome;
+  ciObserveError?: Error;
 }
 
 interface RunDeps {
@@ -190,8 +193,12 @@ function createRunDeps(
         if (controls.publishError !== undefined) throw controls.publishError;
         calls.push += 1;
         events.push("push");
+        if (controls.pushError !== undefined) throw controls.pushError;
+
         calls.confirm += 1;
         events.push("remote.confirm");
+        if (controls.confirmError !== undefined) throw controls.confirmError;
+
         const confirmed: boolean = controls.confirmResult ?? true;
         if (!confirmed) {
           throw new Error(`remote confirm failed: ${REMOTE} ${BRANCH} ${SHA}`);
@@ -212,6 +219,7 @@ function createRunDeps(
       observe: async () => {
         calls.observe += 1;
         events.push("ci.observe");
+        if (controls.ciObserveError !== undefined) throw controls.ciObserveError;
         return controls.ciOutcome ?? "SUCCESS";
       },
     },
@@ -459,5 +467,103 @@ describe("TaskRunner.run", () => {
     expect(calls.observe).toBe(1);
     expect(calls.complete).toBe(0);
     expect(events).not.toContain("complete");
+  });
+
+  it("leaves the lease held when push fails", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {
+      pushError: new Error("push failed"),
+    });
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow("push failed");
+
+    expect(events).toEqual([
+      "repo.resolve",
+      "lock.acquire",
+      "repo.fetch",
+      "workspace.create",
+      "instructions.load",
+      "analyze",
+      "modify",
+      "verify",
+      "commit",
+      "push",
+    ]);
+    expect(calls.push).toBe(1);
+    expect(calls.confirm).toBe(0);
+    expect(calls.release).toBe(0);
+    expect(calls.pr).toBe(0);
+    expect(calls.observe).toBe(0);
+    expect(calls.complete).toBe(0);
+  });
+
+  it("leaves the lease held when remote confirmation throws", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {
+      confirmError: new Error("remote confirmation timed out"),
+    });
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow("remote confirmation timed out");
+
+    expect(events).toEqual([
+      "repo.resolve",
+      "lock.acquire",
+      "repo.fetch",
+      "workspace.create",
+      "instructions.load",
+      "analyze",
+      "modify",
+      "verify",
+      "commit",
+      "push",
+      "remote.confirm",
+    ]);
+    expect(calls.push).toBe(1);
+    expect(calls.confirm).toBe(1);
+    expect(calls.release).toBe(0);
+    expect(calls.pr).toBe(0);
+    expect(calls.observe).toBe(0);
+    expect(calls.complete).toBe(0);
+  });
+
+  it("keeps the lease released when CI observation times out", async () => {
+    const fixture = await openFixtureTaskId();
+    const events: RunEvent[] = [];
+    const calls: RunCalls = createRunCalls();
+    const deps: RunDeps = createRunDeps(fixture.audit, fixture.taskId, events, calls, {
+      ciObserveError: new Error("CI observation timed out"),
+    });
+    const runner: TaskRunner = createRunner(fixture.audit, deps);
+
+    await expect(runner.run(fixture.taskId)).rejects.toThrow("CI observation timed out");
+
+    expect(events).toEqual([
+      "repo.resolve",
+      "lock.acquire",
+      "repo.fetch",
+      "workspace.create",
+      "instructions.load",
+      "analyze",
+      "modify",
+      "verify",
+      "commit",
+      "push",
+      "remote.confirm",
+      "lock.release",
+      "pr.ensure",
+      "ci.observe",
+    ]);
+    expect(calls.release).toBe(1);
+    expect(calls.pr).toBe(1);
+    expect(calls.observe).toBe(1);
+    expect(calls.complete).toBe(0);
+    expect(events.indexOf("lock.release")).toBeLessThan(events.indexOf("pr.ensure"));
+    expect(events.indexOf("lock.release")).toBeLessThan(events.indexOf("ci.observe"));
   });
 });
