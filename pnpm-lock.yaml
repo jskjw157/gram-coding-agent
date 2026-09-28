@@ -65,6 +65,9 @@ importers:
       '@gram/secrets':
         specifier: workspace:*
         version: link:../../packages/secrets
+      '@gram/shell':
+        specifier: workspace:*
+        version: link:../../packages/shell
       '@gram/task-engine':
         specifier: workspace:*
         version: link:../../packages/task-engine
@@ -80,7 +83,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/domain:
     dependencies:
@@ -93,7 +96,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/filesystem:
     dependencies:
@@ -109,7 +112,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/git:
     dependencies:
@@ -125,7 +128,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/github:
     dependencies:
@@ -144,7 +147,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/mcp:
     dependencies:
@@ -163,7 +166,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/observability:
     dependencies:
@@ -176,7 +179,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/persistence:
     dependencies:
@@ -195,7 +198,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/policy:
     dependencies:
@@ -208,7 +211,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/publishing:
     dependencies:
@@ -224,7 +227,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/repo-lock:
     dependencies:
@@ -240,7 +243,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/repo-registry:
     dependencies:
@@ -253,7 +256,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/secrets:
     devDependencies:
@@ -262,7 +265,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/shell:
     dependencies:
@@ -284,7 +287,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/task-engine:
     dependencies:
@@ -300,7 +303,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/verification:
     dependencies:
@@ -316,7 +319,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
   packages/workspace:
     dependencies:
@@ -332,7 +335,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: ^5.0.0
-        version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
+        version: 5.0.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
 
 packages:
 
@@ -1498,23 +1501,14 @@ snapshots:
       '@typescript-eslint/types': 8.70.1
       eslint-visitor-keys: 5.0.1
 
-  '@vitest/mocker@5.0.0(vite@8.3.0(@types/node@26.6.1))':
+  '@vitest/mocker@5.0.0(vite@8.3.0(@types/node@26.6.2))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.0
       estree-walker: 3.0.3
       magic-string: 1.4.1
     optionalDependencies:
-      vite: 8.3.0(@types/node@26.6.1)
-
-  '@vitest/mocker@5.0.1(vite@8.3.0(@types/node@26.6.1))':
-    dependencies:
-      '@jridgewell/trace-mapping': 0.3.31
-      '@vitest/spy': 5.0.1
-      estree-walker: 3.0.3
-      magic-string: 1.4.1
-    optionalDependencies:
-      vite: 8.3.0(@types/node@26.6.1)
+      vite: 8.3.0(@types/node@26.6.2)
 
   '@vitest/mocker@5.0.1(vite@8.3.0(@types/node@26.6.2))':
     dependencies:
@@ -1910,17 +1904,6 @@ snapshots:
 
   uuid@13.0.2: {}
 
-  vite@8.3.0(@types/node@26.6.1):
-    dependencies:
-      lightningcss: 1.33.0
-      picomatch: 4.0.7
-      postcss: 8.5.28
-      rolldown: 1.2.8
-      tinyglobby: 0.2.17
-    optionalDependencies:
-      '@types/node': 26.6.1
-      fsevents: 2.3.3
-
   vite@8.3.0(@types/node@26.6.2):
     dependencies:
       lightningcss: 1.33.0
@@ -1932,10 +1915,10 @@ snapshots:
       '@types/node': 26.6.2
       fsevents: 2.3.3
 
-  vitest@5.0.0(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1)):
+  vitest@5.0.0(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.0(vite@8.3.0(@types/node@26.6.1))
+      '@vitest/mocker': 5.0.0(vite@8.3.0(@types/node@26.6.2))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -1946,31 +1929,10 @@ snapshots:
       tinybench: 6.1.4
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
-      vite: 8.3.0(@types/node@26.6.1)
+      vite: 8.3.0(@types/node@26.6.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
-      '@types/node': 26.6.1
-    transitivePeerDependencies:
-      - msw
-
-  vitest@5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1)):
-    dependencies:
-      '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.1(vite@8.3.0(@types/node@26.6.1))
-      chai: 6.2.2
-      es-module-lexer: 2.3.2
-      expect-type: 1.4.0
-      magic-string: 1.4.1
-      obug: 2.2.1
-      picomatch: 4.0.7
-      std-env: 4.2.0
-      tinybench: 6.1.4
-      tinyexec: 1.3.0
-      tinyglobby: 0.2.17
-      vite: 8.3.0(@types/node@26.6.1)
-      why-is-node-running: 2.3.0
-    optionalDependencies:
-      '@types/node': 26.6.1
+      '@types/node': 26.6.2
     transitivePeerDependencies:
       - msw
 

@@ -11,6 +11,7 @@ export default defineConfig({
       '@gram/persistence': new URL('../../packages/persistence/src/index.ts', import.meta.url).pathname,
       '@gram/policy': new URL('../../packages/policy/src/index.ts', import.meta.url).pathname,
       '@gram/secrets': new URL('../../packages/secrets/src/index.ts', import.meta.url).pathname,
+      '@gram/shell': new URL('../../packages/shell/src/index.ts', import.meta.url).pathname,
     },
   },
 });

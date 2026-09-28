@@ -21,6 +21,7 @@
     "@gram/repo-lock": "workspace:*",
     "@gram/repo-registry": "workspace:*",
     "@gram/secrets": "workspace:*",
+    "@gram/shell": "workspace:*",
     "@gram/task-engine": "workspace:*",
     "@gram/verification": "workspace:*",
     "@gram/workspace": "workspace:*"
