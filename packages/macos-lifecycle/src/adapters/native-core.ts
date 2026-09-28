@@ -163,9 +163,16 @@ export function createNativeCorePort(options: NativeCoreOptions = {}): Superviso
         custody = takeCustody(launch(coreLaunchPlan(config)), grant.proof);
         const c = custody;
         await c.spawned;
+        if (c.raw.pid === undefined || !Number.isSafeInteger(c.raw.pid) || c.raw.pid < 1) {
+          if (!c.exited) await c.exit;
+          startFailed();
+        }
+        // Narrow only after the spawn event and explicit PID validation. Retain
+        // the original live object, not a spread/snapshot of its exit properties.
+        const liveHandle = c.raw as ChildProcess & { pid: number };
         // A short independent seal attempt permits cleanup even when the caller
         // cancelled immediately after the OS created the process.
-        try { c.seal = await within(2000, undefined, s => sealMacOwnedChild(c.raw, {
+        try { c.seal = await within(2000, undefined, s => sealMacOwnedChild(liveHandle, {
           role: 'core', uid: grant.account.uid, generation, releaseDigest: config.releaseDigest,
           executable: grant.executable,
         }, c.proof, s)); } catch { c.seal = null; }
