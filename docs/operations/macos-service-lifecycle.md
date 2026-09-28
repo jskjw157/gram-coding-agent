@@ -1,127 +1,161 @@
-# MAC-02 Service Lifecycle — Owned-Connection Health Components
+# MAC-02 Service Lifecycle — Supervisor State-Machine Checkpoint
 
-**Updated:** 2026-09-23 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Task 4 native owned-peer/authenticated-health components are exact-head CI verified; the service is still not deployable or independently reviewed.  
-**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft and unmerged.  
-**Verified exact-head code/test checkpoint:** `40d9dfbbf6a2aa8dd924d95bb2e09779ddac1d8d`.  
-**Resume baseline:** `ef0d31c80cb6ed5f387afd5428349c988cd7414f`.  
+**Updated:** 2026-09-28 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. State-machine components are tested; this is not an installed or deployable service.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified final code/test checkpoint:** `bd3234baa51cc4dd3c9dc238822ffef0772bdadb`.  
+**Product implementation checkpoint:** `2b3999721b502b54d935437bd8a4ca377617d433`.  
+**Continuation baseline:** `1fe69afb42638d4e173bb580d6c8f9a36381a79d` (Task 5 scaffold and nine tests).  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
 **Merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
 
-## 1. Actual progress and immediate gate
+## 1. Actual progress and next boundary
 
 | Task | Actual state |
 |---|---|
-| Task 1 | Strict LAB_ONLY configuration and fixed plist renderer implemented |
-| Task 2 | Native inspection/static identity/preview components exist; independent ACL-helper provenance, fixed-root acceptance and live identity remain gated |
-| Task 3 | Restart history, private persistence, safe status/events/log rotation and discard-only output components exist; production bindings, current-owner enforcement, abandoned locks and supervisor integration remain open |
-| Task 4 | Authenticated health, same-socket transport, live-process sealing and native libproc accepted-peer verification are component-implemented and exact-head CI verified; supervisor spawn/registration/stop wiring remains Task 5 |
-| Tasks 5–7 | Supervisor, admin install/rollback/uninstall, runnable CLI and sealed packaging not implemented |
-| Task 8 | Component tests exist; full installed lifecycle, independent review and user-device acceptance remain incomplete |
+| Task 1 | Strict LAB_ONLY configuration and fixed plist rendering implemented |
+| Task 2 | Native/static preflight components exist; independently trusted helper provisioning, real fixed-root acceptance and installed live ownership remain gates |
+| Task 3 | Restart history, safe status/events, bounded logs and discard-only output components implemented; production directory binding, abandoned locks and process integration remain gates |
+| Task 4 | Existing native process/accepted-peer and authenticated-health components retained; they are not recreated by this change |
+| Task 5 | Core/tunnel orchestration implemented with real lifecycle/telemetry stores and controlled process/clock fixtures; actual launch/stop/credential/environment/output bindings and runnable CLI are not implemented |
+| Tasks 6–7 | Administrative installation, rollback, uninstall, local controls and sealed packaging remain unimplemented |
+| Task 8 | Component CI exists; independent review, installed lifecycle/reboot and user-device acceptance remain incomplete |
 
-**Immediate resume:** begin Task 5 supervisor state-machine work from the verified Task 4 ports. The supervisor must create and retain the actual ChildProcess handle, seal its start/UID/executable identity, compose the native accepted-peer verifier and never substitute PID/port/persisted status for live ownership. Keep Task 2 helper provenance/fixed-root and Task 3 production-binding/abandoned-lock gates open.
+**Next implementation:** bind the Task 5 supervisor to narrowly scoped native process ports, starting with tests for fixed executable/arguments/environment, actual child identity and confirmed stop. Reuse `supervisor.ts`, Task 4 ownership/health and Task 3 persistence/output. Do not implement them again or treat callback types as trusted installation evidence.
 
-No `supervisor-cli.js` exists. Generated plists remain **NOT DEPLOYABLE**. No real credential, account, Keychain entry, OS permission, tunnel or storefront was provisioned. MAC-03–05 documents remain separate at `31e66aa21b705b1793f11122c1b12d5ebf41715c`; none was implemented or edited here.
+There is still no `supervisor-cli.js`. Generated plists are **NOT DEPLOYABLE**. This workflow does not install services, create accounts, use live tunnel/store credentials, configure Keychain/TCC/FileVault/SSH or merge branches. MAC-03–05 documents remain separate at `31e66aa21b705b1793f11122c1b12d5ebf41715c`.
 
-## 2. New modules and interfaces
+This runbook is the current handoff. Full earlier implementation and verification records are preserved in the immutable baseline document:
+https://github.com/jskjw157/gram-coding-agent/blob/1fe69afb42638d4e173bb580d6c8f9a36381a79d/docs/operations/macos-service-lifecycle.md
 
-Two product files under `packages/macos-lifecycle/src/`:
+## 2. Implemented supervisor component
 
-- `health-probe.ts`: closed child-claim validation, bounded protocol responses, health/tool-surface evaluation and generation-bound evidence.
-- `adapters/loopback-http.ts`: paused local socket, verifier ordering, one fixed HTTP exchange per checked socket, bounded response collection and cleanup.
+`packages/macos-lifecycle/src/supervisor.ts` now implements `runSupervisor(role, config, deps, signal)` and `dependencyDelayMs(attempt)` instead of throwing NOT_IMPLEMENTED.
 
-Three test files add 52 Vitest cases: `health-probe.test.ts` (29), `adapters/loopback-http.test.ts` (20), `adapters/loopback-races.test.ts` (3). This is a count of tests written, **not 52 final tests verified passing**.
+The normalized configuration and nested tunnel configuration are detached from input and frozen before crossing any dependency boundary. Only existing LAB_ONLY configuration is accepted. Invalid configuration idles without consulting process/credential ports. A disabled tunnel returns without starting anything.
 
-The internal interfaces are:
+The module reuses `LifecycleStore` and `TelemetryStore`; it does not create another history or logging engine. A durable begin record must succeed before spawn. Missing/corrupt history is not initialized. Sticky restart-budget blocks stay idle until cancellation rather than clearing with elapsed time.
 
-```ts
-interface CoreCredentials {
-  withValue<T>(use: (secret: string) => Promise<T>): Promise<T>;
-}
-interface ConnectedPeerVerifier {
-  current(child: OwnedChild): Promise<boolean>;
-  verify(socket: Socket, child: OwnedChild, signal: AbortSignal):
-    Promise<'OWNED' | 'FOREIGN' | 'UNKNOWN'>;
-}
-```
+A prior active marker is recovered only if the independent `confirmStopped` port exists and returns literal `true`. Otherwise the marker is retained and no new child starts. This is a new required native integration boundary, not a production stopped-owner implementation.
 
-`current` must eventually bind the actual live registered child handle, start identity, UID, generation and sealed release. `verify` must establish the server-side accepted peer of the exact already-open client socket. Neither implementation is provided in this increment. A callback's TypeScript type or a supplied claim does not authenticate anything.
+One invocation owns at most one child. The supplied child must match role, locally chosen generation and release identity. Unexpected exit is counted once using the existing generation-bound history transition. The fifth unexpected failure within the rolling 300000 ms window keeps the existing sticky block.
 
-The public package index/MCP tool surface is unchanged. These are internal composition seams, not remote tools or serialized configuration. `createLoopbackConnections()` with no verifier returns no connection. Its only dial target is `127.0.0.1:3847`. The internal binder accepts an already-open local socket so temporary-port fixtures can exercise the same transport; it is not an arbitrary host/URL API. Tunnel health and process spawn/stop are not implemented here.
+### Core role
 
-## 3. Authenticated health sequence
+- Persists its attempt before invoking the fixed-role spawn port.
+- Uses a 60000 ms startup budget for spawn/probe/backoff and clamps the last retry sleep to the remaining budget.
+- Backoff is 1000, 2000, 4000, 8000, 16000, then 30000 ms. Invalid attempt counters are rejected.
+- Accepts only healthy evidence matching the expected generation/release, not future-dated and younger than 30000 ms.
+- Emits healthy observations with 5000 ms sleeps between successful cycles. Probe and storage latency also contribute to the wall-clock cycle; this is not a real-time cadence guarantee.
+- Authentication rejection or a broader tool surface stops the child and idles without repeating the authenticated probe.
+- Losing healthy evidence after readiness stops the owned child; this invocation does not create a replacement itself.
 
-`probeCore` performs these steps in order:
+### Tunnel role
 
-1. Open a paused connection, obtain ownership proof and confirm current identity.
-2. Read the existing unauthenticated `/healthz` source shape.
-3. Initialize MCP with the pinned compatibility fixture `2025-11-25`.
-4. Send the initialized notification and require an empty 202 response.
-5. List exactly one tool, `agent_health`, without a continuation cursor.
-6. Call that tool and require the exact health object: `{status:'healthy', database:'ok', mcp:'ready'}`.
+- Waits for current, identity-bound core evidence before requesting compatibility or credential availability.
+- Requires the configured compatibility digest and literal `true` credential availability. These are internal attestations, not authorization accepted from CLI/MCP data.
+- Rechecks core after asynchronous compatibility, after credential availability, immediately before spawn, and around transport observations.
+- A changed/lost core generation stops the owned tunnel before accepting another transport observation, then returns for throttled lifecycle restart. It never starts or restarts the core.
+- OFFLINE alone does not restart either process. UNKNOWN is not READY. AUTH_BLOCKED stops the tunnel and idles without repeated authentication attempts.
 
-There are five HTTP exchanges: health, initialize, initialized, tools/list and tools/call. Each newly opened connection must independently pass the verifier. The protocol date is a pinned candidate, not a claim about the latest protocol. Actual compatibility with the pinned repository SDK remains a required test gate.
+## 3. Cancellation, uncertain outcomes and port contracts
 
-Responses require the expected JSON-RPC IDs and result shape. MCP errors, tool isError, broader/duplicate/missing tools, unexpected protocol versions, extra health fields, empty/malformed/oversized data and redirects cannot produce healthy evidence. 401/403 after authentication produce AUTH_BLOCKED without retry. An optional validated session ID is retained only inside the probe, never included in evidence or logs.
+Abort handling bounds waits/probes without exposing provider error messages. A hung health probe can be canceled while the owned child is still stopped with a fresh, non-aborted stop signal. Stop has a 20000 ms deadline.
 
-JSON and a deliberately bounded single-response SSE form are parsed. Body and HTTP headers are capped at 65536 bytes; body collection also caps chunk count. Each exchange has a 2000 ms total deadline including acquisition/checks; continuous trickling does not reset it. Unsupported content encodings are refused, not decompressed. No raw protocol body or provider exception is returned as public evidence.
+STOPPING intent may be recorded before cleanup, but the durable active attempt is cleared only after confirmed exit/stop. Stop rejection/timeout leaves that marker intact and does not report STOPPED. A telemetry failure does not eliminate the requirement to stop an owned child.
 
-A successful result binds generation, release digest and observation time. Invalid identity claims are rejected before contacting ports and are not echoed. Health evidence is not a permission grant, website login, GUI readiness or a substitute for a native ownership provider.
+An unresolved spawn at cancellation is not proof that no process exists. The marker remains and the result is failure. A child returned later is checked and sent through bounded owned-child cleanup, but that late cleanup does not erase the durable marker. If the supervisor process has already exited, the continuation cannot run; the future native/launchd binding must provide parent-death cleanup and refuse a new spawn while ownership is uncertain.
 
-## 4. Same-socket credential boundary
+A foreign returned child is never killed by PID/port guessing. Its inconsistent identity blocks further action and preserves the marker. No fallback to arbitrary shell/process commands is introduced.
 
-The transport uses Node's HTTP parser and a one-use Agent whose connection factory can return only the already-checked socket. It has no alternative connection factory, pool reuse, proxy, redirect-following or authenticated retry. A dead socket cannot silently reconnect to a replacement listener.
+`SupervisorDeps` is an **internal trusted composition interface**, not a serialized API. Required native contracts remain:
 
-Current identity is checked before and after asynchronous peer proof. It is checked again after the local credential callback resolves and before sending bytes. An absent/foreign/unknown proof prevents authenticated requests. The credential is a synthetic value in tests; no production credential provider is connected.
+- A spawn failure must leave no untracked child. Retain the actual ChildProcess handle and use Task 4 to seal its live identity.
+- Successful stop means the recorded child is confirmed terminated, not that `kill()` merely returned true.
+- `currentCore` must establish live owned/authenticated health, not trust a persisted status record.
+- `confirmStopped` must prove absence/stopped ownership independently; a truthy string or caller claim is insufficient.
+- Configuration and compatibility validation do not substitute for sealed executable/helper provenance.
+- Spawn/probe signals are scoped to their operation. Native adapters must remove settled-operation listeners rather than treating the completion abort as permission to kill a running child.
+- Bound executable paths, argv and environment; exclude inherited injection/proxy/secret variables and drain outputs through existing discard-only handling.
 
-The binder has its own 2000 ms proof deadline. The production dialer's deadline also covers binding. Requests are single-use, fixed-path and fixed-method. Abort reasons, stream errors and header-validation errors return only HEALTH_UNKNOWN. Close/error/abort paths destroy the owned connection.
+Native composition, live current-generation registration, cross-invocation ownership, process-tree cleanup, user-device installation and actual tunnel compatibility are not certified by these fixture tests.
 
-**Review corrections reproduced locally:**
+## 4. Tests, regressions and review
 
-- A generation change during initial asynchronous proof previously still yielded a connection capability.
-- A generation change during the pre-broker proof previously allowed one unnecessary credential-broker invocation, although the later check prevented request bytes.
-- A direct binder could wait indefinitely on a verifier unless its caller supplied a deadline.
+The nine existing supervisor tests are retained. This continuation adds:
 
-All three were reproduced against byte-matched remote source in a supplemental Node 22 test run, then corrected. The corresponding Vitest cases are committed but their final CI execution is still pending. These checks do not claim atomic protection from trusted same-UID/root code or a compromised native verifier.
+- `supervisor-safety.test.ts`: 25 cases, including parameterized identity/freshness and compatibility failures.
+- `supervisor-races.test.ts`: 9 cases.
+- `test-support/supervisor-fixture.ts`: controlled clock/process ports with actual canonical lifecycle/telemetry stores and byte-level compare-and-swap.
 
-## 5. Verification: distinguish completed, RED and unexecuted
+There are 43 supervisor cases in total. New process actions are fixture traces/promises, not real installed services. The full suite also reruns the earlier actual macOS ACL/socket/process fixtures. Test utilities remain excluded from compiled product output.
 
-| Checkpoint | Observed result |
+Author self-review reproduced and corrected four defects:
+
+| Defect | Reproduction and correction |
 |---|---|
-| Protocol RED `697c4eb` | Native run `35807407400`, job `107011202018`: 29 failed / 472 prior passed; one scaffold rejection was attached late by a timer test |
-| Protocol implementation `5da1a1a` | Focused Mac/Linux `35807687220` and root `35807687231`: completed/success |
-| Transport RED `94e53c7` | Native run `35807813336`, job `107012433390`: 20 failed / 501 prior passed against the unimplemented transport |
-| Transport implementation `9832dff` | Run `35808036297`: failure before execution; both jobs had empty steps, runner_id 0 and no downloadable log |
-| Corrective code `ee803ee` | Run `35808863336` jobs also returned failure with no steps; root `35808863353` returned failure. Not a final CI pass |
-| Supplemental local contract suite | Linux Node 22.16.0, actual copied production source: 24 tests; first 21 passed / 3 reproduced failures, then 24 passed / 0 failed |
-| Supplemental partial typecheck | Global TypeScript 5.8.3, copied contracts/health/transport with repository strict flags: passed; NOT repository TypeScript 6/Node 24 verification |
+| Compatibility provider could mutate the normalized config it was supposed to validate | Mutation test failed; freeze both config levels before passing them to providers |
+| Unknown truthy credential response could permit tunnel spawn | UNKNOWN-string test failed; require literal true |
+| Unknown truthy stopped-owner response could clear a prior marker | UNKNOWN-string test failed; require literal true and preserve the marker otherwise |
+| Core could disappear during compatibility before credential lookup | Ordering test failed; recheck current core before credential availability |
 
-The runner-start failure's underlying cause has not been established. No billing, quota, outage or code-failure diagnosis is asserted from empty steps alone. No CI configuration, runner label, assertion, time limit or security condition was weakened to avoid it. A subsequent documentation commit's checks do not replace missing code verification.
+Additional coverage confirms cancellation of hung probes, late child cleanup, refusal to stop foreign children, begin-write failure before spawn and sticky accounting after five failed starts.
 
-The 24 local checks include actual loopback sockets, zero-byte foreign/unknown rejection, no reconnect on socket death, delayed credential/abort races, invalid headers, oversized responses, compression refusal, trickled-body deadlines, one-use requests and a **synthetic** JSON/SSE MCP fixture. The health and transport source copies were verified against Git blob hashes `b40a4d4ee3284fbac14026d49588346ff425b3e2` and `c34110959be80efb4411caebfff669709f8a19a4`.
+**Review:** author self-review only. **Independent review NOT_PERFORMED.** No deferred minor findings were recorded. No assertion, timeout, security gate or lint rule was disabled.
 
-This local suite is not the repository Vitest suite, not native macOS, and not the actual MCP SDK. The two real repository MCP-server compatibility tests in `loopback-http.test.ts` were written, but have not run against a completed transport in CI. Do not claim a 524/572 final suite pass or claim supported SDK compatibility from the synthetic fixture.
+## 5. Fresh verification and RED/GREEN ledger
 
-Useful evidence:
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35807687220
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35807813336
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35808036297
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/35808863336
+Exact final code/test commit: `bd3234baa51cc4dd3c9dc238822ffef0772bdadb`.
 
-Local authoring has Node 22 and global TypeScript, no pnpm/full checkout; direct GitHub DNS was attempted and failed. Earlier actual repository verification used the unchanged read-only Actions exact-head detached worktrees. No local Node 24 or full repository run is claimed.
+| Check | Observed result |
+|---|---|
+| Exact-head workflow | `36404724956`, Mac and Ubuntu jobs completed/success |
+| Native Mac job | `108870597114`, full log read; macOS 15.7.9, darwin/arm64, Node 24.20.0, pnpm 10.34.5 |
+| Mac package suite | 38 files / **576 passed**, zero failures or skips |
+| Mac root suite | 46 files / **624 passed**, zero failures or skips |
+| Ubuntu job | `108870596756`, all applicable steps succeeded; Apple-only cases explicitly skipped |
+| Lint, typecheck, root test, build, diff | Passed on both exact-head jobs |
+| Compiled plist structure | Two roles passed, 12 altered structures rejected |
+| Native plist syntax | Both generated plist files passed plutil |
+| Existing root workflow | `36404724946`, completed/success; synthetic PR merge preview, not an actual merge |
 
-## 6. Prior behavior and Task 6 read contract retained
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/36404724956
+- https://github.com/jskjw157/gram-coding-agent/actions/runs/36404724946
 
-Task 1–3 product files were not changed. Circuit accounting remains five unexpected exits in a rolling 300000 ms, sticky block, durable begin-before-spawn, generation-bound exit/reset, and no silent initialization of missing/corrupt recovered history. Status remains an observation with a 30000 ms lifetime. Event logs retain three <=5 MiB segments per role; transient files/crash remnants are outside that retained bound. Child output remains discard-only with a 20000 ms shutdown drain.
+The root total is 576 lifecycle tests plus pinned main's 48 tests. Unmerged Windows M2 and MAC-01 are not included. These counts belong to the code/test SHA above; a later documentation head has separate checks.
 
-Private-file CAS preserves complete old bytes before rename; a post-rename sync failure can leave complete new bytes with uncertain durability and requires reload/reconciliation, not blind retry. Crash-abandoned locks remain BUSY. No age/PID stealing, authorized stopped recovery or production directory trust wrapper was added.
+| Checkpoint | Evidence |
+|---|---|
+| Baseline scaffold `1fe69af` | Earlier native run `35829571585` / job `107078825220`: nine NOT_IMPLEMENTED failures and 533 prior passes |
+| Expanded tests `0a7e5ad` | Run `36403434794`, Ubuntu `108866443811`: 34 failures, 514 prior applicable passes, 19 explicit Apple skips; timer test also exposed a late-attached scaffold rejection |
+| First implementation `9a2365b` | Native job `108867378154` reported all steps successful |
+| Review regressions `1bad05b` | Run `36404008355`, Ubuntu `108868261219`: four reproduced failures, 553 passes, 19 Apple skips |
+| Product correction `2b39997` | Native job `108869892562`: all 576 behavioral tests passed; root stage then caught one new-test no-invalid-void-type lint error |
+| Final test correction `bd3234b` | Changed deferred signal payload from void to explicit undefined; no product logic/assertion changed. Full final verification above passed |
 
-Static installed identity remains limited to pristine or disabled/unregistered installations. Actual plist bytes must match the fixed renderer, not only a manifest hash. The one-shot preview remains read-only and revalidates account/release/install/ports. Missing independently trusted ACL support fails closed.
+Local authoring has Node 22/global TypeScript, no pnpm and no complete local repository checkout; direct npm DNS was unavailable. No local Node 24/full-worktree test claim is made. Actual verification uses the unchanged read-only Actions exact-head worktrees. Frozen install can normalize the existing empty workspace importer; the workflow checks that dependency resolutions remain unchanged. Packaging still must resolve this explicitly.
 
-The existing Task 6 installation read contract must be preserved:
+## 6. Rulings retained for integration
 
-| Record | Fixed location |
+1. Require independent stopped-owner proof before recovering an old active attempt. This prevents duplicate process startup; cost: operator-assisted recovery remains necessary until a real native proof path is integrated.
+2. Retain the active attempt until termination is confirmed, while recording STOPPING intent separately. This preserves orphan tracking; cost: an interrupted intentional stop may conservatively count one crash during later recovery.
+3. Own at most one child per invocation. On core replacement, stop the tunnel and return for launchd's existing throttle rather than creating another child inside the same invocation. Cost: reconnection waits for that throttle.
+4. Deliver internal state-machine components without pretending that callback types authenticate releases, credentials or processes. Cost: native composition and deployment acceptance remain outstanding; this is not a runnable installation.
+
+These rulings do not waive the approved FileVault, non-admin, localhost-only MCP, secret-safe output or live-business approval requirements.
+
+## 7. Earlier components and installation writer contract preserved
+
+Task 1–4 product files, public package index, fixed service labels, original WSL entry points, migrations and policies are unchanged in this increment.
+
+Task 3 retains five-crash/300000 ms accounting, canonical bounded history, digest-fenced writes, no silent reset, 30000 ms status freshness, three retained event segments of at most 5 MiB per role, and discard-only child pipes with a 20000 ms shutdown drain. Transient/crash files are not included in the retained log bound. Post-rename durability uncertainty requires reload/reconciliation, not blind retry. Abandoned locks remain BUSY; no age/PID lock stealing is authorized.
+
+Task 4 retains live handle/start/UID/executable identity, native accepted-socket proof and same-socket authenticated requests. Its LAB_ONLY protocol sequence checks health, MCP initialization, initialized notification, exact one-tool agent_health list and exact health result. Missing/foreign/unknown proof is not OWNED. The protocol fixture is pinned, not a claim about the latest MCP specification. The native helper must still be independently trusted before deployment; temporary fixture compilation does not establish production provenance.
+
+The Task 6 read contract remains binding:
+
+| Record | Fixed path |
 |---|---|
 | Configuration | `/Library/Application Support/HAAR/GramAgent/config/service.json` |
 | Manifest | `/Library/Application Support/HAAR/GramAgent/config/installation.json` |
@@ -129,82 +163,16 @@ The existing Task 6 installation read contract must be preserved:
 | Core plist | `/Library/LaunchDaemons/com.haar.gram-agent.core.plist` |
 | Tunnel plist | `/Library/LaunchDaemons/com.haar.gram-agent.tunnel.plist` |
 
-Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; digests bind exact bytes; absent tunnel hash is null; the currently supported installed state is disabled for both roles.
+Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind exact bytes; absent tunnel hash is null. The presently supported installed state is disabled/unregistered for both roles.
 
-A remaining journal requires exactly `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` equal to the manifest's exact-byte SHA-256. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused, not deleted/replayed. Metadata is bounded to 262144 bytes. Any writer contract change requires explicit versioned review.
+A remaining journal has exactly `schemaVersion:1`, `stage:'COMMITTED'`, and `installationDigest` matching the exact manifest SHA-256. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused, not automatically deleted or replayed. Metadata is bounded to 262144 bytes. The actual plist must match the fixed renderer, not merely a manifest-supplied hash. Any writer change requires explicit versioned review.
 
-Detailed prior implementation and 472/520 native telemetry verification remain in the historical runbook:
-https://github.com/jskjw157/gram-coding-agent/blob/ef0d31c80cb6ed5f387afd5428349c988cd7414f/docs/operations/macos-service-lifecycle.md
+## 8. Isolation and exact handoff
 
-## 7. Review, rulings and handoff
+Only `feat/macos-service-lifecycle` is written. Separate observed refs: main `fdf5dda`, Windows M2 `f6daebed`, MAC-01 `a98c8ff`, docs `31e66aa`. Windows advanced externally; refresh all refs before continuing and preserve concurrent work.
 
-**Review:** author self-review only; independent review NOT_PERFORMED. No security certification, native attestation or completed Task 4 is claimed.
+Continue Task 5 native composition, not Task 6 installation: fixed sealed process spawn, environment allowlist, live owner registration, actual confirmed stop and child-output integration. Add tests that reject unknown executable/helper identity and prove no untracked child survives cancellation or supervisor death. Do not expose an arbitrary executable/path/shell API to make the fixture ports runnable.
 
-**Rulings:**
+Keep Task 2 helper provenance/fixed roots, Task 3 production run/log binding and abandoned-lock recovery, Task 6 authorization/transactions, Task 7 CLI/sealed packaging and Task 8 independent/user-device acceptance explicit. Real administrator writes, live credentials, publication and merge retain separate gates.
 
-- Develop bounded protocol/transport behind internal ports while preserving native-trust gates. Cost: components cannot be deployed safely by themselves.
-- Use a fixed protocol candidate and an internal ephemeral-socket fixture seam, not configurable production endpoints. Cost: actual repository SDK compatibility remains to be demonstrated.
-- When final Actions jobs failed before execution, run a clearly labeled local Node 22 supplemental suite. Cost: Node 24/Vitest/macOS compatibility and final root lint/typecheck/build remain unverified; do not mark the task done.
-
-Resume with an exact-head `pnpm install --frozen-lockfile`, lifecycle tests, root lint/typecheck/test/build and compiled plist checks on Linux and native arm64 Mac. Inspect any actual MCP compatibility failure without relaxing the allowlist, byte/deadline bounds or pre-auth ownership requirement. Then implement registered-child and native libproc/accepted-socket verification; validate actual foreign/PID-reuse/death/rebind cases with synthetic credentials only. The verifier must be independently trusted before production use.
-
-Only this MAC-02 branch was written. Starting separate refs: main `fdf5dda`, Windows M2 `1dc39d38`, MAC-01 `a98c8ff`, docs `31e66aa`. Windows had advanced externally before this continuation and was left untouched. Do not overwrite any later concurrent updates.
-
-**NOT_RUN:** final exact-head repository suite; completed-transport real MCP compatibility; native accepted-peer/process proof; trusted-helper fixed-root acceptance; user-Mac installation; launchd/reboot recovery; actual Keychain/TCC, tunnel, browser or HAAR operations. No merge, force push, rebase, branch deletion, Windows issue closure or credential onboarding occurred. Empty-importer lockfile normalization remains a packaging gate.
-
-Reference semantics (not deployment evidence):
-- Node 24 HTTP custom connection factory: https://nodejs.org/download/release/latest-v24.x/docs/api/http.html
-- Pinned MCP transport: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
-
-
-## 8. Task 4 native ownership checkpoint — exact-head verification
-
-This section supersedes the older pending-CI language in sections 2, 5 and 7 for Task 4 only. Earlier RED records remain historical evidence.
-
-### Added implementation
-
-- `adapters/owned-process.ts` now seals an actual live child handle to PID, UID, kernel start sec/usec, generation, release digest and executable device/inode. The caller cannot supply the start identity as a trusted fact.
-- `platform/macos/native/peer-owner.c` uses Apple libproc process/FD/socket inspection. Current identity checks PID, UID, process start time and executable device/inode. Accepted-peer proof additionally scans the target process FDs and requires an established IPv4 loopback TCP socket matching the already-open client's server/client port tuple.
-- The native helper has no arbitrary command selector and receives only bounded numeric identity/tuple arguments. Its output vocabulary is `START <sec> <usec>`, `OWNED`, `FOREIGN` or `UNKNOWN`. Missing/ambiguous inspection fails closed.
-- `createMacConnectedPeerVerifier` rechecks the live child before and after accepted-socket proof. A dead/replaced handle, changed generation/release, executable mismatch, foreign socket or unknown proof cannot become `OWNED`.
-- The existing same-socket transport remains the only path that can obtain the synthetic internal credential. The checked connection is one-use; there is no authenticated reconnect to a replacement listener.
-
-### TDD and corrective record
-
-| Checkpoint | Observed evidence |
-|---|---|
-| Native ownership RED `804ac22` | Ubuntu exact-head behavioral run showed 6 new `NOT_IMPLEMENTED` failures with prior applicable tests still passing; this isolated the new contract before implementation |
-| Native fixture RED `04a245c` | macOS run compiled the test suite but failed because `platform/macos/native/peer-owner.c` did not yet exist; the desired native dependency was therefore proven absent before implementation |
-| Native implementation `d1a4ea2` | macOS behavioral phase compiled the helper and passed all three real process/socket fixture tests; subsequent full typecheck exposed six implicit-any errors in the new proof factory |
-| Contextual typing correction `fa8f5a1` | minimal typed-object correction removed the TypeScript defect; native behavioral tests continued to pass |
-| Existing test-race correction `40d9dfb` | the no-reconnect test now waits until the server has observed the initial connection before destroying the client during credential acquisition; it still requires accepted-count exactly 1 and zero request bytes, so the security assertion is not weakened |
-
-The intermittent prior `accepted() === 0` failure was a test scheduling race: client `connect` can resolve before the server-side `connection` callback increments the fixture counter. It was unrelated to the native verifier and reproduced only on the assertion timing. The correction establishes the initial accepted connection before testing that no second connection appears.
-
-### Fresh exact-head evidence
-
-Exact head: `40d9dfbbf6a2aa8dd924d95bb2e09779ddac1d8d`.
-
-- Root CI run `35828930247`: completed/success.
-- Focused lifecycle run `35828930223`: macOS and Ubuntu jobs completed/success.
-- Native macOS job `107076807999`: macOS arm64, Node 24.20.0; lifecycle **35 files / 533 tests passed, zero failed/skipped**.
-- The same Mac job's root collection: **43 files / 581 tests passed, zero failed/skipped**; lint, typecheck, build and diff checks passed.
-- Ubuntu job `107076808139`: applicable lifecycle **514 passed / 19 Apple-only skipped**; root **562 passed / 19 Apple-only skipped**; lint, typecheck and build passed.
-- Generated plist structure accepted two roles and rejected 12 altered structures; native `plutil -lint` passed both generated plists. No service was installed.
-- Native ownership tests compiled `peer-owner.c` using the installed Apple SDK and exercised real child-process start identity, executable inode/device, accepted loopback socket ownership, foreign server rejection, executable mismatch and post-exit invalidation.
-- Real repository MCP compatibility tests also passed at this exact head: correct credential produced healthy evidence and wrong credential remained blocked.
-
-The earlier zero-step Actions failures at `3563e4b` were rerun against the exact same SHA and then executed successfully, separating runner availability from code correctness. No workflow or security assertion was weakened to obtain this result.
-
-### Remaining gates after Task 4
-
-Task 4 component behavior is ready for Task 5 consumption, but MAC-02 is **not** complete. Still open:
-
-- Task 2 independently trusted ACL-helper provenance/bootstrap and real fixed-root acceptance.
-- Task 3 production run/log directory binding and ownership-verified recovery of abandoned writer locks.
-- Task 5 actual fixed-role supervisor spawn/stop, live generation ownership, circuit integration, 5-second observations and gated test-tunnel startup.
-- Task 6 local-admin apply/rollback/uninstall and stopped authorized reset/recovery.
-- Task 7 runnable CLI and sealed packaging, including helper inventory/provenance.
-- Task 8 installed launchd/reboot/user-device acceptance and independent review.
-
-No actual account, Keychain/TCC setting, FileVault/SSH setting, tunnel credential, browser session, HAAR store action or administrator installation was touched in this checkpoint.
+**NOT_RUN:** user-Mac provisioning, installed launchd start/stop/reboot, production run/log directory binding, supervisor-native spawn/stop wiring, actual tunnel credentials, Keychain/TCC, browser or HAAR workflows. No service, account, credential, OS permission or live store was changed. No merge, force push, rebase, branch deletion or Windows issue closure occurred.
