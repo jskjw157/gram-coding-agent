@@ -61,6 +61,10 @@ interface FakeOptions {
   acquireError?: Error;
   confirmResult?: boolean;
   ciOutcome?: 'SUCCESS' | 'FAILURE' | 'PENDING';
+  verifyError?: Error;
+  pushError?: Error;
+  confirmError?: Error;
+  ciObserveError?: Error;
 }
 
 function createOptions(audit: AuditRepository, calls: Calls, fake: FakeOptions = {}): TaskRunnerOptions {
@@ -94,21 +98,25 @@ function createOptions(audit: AuditRepository, calls: Calls, fake: FakeOptions =
     verification: {
       verify: async () => {
         calls.verify += 1;
+        if (fake.verifyError !== undefined) throw fake.verifyError;
       },
     },
     git: {
       push: async () => {
         calls.push += 1;
+        if (fake.pushError !== undefined) throw fake.pushError;
         return 'a91c34f0a91c34f0a91c34f0a91c34f0a91c34f0';
       },
       confirmRemoteSha: async () => {
         calls.confirm += 1;
+        if (fake.confirmError !== undefined) throw fake.confirmError;
         return fake.confirmResult ?? true;
       },
     },
     ci: {
       observe: async () => {
         calls.observe += 1;
+        if (fake.ciObserveError !== undefined) throw fake.ciObserveError;
         return fake.ciOutcome ?? 'SUCCESS';
       },
     },
@@ -236,5 +244,108 @@ describe('TaskRunner.runRepairCycle', () => {
       release: 0,
       observe: 0,
     });
+  });
+
+  it('leaves the lock held when repair verification fails', async () => {
+    const fixture = await openFixture();
+    const calls = createCalls();
+    const events: RepairCycleEvent[] = [];
+    const runner = new TaskRunner(
+      createOptions(fixture.audit, calls, { verifyError: new Error('repair verification failed') }),
+    );
+
+    await expect(
+      runner.runRepairCycle(createInput(fixture.taskId), (event) => {
+        events.push(event);
+      }),
+    ).rejects.toThrow('repair verification failed');
+
+    expect(events).toEqual(['ci.failed', 'lock.acquire', 'workspace.reuse', 'repair']);
+    expect(calls.verify).toBe(1);
+    expect(calls.push).toBe(0);
+    expect(calls.confirm).toBe(0);
+    expect(calls.release).toBe(0);
+    expect(calls.observe).toBe(0);
+  });
+
+  it('leaves the lock held when repair push fails', async () => {
+    const fixture = await openFixture();
+    const calls = createCalls();
+    const events: RepairCycleEvent[] = [];
+    const runner = new TaskRunner(
+      createOptions(fixture.audit, calls, { pushError: new Error('repair push failed') }),
+    );
+
+    await expect(
+      runner.runRepairCycle(createInput(fixture.taskId), (event) => {
+        events.push(event);
+      }),
+    ).rejects.toThrow('repair push failed');
+
+    expect(events).toEqual(['ci.failed', 'lock.acquire', 'workspace.reuse', 'repair', 'verify']);
+    expect(calls.verify).toBe(1);
+    expect(calls.push).toBe(1);
+    expect(calls.confirm).toBe(0);
+    expect(calls.release).toBe(0);
+    expect(calls.observe).toBe(0);
+  });
+
+  it('leaves the lock held when repair remote confirmation throws', async () => {
+    const fixture = await openFixture();
+    const calls = createCalls();
+    const events: RepairCycleEvent[] = [];
+    const runner = new TaskRunner(
+      createOptions(fixture.audit, calls, { confirmError: new Error('repair remote confirmation timed out') }),
+    );
+
+    await expect(
+      runner.runRepairCycle(createInput(fixture.taskId), (event) => {
+        events.push(event);
+      }),
+    ).rejects.toThrow('repair remote confirmation timed out');
+
+    expect(events).toEqual([
+      'ci.failed',
+      'lock.acquire',
+      'workspace.reuse',
+      'repair',
+      'verify',
+      'push',
+    ]);
+    expect(calls.push).toBe(1);
+    expect(calls.confirm).toBe(1);
+    expect(calls.release).toBe(0);
+    expect(calls.observe).toBe(0);
+  });
+
+  it('keeps the lock released when repair CI observation times out', async () => {
+    const fixture = await openFixture();
+    const calls = createCalls();
+    const events: RepairCycleEvent[] = [];
+    const runner = new TaskRunner(
+      createOptions(fixture.audit, calls, { ciObserveError: new Error('repair CI observation timed out') }),
+    );
+
+    await expect(
+      runner.runRepairCycle(createInput(fixture.taskId), (event) => {
+        events.push(event);
+      }),
+    ).rejects.toThrow('repair CI observation timed out');
+
+    expect(events).toEqual([
+      'ci.failed',
+      'lock.acquire',
+      'workspace.reuse',
+      'repair',
+      'verify',
+      'push',
+      'remote.confirm',
+      'lock.release',
+    ]);
+    expect(events).not.toContain('ci.observe');
+    expect(calls.push).toBe(1);
+    expect(calls.confirm).toBe(1);
+    expect(calls.release).toBe(1);
+    expect(calls.observe).toBe(1);
   });
 });
