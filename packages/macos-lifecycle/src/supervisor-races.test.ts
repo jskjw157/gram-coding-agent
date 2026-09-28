@@ -38,8 +38,8 @@ describe('supervisor trust boundaries and cancellation', () => {
     expect(f.trace).not.toContain('credential'); expect(f.trace).not.toContain('spawn:tunnel');
   });
   it('cancels a hung health probe and still stops the owned child', async () => {
-    const f = await fixture(); const entered = deferred<void>();
-    f.deps.core.probe = async () => { entered.resolve(); return new Promise(() => {}); };
+    const f = await fixture(); const entered = deferred<undefined>();
+    f.deps.core.probe = async () => { entered.resolve(undefined); return new Promise(() => {}); };
     const pending = runSupervisor('core', labConfig(), f.deps, f.controller.signal);
     await entered.promise; f.controller.abort();
     expect(await pending).toBe(0); expect(f.trace).toContain('stop:core:20000:false');
