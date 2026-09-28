@@ -1,115 +1,108 @@
-# MAC-02 Service Lifecycle — Native Core Custody Checkpoint
+# MAC-02 Service Lifecycle — Durable Core Reservation Checkpoint
 
 **Updated:** 2026-09-29 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Native Core port component tested; not an installed/deployable service.  
+**Status:** IN_PROGRESS / PARTIAL. This increment implements cooperative execution reservations; it is not a deployable service.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
-**Verified exact-head code/test checkpoint:** `1da1c744445981f379882ad3033e3b76dca45b3e`.  
-**Product code checkpoint:** `d4a040519186cdf65217deee467576953711e012`.  
-**Continuation baseline:** `6e9da00853ac807b536824020d018260fc7f4085`.  
+**Code/test checkpoint:** `4401a6648cc6784ec594efc20998eed09918049f`.  
+**Continuation baseline:** `796e102bf1efadc715a57775e5377bf38d1e5923`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
-**Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.  
-**Merge base:** `fdf5dda2211e011e473f1c89095b78d7cb565c2f`.
+**Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
 
-## 1. Actual progress and next boundary
+## 1. Actual progress, not a completion percentage
 
-| Task | Actual state |
+| Scope | Actual state / remaining work |
 |---|---|
-| Task 1 | Strict LAB_ONLY configuration and fixed plist renderer retained |
-| Task 2 | Native/static preflight exists; independently trusted helper provisioning, fixed-root acceptance and installed ownership remain gates |
-| Task 3 | Restart history, private persistence, telemetry and discard-only output retained; production directories and abandoned-lock recovery remain gates |
-| Task 4 | Existing native process/accepted-peer and authenticated-health components retained |
-| Task 5 | State machines retained; new fixed Core launch recipe, direct-child custody, scoped health binding and confirmed-stop port implemented and component-tested |
-| Task 5 remaining | Independent production launch authority, runtime-wide exclusivity, complete native composition, cross-daemon currentCore proof, compatible native tunnel port and runnable CLI |
-| Tasks 6–7 | Administrative install/rollback/uninstall/reset and sealed packaging remain unimplemented |
-| Task 8 | Component CI exists; full installed lifecycle/reboot, independent review and user-device acceptance remain incomplete |
+| MAC-01 | Implemented on its separate unmerged branch; not included in this branch's test totals |
+| MAC-02 Tasks 1–4 | Existing configuration, preflight, persistence, telemetry and owned-health components retained; real fixed-root/helper provenance, production directory binding and safe abandoned-lock recovery remain gates |
+| MAC-02 Task 5 | Supervisor/native Core retained; durable reservation now fences starts across cooperating factories using the same trusted storage. Production CoreAuthority, fixed-root binding, cross-daemon currentCore and native tunnel composition remain incomplete |
+| MAC-02 Task 6 | Authorized installation, rollback, uninstall, explicit new-install provisioning and stopped recovery/reset not implemented |
+| MAC-02 Task 7 | Runnable supervisor CLI and sealed packaging not implemented |
+| MAC-02 Task 8 | Installed launchd/reboot/user-device acceptance and independent review not completed |
+| MAC-03 | Detailed design/plan only: 9 tasks for non-coding operations, approval, effects, scheduling and artifacts |
+| MAC-04 | Detailed design/plan only: 11 tasks for browser/API routing, credential use and GUI boundaries |
+| MAC-05 | Detailed design/plan only: 8 tasks for a single-product local draft/review bundle, not live publication |
 
-There is still no `supervisor-cli.js`. Generated plists are **NOT DEPLOYABLE**. No service/account/credential, Keychain/TCC/FileVault/SSH setting, real tunnel or HAAR operation was changed. MAC-03–05 documents remain separate at `31e66aa21b705b1793f11122c1b12d5ebf41715c`.
+There is still no `supervisor-cli.js`. Generated plists are **NOT DEPLOYABLE**. The remaining MAC-02 work is Task 5 integration plus Tasks 6–8 and unresolved Tasks 2–3 acceptance gates, not simply three small changes. The 28 later-phase tasks are not estimates of equal effort. Test counts are not product completion percentages or evidence of live shopping-mall operations.
 
-This is the current handoff. Earlier state-machine implementation and verification are preserved at:
-https://github.com/jskjw157/gram-coding-agent/blob/6e9da00853ac807b536824020d018260fc7f4085/docs/operations/macos-service-lifecycle.md
+The MAC-03–05 index remains on documentation branch commit `31e66aa21b705b1793f11122c1b12d5ebf41715c`. Its first business outcome is a local product draft, with no storefront write. Orders, refunds, advertising and outbound CS are not completed by that fixture outcome.
 
-## 2. New Core process component
+Earlier native Core implementation and verification remain available at the immutable baseline:
+https://github.com/jskjw157/gram-coding-agent/blob/796e102bf1efadc715a57775e5377bf38d1e5923/docs/operations/macos-service-lifecycle.md
 
-`packages/macos-lifecycle/src/adapters/native-core.ts` adds `coreLaunchPlan(config)` and `createNativeCorePort(options)`. These are internal composition modules. The public package index, MCP surface and approved configuration schema are unchanged.
+## 2. Implemented reservation and launch boundary
 
-The immutable launch recipe derives one executable, one argument and one working directory from validated LAB_ONLY configuration:
+New product modules:
+- `execution-lease.ts`: canonical bounded execution records, explicit absent-only initialization, atomic reservation and original-object release capabilities.
+- `exclusive-core.ts`: reserve-before-native-start and release-after-confirmed-exit composition.
+- `adapters/execution-files.ts`: fixed private execution record family using the existing file CAS mechanics.
 
-- executable: `/Library/Application Support/HAAR/GramAgent/releases/<releaseId>/bin/node`;
-- sole argument: the same release's `apps/agent/dist/main.js`;
-- working directory: the same release root;
-- environment: only `PATH=/usr/bin:/bin`, `LANG=C`, `LC_ALL=C`, `HOME=/Users/gram-agent`, fixed `GRAM_AGENT_STATE_DIR` and fixed `GRAM_AGENT_SECRET_DIR`.
+`adapters/private-record-files.ts` adds the fixed `execution` family and its validator. Existing circuit/status/event filenames, limits and mechanics remain unchanged. `adapters/native-core.ts` now requires a valid ExecutionLeaseStore before using the default native launcher. Invalid or missing providers are rejected before launch authority/credential use. The explicit in-process fixture launcher remains an isolated testing dependency, not a CLI/MCP/configuration command feature.
 
-The recipe does not inherit process.env, loader injection options, proxy settings or parent tokens. It contains directory references, not secret values. The default launcher refuses non-macOS/non-arm64/root execution, sets shell=false and detached=false, ignores stdin and gives the output owner only the direct child's two pipes. It neither changes uid nor signals a process group.
+An ExecutionRecord contains exactly schemaVersion, role, revision, state, token, generation, configDigest and releaseDigest. The initial FREE revision0 has null identity fields. Later acquisitions/releases monotonically advance the revision; HELD uses odd revisions and FREE uses even revisions. The UUID token identifies a reservation and is not a service credential or authorization token. Free records retain the previous generation as a tombstone instead of deleting the file. The immediately previous generation cannot be reused; callers still supply unique generation IDs.
 
-The factory requires a local launch authority and a credential-use port. There is deliberately no default authority or secret provider. The authority must independently validate the sealed release, account, runtime paths, exclusive ownership and native helper provenance before issuing its in-process grant. Matching digest fields or a callback type alone does not establish that trust. The component validates config binding, explicit non-admin identity, current process UID/GID and executable device/inode shape. Command paths and environment cannot be overridden by the grant.
+Missing/corrupt state never becomes permission to launch. There is no TTL, elapsed-time reset, PID inspection for stealing, or automatic removal of an abandoned HELD reservation or transaction lock. Concurrent stores compete with digest compare-and-swap; only the winner can proceed. Release accepts the original in-memory capability only, is idempotent after success, and never retries an uncertain operation against a newer record.
 
-**Production authority and fixed-root launch have not been implemented or accepted.** The internal launcher substitution is used by isolated tests and is not exposed in CLI/MCP/configuration.
+The Core wrapper acquires the shared reservation before the inner native port (including authority acquisition). A definite no-child rejection releases under the existing strict native-port contract. An unresolved launch remains reserved; an invalid fulfilled child identity is ambiguous and is not freed or signalled by PID guessing.
 
-## 3. Child custody, termination and uncertainty
+Actual inner-child exit initiates reservation release. The wrapper's outward exit promise completes only after release completes, so the supervisor cannot treat mere signal delivery as successful cleanup. A rejected exit or uncertain release disables health forwarding and does not manufacture permission to start another child. Stop observes the original registered handle and one <=20000ms budget; copied handles are refused.
 
-One factory accepts one start attempt and retains the actual ChildProcess object privately. A frozen ManagedChild is registered by object identity; a copied/foreign object cannot request stop. The exit promise resolves only on the direct child's actual exit event. Post-launch error events and a successful signal dispatch do not resolve it.
+This is **cooperative exclusion over the same independently trusted run directory**, not a sandbox against root or hostile same-UID code. It does not provide production CoreAuthority, attest a helper, authenticate a process, prove no orphan exists, or establish cross-daemon health by itself. The file reservation is occupancy evidence, not process liveness.
 
-After the spawn event and explicit PID validation, the original live object is passed to the existing process-sealing component. It is not replaced by a spread/snapshot of exit properties. A short independent seal window supports cleanup when the caller cancels just after the OS creates a child.
+## 3. Verification scope and review record
 
-If start is canceled after a valid seal, cleanup must confirm exit before rejecting. If the live child cannot be proven and safely stopped, its start promise remains pending until actual exit; custody and the single-start restriction remain. The supervisor's existing timeout path then preserves the durable attempt rather than interpreting a rejected start as proof of absence. This is a conservative quarantine, not autonomous orphan recovery.
+Five new test files add 43 cases: execution-lease15, exclusive-core14, execution-files6, execution-boundary7, execution-process1. Test support uses actual canonical stores and digest CAS. Filesystem cases use temporary private directories and a synthetic ACL predicate. The process contention case starts a separate temporary Node child that owns the fixed transaction lock; a competing acquisition returns BUSY without deleting or changing that lock. This is not an installed two-daemon or production-authority test.
 
-Stop validates the registered object and a caller budget of 1–20000 ms. It checks current native identity before SIGTERM, reserves part of the same total budget, and checks again before SIGKILL if needed. The grace period is at most 15000 ms or 75% of a shorter budget, less time already spent on proof. Successful return requires actual termination and completion of the output handling, not merely kill() returning true.
-
-The post-TERM check uses the existing native proof.current over the sealed identity instead of LiveProcessHandle.killed. A child may have received a signal while still running; that flag is not termination evidence. FOREIGN/UNKNOWN proof prevents signalling/escalation. Concurrent stop requests share one termination operation. Timeout, cancellation or uncertainty yields CORE_STOP_UNKNOWN and must not clear the durable active marker.
-
-The existing discard-only output module is attached immediately. No child stdout/stderr contents, raw spawn error path or provider error string are included in public handles or errors. A matching current child can be passed to the existing owned-connection health probe; foreign/expired/canceled requests return UNKNOWN without credential acquisition.
-
-This port manages the direct child only. It is not atomic protection against root/compromised same-UID code and is not proof of process-tree or supervisor-death cleanup. Cross-instance exclusivity, helper provenance and recovery remain explicit integration gates.
-
-## 4. Tests and observed corrections
-
-`adapters/native-core.test.ts` adds **27 cases**. Its process operations create real temporary Node child processes on the CI host; launch authority and native identity proof are synthetic in these new tests. The factory's fixed /Library launch recipe is inspected, while the internal fixture launcher substitutes a harmless Node script. No installed service, real agent database or secret directory is opened.
-
-Coverage includes fixed arguments/environment, poisoned inherited variables, missing/invalid authority, single-start registration, actual exit ordering, copied/foreign handles, unknown identity, TERM-resistant children and revalidated KILL, loss of proof before escalation, cancellation before/after spawn, quarantine of an unprovable child, safe ENOENT errors and invalid stop budgets.
-
-TDD/review record:
-
-| Checkpoint | Actual result |
+| Checkpoint | Observed evidence |
 |---|---|
-| RED `1f49ec2` | Mac run36479916085/job109122734089: 27 new NOT_IMPLEMENTED failures and one existing acceptance-timing failure; 28 failed/575 passed |
-| First implementation `3e2f8ba` | Both focused platform behavioral steps succeeded; root typecheck found ChildProcess.pid incompatibility under exactOptionalPropertyTypes |
-| Type correction `d4a0405` | Validate the actual spawned PID, then narrow the original live object; do not relax compiler flags or snapshot live fields |
-| Fixture correction `1da1c74` | Existing no-reconnect test now awaits the server connection event instead of one setImmediate; exact one-connection and zero-byte assertions retained |
+| RED `15a1278` | Lifecycle36491201850, Mac109159959165: 35 new failures /603 prior passes |
+| First implementation `922fe5a` | Lifecycle36491599226 and root36491599255 completed/success |
+| Review RED `df317cf` | Lifecycle36491809753, Mac109161946823: 3 failures /642 passes. Null/false provider accepted; ambiguous exit still forwarded healthy evidence |
+| Additional fixture `975b3f4` | Adds separate-process transaction-lock contention test; not a production bootstrap test |
+| Corrections `1f52efc` + `4401a66` | Normalize provider type before authority use; disable health after rejected exit without releasing the HELD slot |
 
-The initial old-test failure was `adapters/loopback-http.test.ts:69`, expected accepted=1 but observed0. The actual source used one event-loop tick as a proxy for server acceptance. The correction changes only that fixture synchronization; the production transport and its security assertions are unchanged.
+### Final exact-head checks
 
-A proposed **additional** combined native Core-port/libproc/health fixture upload was blocked by the tool's security check. It produced no blob/file and was stopped, not retried through another tool. That extra fixture is **NOT ADDED / NOT RUN**. Existing native process/socket/ACL tests still run separately; they must not be described as validation of this unadded combined scenario.
+Code/test commit `4401a6648cc6784ec594efc20998eed09918049f`:
 
-Review is **author self-review** of launch/cancel/error/exit ordering, scope restrictions and custody. **Independent review NOT_PERFORMED.** No production security certification is claimed.
-
-## 5. Fresh exact-head verification
-
-Full focused workflow `36481264156`, exact checkout `1da1c744445981f379882ad3033e3b76dca45b3e`, completed/success:
-
-| Verification | Observed result |
+| Check | Evidence |
 |---|---|
-| Mac job | `109127203625`; full log read; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
-| Mac lifecycle suite | **39 files /603 passed**, no failures or skips |
-| Mac root suite | **47 files /651 passed**, no failures or skips |
-| Ubuntu job | `109127203066`; applicable workflow steps checked separately; Apple-only tests are not native passes |
-| Root quality gates | lint, typecheck, root tests, build and diff checks passed in the focused workflow |
-| Compiled plist | two valid roles and12 negative structures checked; native plutil passed both generated files |
-| Existing root workflow | `36481264067`, completed/success; PR synthetic merge preview, not an actual merge |
+| Focused lifecycle run | `36492204440`; Mac and Ubuntu jobs completed/success |
+| Native Mac | Job `109163214001`, full log read; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
+| Mac lifecycle suite | **44 files /646 tests passed**, zero failed or skipped |
+| Mac root suite | **52 files /694 tests passed**, zero failed or skipped |
+| Ubuntu | Job `109163214246`; applicable steps completed/success; Apple-only cases remain explicitly skipped |
+| Quality checks | Root lint/typecheck/test/build/diff checks passed; test support excluded from compiled production output |
+| Plist validation | Two generated roles passed structure checks,12 altered structures rejected; native plutil accepted both files |
+| Existing root CI | `36492204438`, completed/success; synthetic PR merge preview, not an actual merge |
 
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/36481264156
-- https://github.com/jskjw157/gram-coding-agent/actions/runs/36481264067
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204440
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204438
 
-The root total includes603 lifecycle cases and pinned main's48; separate unmerged Windows M2 and MAC-01 tests are not included. A later documentation commit's checks are separate from these counted code/test logs. Test runner tooling emits upstream deprecation notices; no zero-warning claim is made.
+A later documentation-head workflow is separate from the counted code/test log. Upstream runner deprecation notices are not claimed to have been removed.
 
-Local authoring has Node22/global TypeScript, no pnpm/full checkout. GitHub DNS was attempted and unavailable locally. Full repository tests used the unchanged read-only GitHub Actions exact-head detached worktrees. No local Node24/full-worktree run is claimed. Existing empty-workspace-importer normalization remains a packaging gate; dependency resolutions and workflows were not changed.
+The root suite includes this branch's lifecycle tests and main's48 tests. Separate MAC-01 and Windows M2 branches are excluded. Apple-only tests skipped on Linux are not native passes. No assertion, security gate, lint rule, deadline or workflow was relaxed. No dependency or lockfile update was made.
 
-## 6. Existing behavior and installation contract retained
+**Independent review NOT_PERFORMED.** Review in this increment is author self-review. The earlier security-blocked combined Core/libproc/health fixture was not retried and remains NOT_ADDED/NOT_RUN; this reservation work does not substitute for it.
 
-The state machines still require durable begin-before-spawn and explicit independent stopped-owner proof before recovering old attempts. Five unexpected exits within300000 ms produce a sticky block; missing/corrupt history does not initialize itself. STOPPING intent is separate from clearing the marker. A native port's rejection must not falsely assert that a child is gone.
+Local authoring has no full repository checkout/pnpm/Node24; direct GitHub DNS was attempted and unavailable. Full validation uses the unchanged read-only GitHub Actions exact-head worktrees. The existing empty-workspace-importer normalization remains a packaging gate. No local full-suite claim is made.
 
-Task3 retains30000 ms observation freshness, three retained event files <=5 MiB per role, digest-fenced private writes and discard-only output. Post-rename durability uncertainty requires reload/reconciliation. Abandoned locks remain BUSY; there is no age/PID lock stealing. Task4 retains fixed localhost authenticated health and same-socket credential handling; its helper must be independently trusted before deployment.
+## 4. Rulings, costs and provisioning contract
 
-The Task6 read contract remains unchanged:
+Ruling: implement occupancy persistence before production authority integration, reusing the existing private-file CAS. Reason: the previous one-factory guard cannot serialize independent launches. Cost: bootstrap must still bind every default factory to one trustworthy location; this component alone is not host-wide deployment proof.
+
+Ruling: a held record never expires and an unresolved launch never frees it. Reason: a crashed supervisor may leave a live child. Cost: unavailable or abandoned state requires separately authorized stopped-owner recovery; this increment does not implement that recovery.
+
+Ruling: reserve before the authority call. Reason: validate and spawn only after exclusive access is acquired. Cost: even a pre-spawn crash can leave HELD, intentionally blocking unsafe retries.
+
+Ruling: no automatic reinitialization/migration/reset of execution state. Task6 must explicitly provision absent records only for a verified new installation. Existing installs must be stopped and reconciled before adding this family. A rollback must preserve reservation generations/revisions and must not remove a HELD file to run an older version. Unknown durability requires reconciliation, not a blind rewrite.
+
+Required fixed record names under the eventual trusted private run directory:
+- `core.execution.json`, `tunnel.execution.json`;
+- transaction locks `core.execution.lock`, `tunnel.execution.lock`.
+
+The runtime adapter does not create that directory or select an arbitrary public destination. Files require restrictive ownership/modes and independent ACL verification, just like existing private records. Production fixed-root directory setup is still pending.
+
+## 5. Existing installer read contract retained
 
 | Record | Fixed path |
 |---|---|
@@ -123,12 +116,11 @@ Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,ui
 
 A remaining journal has exactly `schemaVersion:1`, `stage:'COMMITTED'`, and `installationDigest` matching the exact manifest SHA-256. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused, not automatically deleted or replayed. Metadata is bounded to262144 bytes. The actual plist must match the fixed renderer, not merely a manifest-supplied hash. Writer changes require versioned review.
 
-## 7. Exact handoff and isolation
 
-Continue **Task5 native composition**, not installation: independently trusted CoreAuthority and runtime-exclusive ownership, production directory/helper binding, real combined native acceptance, supervisor-death/orphan handling, cross-daemon currentCore and the separately verified restricted tunnel adapter. The generic same-socket health, native proof, stores, output and supervisor already exist and should be reused.
+## 6. Exact next work and isolation
 
-Task2 fixed-root/provenance, Task3 abandoned locks, Tasks6–7 administrative transactions/CLI/sealed packaging and Task8 independent/user-device acceptance remain open. No supervisor-cli.js or deployment-ready installer exists. Do not remove these gates merely to make the default native port runnable.
+Continue Task5 integration with independently trusted CoreAuthority: reviewed release digest, account and executable identity, helper provenance, fixed state/secret/run directories and no live orphan. Reuse the existing reservation, Core custody, supervisor, owned-health and file inspection components instead of rebuilding them. Bind cross-daemon currentCore and the separately verified restricted native tunnel port, then provide the runnable CLI. Finish Task2/3 trust/abandoned-lock gates alongside Task6 provisioning and stopped recovery. Do not enable the native default by injecting test grants or a synthetic ACL predicate.
 
-Only `feat/macos-service-lifecycle` was written. Starting separate refs: main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, docs=31e66aa. Refresh and preserve concurrent updates before continuing. No original shared product code, WSL paths, dependency/lockfile/workflow, database migration, later-phase document or GPT-Bridge integration changed. The existing HTTP test has the synchronization-only repair described above.
+Task6 administrative transactions, Task7 sealed packaging and Task8 independent/user-device launchd and reboot acceptance remain open. No real credential, service, account, Keychain/TCC/FileVault/SSH, tunnel, browser or HAAR operation was provisioned. No installer or live store write was executed.
 
-**NOT_RUN:** independently trusted production authority, actual fixed-root launch, combined new Core-port/libproc/health fixture, installed launchd lifecycle/reboot, real tunnel/account/Keychain/TCC/browser/HAAR workflows and independent review. No administrator install, credentials/permissions change, merge, force push, rebase, branch deletion or Windows issue closure occurred.
+Only `feat/macos-service-lifecycle` was written. Baseline separate refs: main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, documentation=31e66aa. Preserve later concurrent work. No main/WSL/shared product code, workflow, lockfile, migration, MAC-03–05 implementation or GPT-Bridge integration changed. No merge, force push, rebase, branch deletion, or Windows issue closure.
