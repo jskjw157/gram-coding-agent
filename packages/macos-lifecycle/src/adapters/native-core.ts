@@ -4,7 +4,7 @@ import { configDigest, parseConfig } from '../config.js';
 import { root, type AccountIdentity, type OwnedChild, type ServiceConfig } from '../contracts.js';
 import { attachChildOutput, type OutputDrain } from '../child-output.js';
 import { withExclusiveCore } from '../exclusive-core.js';
-import type { ExecutionLeaseStore } from '../execution-lease.js';
+import { ExecutionLeaseStore } from '../execution-lease.js';
 import { copyCoreChild, probeCore, type CoreCredentials, type CoreEvidence } from '../health-probe.js';
 import type { ManagedChild, SupervisorDeps } from '../supervisor.js';
 import { createLoopbackConnections } from './loopback-http.js';
@@ -149,7 +149,8 @@ function unknown(): CoreEvidence {
  * responsibility. An ambiguous child remains tracked until actual exit. */
 export function createNativeCorePort(options: NativeCoreOptions = {}): SupervisorDeps['core'] {
   const authority = options.authority; const credentials = options.credentials;
-  const execution = options.execution;
+  // Normalize once: a supplied null/false is not an execution capability.
+  const execution = options.execution instanceof ExecutionLeaseStore ? options.execution : undefined;
   const permitted = options.launch !== undefined || execution !== undefined;
   const launch = options.launch ?? nativeLaunch;
   let claimed = false; let custody: Custody | null = null;
