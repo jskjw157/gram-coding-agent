@@ -3,6 +3,7 @@ import type { BigIntStats } from 'node:fs';
 import { join } from 'node:path';
 import { root, type ServiceConfig } from '../contracts.js';
 import { configDigest, parseConfig } from '../config.js';
+import { copyRuntimeReview } from '../runtime-review.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
 import { CoreRegistrationStore } from '../core-registration.js';
 import { decodeStatus, type ServiceStatus } from '../telemetry.js';
@@ -58,17 +59,6 @@ function data(value: unknown, keys: readonly string[]): Record<string, unknown> 
   }
   return out;
 }
-function digest(value: unknown): value is string {
-  return typeof value === 'string' && value.length === 64 && !/[^a-f0-9]/u.test(value);
-}
-function copyReview(value: RuntimeReview): Readonly<RuntimeReview> {
-  const v = data(value, ['config', 'configDigest', 'nodeDigest', 'fileAclDigest', 'peerOwnerDigest']);
-  const config = parseConfig(v.config); Object.freeze(config.tunnel); Object.freeze(config);
-  if (!digest(v.configDigest) || v.configDigest !== configDigest(config) || !digest(v.nodeDigest)
-    || !digest(v.fileAclDigest) || !digest(v.peerOwnerDigest)) refuse();
-  return Object.freeze({ config, configDigest: v.configDigest, nodeDigest: v.nodeDigest,
-    fileAclDigest: v.fileAclDigest, peerOwnerDigest: v.peerOwnerDigest });
-}
 function id(value: unknown, min: number): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min && value < 0xffff_ffff;
 }
@@ -108,7 +98,7 @@ export async function bindReviewedCoreRuntime(review?: RuntimeReview, bootstrapA
 export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inputReview: RuntimeReview,
   bootstrapAcl: AclProbe, inputEnvironment: RuntimeEnvironment, parent: AbortSignal): Promise<ReviewedServiceRuntime | null> {
   try {
-    const layout = copyRuntimeLayout(inputLayout); const review = copyReview(inputReview);
+    const layout = copyRuntimeLayout(inputLayout); const review = copyRuntimeReview(inputReview);
     if (typeof bootstrapAcl !== 'function') refuse();
     const environment = Object.freeze({ host: inputEnvironment.host.bind(inputEnvironment),
       account: inputEnvironment.account.bind(inputEnvironment), identity: inputEnvironment.identity.bind(inputEnvironment) });
