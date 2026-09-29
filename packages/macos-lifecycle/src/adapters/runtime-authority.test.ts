@@ -93,7 +93,7 @@ describe('reviewed runtime binding over actual files (synthetic host/account/boo
     expect(await bind(f)).toBeNull(); expect(called).toBe(0);
   });
   it('copies the review and layout before the first asynchronous boundary', async () => {
-    const f = await setup(); const original = structuredClone(f.review); const originalAccount = f.environment.account;
+    const f = await setup(); const original: RuntimeReview = structuredClone(f.review); const originalAccount = f.environment.account;
     f.environment.account = async () => { f.review.nodeDigest = 'b'.repeat(64); f.review.config.releaseDigest = 'b'.repeat(64);
       f.layout.relative = 'other'; return originalAccount(); };
     const value = await bind(f); expect(value).not.toBeNull();
@@ -132,6 +132,6 @@ describe('reviewed runtime binding over actual files (synthetic host/account/boo
   });
   it('does not call candidate helper programs merely to bind or inspect the grant', async () => {
     const f = await setup(); const before = await snapshot(f.base); const value = await bind(f); expect(value).not.toBeNull();
-    expect(await snapshot(f.base)).toEqual(before); // fixture helper bytes are not executable programs
+    expect(await snapshot(f.base)).toEqual(before);
   });
 });
