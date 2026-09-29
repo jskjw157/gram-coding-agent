@@ -1,108 +1,96 @@
-# MAC-02 Service Lifecycle — Durable Core Reservation Checkpoint
+# MAC-02 Service Lifecycle — Reviewed Runtime Binding Checkpoint
 
 **Updated:** 2026-09-29 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. This increment implements cooperative execution reservations; it is not a deployable service.  
+**Status:** IN_PROGRESS / PARTIAL. Lane A authority/directory composition is tested; not an installed or deployable service.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
-**Code/test checkpoint:** `4401a6648cc6784ec594efc20998eed09918049f`.  
-**Continuation baseline:** `796e102bf1efadc715a57775e5377bf38d1e5923`.  
+**Parallel ownership:** #139 coordination; #143 ChatGPT A; #140 installer B; #141 packaging C; #142 diagnostic/CLI D.  
+**Verified code/test checkpoint:** `23b75462ffb7528e1d0f6b202f6146a73267b1a7`.  
+**Continuation baseline:** `3f5a3509055144358324bd1c41b436833097ab9a`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
 
-## 1. Actual progress, not a completion percentage
+## 1. Progress and parallel ownership
 
-| Scope | Actual state / remaining work |
+This increment adds `adapters/runtime-authority.ts`, `adapters/runtime-directories.ts`, their two test files and `test-support/runtime/fixture.ts`. No previously existing product module, shared schema, dependency, lockfile or workflow changed. The only preexisting file updated at handoff is this A-owned runbook.
+
+B/C/D continue from the pinned baseline, on separate branches with PR base `feat/macos-service-lifecycle`. A does not edit their installer, packaging, diagnostic/CLI files or lane notes. Their claims/PRs must be refreshed through #139 before later integration; this checkpoint makes no claim that external work is complete.
+
+Per the user's instruction, independent review is deferred to combined integration rather than repeated between component steps. Targeted TDD and full quality checks remain mandatory. No merge or deployment was requested or performed.
+
+| Area | Actual state |
 |---|---|
-| MAC-01 | Implemented on its separate unmerged branch; not included in this branch's test totals |
-| MAC-02 Tasks 1–4 | Existing configuration, preflight, persistence, telemetry and owned-health components retained; real fixed-root/helper provenance, production directory binding and safe abandoned-lock recovery remain gates |
-| MAC-02 Task 5 | Supervisor/native Core retained; durable reservation now fences starts across cooperating factories using the same trusted storage. Production CoreAuthority, fixed-root binding, cross-daemon currentCore and native tunnel composition remain incomplete |
-| MAC-02 Task 6 | Authorized installation, rollback, uninstall, explicit new-install provisioning and stopped recovery/reset not implemented |
-| MAC-02 Task 7 | Runnable supervisor CLI and sealed packaging not implemented |
-| MAC-02 Task 8 | Installed launchd/reboot/user-device acceptance and independent review not completed |
-| MAC-03 | Detailed design/plan only: 9 tasks for non-coding operations, approval, effects, scheduling and artifacts |
-| MAC-04 | Detailed design/plan only: 11 tasks for browser/API routing, credential use and GUI boundaries |
-| MAC-05 | Detailed design/plan only: 8 tasks for a single-product local draft/review bundle, not live publication |
+| Task 1 | Existing strict LAB_ONLY config and fixed renderer retained |
+| Tasks 2–4 | Existing file/ACL/account checks, persistence, telemetry, process/peer and authenticated-health components reused |
+| Task 5 new | Independently reviewed digest inputs, actual file/owner/ACL checks and a pinned shared run-directory binding compose a CoreAuthority and ExecutionLeaseStore |
+| Task 5 remaining | Bootstrap trust-anchor provisioning, fixed-root installed acceptance, orphan/stopped recovery, cross-daemon currentCore, real restricted tunnel composition and runnable entry |
+| Task 6 | Installer/control/rollback component delegated to B #140; A owns native integration |
+| Task 7 | Packaging delegated to C #141; diagnostic/CLI routing delegated to D #142; A owns final entries/glue |
+| Task 8 | Combined native launchd/reboot/user-device acceptance and deferred independent review remain open |
+| MAC-03–05 | Separate detailed design/plans at docs ref `31e66aa21b705b1793f11122c1b12d5ebf41715c`; not implemented by this change |
 
-There is still no `supervisor-cli.js`. Generated plists are **NOT DEPLOYABLE**. The remaining MAC-02 work is Task 5 integration plus Tasks 6–8 and unresolved Tasks 2–3 acceptance gates, not simply three small changes. The 28 later-phase tasks are not estimates of equal effort. Test counts are not product completion percentages or evidence of live shopping-mall operations.
+`supervisor-cli.js` still does not exist on this branch. Generated plists are **NOT DEPLOYABLE**. No real account, service, credential, Keychain/TCC/FileVault/SSH, tunnel, browser or store action occurred.
 
-The MAC-03–05 index remains on documentation branch commit `31e66aa21b705b1793f11122c1b12d5ebf41715c`. Its first business outcome is a local product draft, with no storefront write. Orders, refunds, advertising and outbound CS are not completed by that fixture outcome.
+Prior reservation/native Core details are preserved at the immutable baseline:
+https://github.com/jskjw157/gram-coding-agent/blob/3f5a3509055144358324bd1c41b436833097ab9a/docs/operations/macos-service-lifecycle.md
 
-Earlier native Core implementation and verification remain available at the immutable baseline:
-https://github.com/jskjw157/gram-coding-agent/blob/796e102bf1efadc715a57775e5377bf38d1e5923/docs/operations/macos-service-lifecycle.md
+## 2. Implemented runtime authority
 
-## 2. Implemented reservation and launch boundary
+`bindReviewedCoreRuntime(review, bootstrapAcl, signal)` uses the fixed `/Library/Application Support/HAAR/GramAgent` root, root-owned ancestors, actual macOS host/account probes and the current process identity. It returns `{ authority: CoreAuthority, execution: ExecutionLeaseStore }` or null. It neither launches Core nor reads a credential.
 
-New product modules:
-- `execution-lease.ts`: canonical bounded execution records, explicit absent-only initialization, atomic reservation and original-object release capabilities.
-- `exclusive-core.ts`: reserve-before-native-start and release-after-confirmed-exit composition.
-- `adapters/execution-files.ts`: fixed private execution record family using the existing file CAS mechanics.
+`RuntimeReview` contains `config`, normalized `configDigest`, `nodeDigest`, `fileAclDigest` and `peerOwnerDigest`. This is an internal trusted-bootstrap input, not a newly serialized release/installation schema. It must be independently approved, not populated from the candidate's own manifest. The normalized config digest is **not** `Preview.configDigest`, which remains the existing composite preview token.
 
-`adapters/private-record-files.ts` adds the fixed `execution` family and its validator. Existing circuit/status/event filenames, limits and mechanics remain unchanged. `adapters/native-core.ts` now requires a valid ExecutionLeaseStore before using the default native launcher. Invalid or missing providers are rejected before launch authority/credential use. The explicit in-process fixture launcher remains an isolated testing dependency, not a CLI/MCP/configuration command feature.
+The binder copies inputs before asynchronous work. It validates darwin/arm64/Node24, exact gram-agent account/UID/GID, non-admin membership and absence of inherited administrative group IDs. It compares the stored config, reuses the full existing `inspectRelease` inventory/hash/link verification, and separately checks the three executable pins, file modes and Node device/inode identity.
 
-An ExecutionRecord contains exactly schemaVersion, role, revision, state, token, generation, configDigest and releaseDigest. The initial FREE revision0 has null identity fields. Later acquisitions/releases monotonically advance the revision; HELD uses odd revisions and FREE uses even revisions. The UUID token identifies a reservation and is not a service credential or authorization token. Free records retain the previous generation as a tombstone instead of deleting the file. The immediately previous generation cannot be reused; callers still supply unique generation IDs.
+A launch grant requires a matching HELD execution reservation and repeated account/config/release/directory checks. Binding alone does not reserve or initialize a record. A missing/corrupt record returns unavailable; an existing HELD record is retained. Occupancy is still cooperative evidence, not process liveness or authentication.
 
-Missing/corrupt state never becomes permission to launch. There is no TTL, elapsed-time reset, PID inspection for stealing, or automatic removal of an abandoned HELD reservation or transaction lock. Concurrent stores compete with digest compare-and-swap; only the winner can proceed. Release accepts the original in-memory capability only, is idempotent after success, and never retries an uncertain operation against a newer record.
+The native peer proof is wrapped with fixed helper-path/pin/context rechecks and bounded use. Binding only constructs that proof; it does not execute candidate helpers. A candidate manifest rewritten together with helper bytes cannot replace the independently supplied helper pin. No new command, arbitrary path or raw-secret MCP API was added.
 
-The Core wrapper acquires the shared reservation before the inner native port (including authority acquisition). A definite no-child rejection releases under the existing strict native-port contract. An unresolved launch remains reserved; an invalid fulfilled child identity is ambiguous and is not freed or signalled by PID guessing.
+**Trust boundary still open:** this module consumes an already trustworthy bootstrap ACL capability and reviewed pins. It does not install/sign that capability, authenticate a human approval, or prove the provenance of a caller-supplied function. Never pass an always-true test ACL or derive both pins and trust from the candidate bundle to enable a production launch. Root/admin and hostile same-UID code are not sandboxed by these checks.
 
-Actual inner-child exit initiates reservation release. The wrapper's outward exit promise completes only after release completes, so the supervisor cannot treat mere signal delivery as successful cleanup. A rejected exit or uncertain release disables health forwarding and does not manufacture permission to start another child. Stop observes the original registered handle and one <=20000ms budget; copied handles are refused.
+## 3. Private directory identity and shared execution storage
 
-This is **cooperative exclusion over the same independently trusted run directory**, not a sandbox against root or hostile same-UID code. It does not provide production CoreAuthority, attest a helper, authenticate a process, prove no orphan exists, or establish cross-daemon health by itself. The file reservation is occupancy evidence, not process liveness.
+`inspectRuntimeDirectories` checks existing `run`, `state`, `secrets` and `logs` directories. Each leaf must be owned by the runtime UID with mode0700; ancestors must have the supplied trusted owner and no unsafe group/world writes. Opened descriptors, path identity and ACL checks must agree.
 
-## 3. Verification scope and review record
+It does not enumerate secret contents, create missing directories, change permissions or repair state. The directory witness pins device/inode/owner/group/mode rather than size or modification time, because ordinary record writes change directory contents. Later store reads/writes revalidate the witness before and after using the existing private-file adapter. Replacing the run directory with another otherwise valid directory is refused, rather than granting a fresh empty execution slot.
 
-Five new test files add 43 cases: execution-lease15, exclusive-core14, execution-files6, execution-boundary7, execution-process1. Test support uses actual canonical stores and digest CAS. Filesystem cases use temporary private directories and a synthetic ACL predicate. The process contention case starts a separate temporary Node child that owns the fixed transaction lock; a competing acquisition returns BUSY without deleting or changing that lock. This is not an installed two-daemon or production-authority test.
+All bindings to the same approved layout reuse the same fixed execution record family. There is still no TTL, abandoned-lock deletion or automatic reset. An uncertain post-write outcome stays an error and requires reconciliation.
 
-| Checkpoint | Observed evidence |
+Ruling: keep the existing Core launcher path `${root}/state` unchanged during parallel work. A prior spec sketch mentions `state/lab`; this increment follows the already pinned implementation and does not relocate data or silently change the launch contract. Any later layout change needs coordinated migration/installer/packager treatment.
+
+Ruling: consume independent bootstrap trust instead of treating candidate file-acl as its own verifier. Benefit: no circular self-approval. Cost: installed trust-anchor provisioning and full-size bundle timing remain acceptance gates. Initial binding/grant checks use a10000ms bound; peer operations use2000ms. No timing success for a real full deployment is claimed.
+
+## 4. Verification actually executed
+
+Added **38 tests**:35 authority/filesystem cases and3 native descriptor/ACL cases. The35 cases were observed failing before implementation.
+
+| Checkpoint | Evidence |
 |---|---|
-| RED `15a1278` | Lifecycle36491201850, Mac109159959165: 35 new failures /603 prior passes |
-| First implementation `922fe5a` | Lifecycle36491599226 and root36491599255 completed/success |
-| Review RED `df317cf` | Lifecycle36491809753, Mac109161946823: 3 failures /642 passes. Null/false provider accepted; ambiguous exit still forwarded healthy evidence |
-| Additional fixture `975b3f4` | Adds separate-process transaction-lock contention test; not a production bootstrap test |
-| Corrections `1f52efc` + `4401a66` | Normalize provider type before authority use; disable health after rejected exit without releasing the HELD slot |
+| RED `58914ad` | Focused36501462342; native Mac109193037874:35 NOT_IMPLEMENTED failures and646 prior passes |
+| Implementation `c3181df` | Native behavioral681 passes; quality gate found an unused test type import |
+| Native fixture `9c9a4bf` | Adds3 Mac-only ACL/directory cases and uses the imported type; typecheck exposed missing contextual parameter types through Object.freeze |
+| Final `23b7546` | Typed immutable RecordFiles/NativePeerProofPort/CoreAuthority wrappers; no relaxed compiler rules, security checks or assertions |
 
-### Final exact-head checks
+Exact code/test `23b75462ffb7528e1d0f6b202f6146a73267b1a7`:
 
-Code/test commit `4401a6648cc6784ec594efc20998eed09918049f`:
+- Focused workflow **36502578062**, Mac and Ubuntu completed/success.
+- Mac job **109196615734**, full log read: macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
+- **Mac lifecycle:46 files /684 passed**, zero failed/skipped.
+- **Mac root:54 files /732 passed**, zero failed/skipped. This includes lifecycle684 plus pinned main48, not additional732 tests.
+- Ubuntu job **109196615271**, applicable steps completed/success. Apple-only cases are explicitly skipped, not counted as native passes.
+- Root lint/typecheck/test/build/diff checks passed. Production build excludes tests/test-support.
+- Compiled plist validation passed both roles and rejected12 altered structures; native plutil accepted both files.
+- Existing root workflow **36502578100** completed/success, using the synthetic PR merge preview, not an actual merge.
 
-| Check | Evidence |
-|---|---|
-| Focused lifecycle run | `36492204440`; Mac and Ubuntu jobs completed/success |
-| Native Mac | Job `109163214001`, full log read; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
-| Mac lifecycle suite | **44 files /646 tests passed**, zero failed or skipped |
-| Mac root suite | **52 files /694 tests passed**, zero failed or skipped |
-| Ubuntu | Job `109163214246`; applicable steps completed/success; Apple-only cases remain explicitly skipped |
-| Quality checks | Root lint/typecheck/test/build/diff checks passed; test support excluded from compiled production output |
-| Plist validation | Two generated roles passed structure checks,12 altered structures rejected; native plutil accepted both files |
-| Existing root CI | `36492204438`, completed/success; synthetic PR merge preview, not an actual merge |
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36502578062
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36502578100
 
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204440
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204438
+The native tests compile the existing ACL helper separately, outside the candidate fixture, and exercise actual descriptors and temporary directory ACLs. They confirm read-only binding, real shared-record acquire/release and refusal of an ACL write grant despite0700 POSIX mode. The account/host source and candidate executable bytes are controlled fixtures. This is **not** a real gram-agent account, `/Library` deployment, Core launch, combined Core/libproc/health, signed-bootstrap, tunnel or reboot test.
 
-A later documentation-head workflow is separate from the counted code/test log. Upstream runner deprecation notices are not claimed to have been removed.
+The earlier security-blocked combined Core/libproc/health fixture was not retried and remains NOT_ADDED/NOT_RUN. These directory tests are a different scoped task, not substitute acceptance evidence. Independent review remains deferred/not performed. New bindings add no claim that Task5 or MAC-02 is complete.
 
-The root suite includes this branch's lifecycle tests and main's48 tests. Separate MAC-01 and Windows M2 branches are excluded. Apple-only tests skipped on Linux are not native passes. No assertion, security gate, lint rule, deadline or workflow was relaxed. No dependency or lockfile update was made.
+Local direct Git access failed DNS, and local Node22 is not the target toolchain. Full verification used unchanged read-only GitHub Actions exact-head isolated worktrees. A later documentation-head run is separate from the counted code/test log. Upstream deprecation notices and the existing empty workspace-importer normalization are not claimed fixed. Separate MAC-01, Windows M2 and external-lane changes are not included in these counts.
 
-**Independent review NOT_PERFORMED.** Review in this increment is author self-review. The earlier security-blocked combined Core/libproc/health fixture was not retried and remains NOT_ADDED/NOT_RUN; this reservation work does not substitute for it.
-
-Local authoring has no full repository checkout/pnpm/Node24; direct GitHub DNS was attempted and unavailable. Full validation uses the unchanged read-only GitHub Actions exact-head worktrees. The existing empty-workspace-importer normalization remains a packaging gate. No local full-suite claim is made.
-
-## 4. Rulings, costs and provisioning contract
-
-Ruling: implement occupancy persistence before production authority integration, reusing the existing private-file CAS. Reason: the previous one-factory guard cannot serialize independent launches. Cost: bootstrap must still bind every default factory to one trustworthy location; this component alone is not host-wide deployment proof.
-
-Ruling: a held record never expires and an unresolved launch never frees it. Reason: a crashed supervisor may leave a live child. Cost: unavailable or abandoned state requires separately authorized stopped-owner recovery; this increment does not implement that recovery.
-
-Ruling: reserve before the authority call. Reason: validate and spawn only after exclusive access is acquired. Cost: even a pre-spawn crash can leave HELD, intentionally blocking unsafe retries.
-
-Ruling: no automatic reinitialization/migration/reset of execution state. Task6 must explicitly provision absent records only for a verified new installation. Existing installs must be stopped and reconciled before adding this family. A rollback must preserve reservation generations/revisions and must not remove a HELD file to run an older version. Unknown durability requires reconciliation, not a blind rewrite.
-
-Required fixed record names under the eventual trusted private run directory:
-- `core.execution.json`, `tunnel.execution.json`;
-- transaction locks `core.execution.lock`, `tunnel.execution.lock`.
-
-The runtime adapter does not create that directory or select an arbitrary public destination. Files require restrictive ownership/modes and independent ACL verification, just like existing private records. Production fixed-root directory setup is still pending.
-
-## 5. Existing installer read contract retained
+## 5. Existing installation and execution contracts retained
 
 | Record | Fixed path |
 |---|---|
@@ -112,15 +100,16 @@ The runtime adapter does not create that directory or select an arbitrary public
 | Core plist | `/Library/LaunchDaemons/com.haar.gram-agent.core.plist` |
 | Tunnel plist | `/Library/LaunchDaemons/com.haar.gram-agent.tunnel.plist` |
 
-Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind exact bytes; absent tunnel hash is null. The presently supported installed state is disabled/unregistered for both roles.
+Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind actual bytes; absent tunnel hash is null. The current static installation reader supports stopped/disabled, unregistered roles, not live-owned acceptance.
 
-A remaining journal has exactly `schemaVersion:1`, `stage:'COMMITTED'`, and `installationDigest` matching the exact manifest SHA-256. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused, not automatically deleted or replayed. Metadata is bounded to262144 bytes. The actual plist must match the fixed renderer, not merely a manifest-supplied hash. Writer changes require versioned review.
+Final journal exact fields: `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` matching exact manifest bytes. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused by the existing reader, not silently removed/replayed. Metadata limit262144 bytes. Plist bytes must match the fixed renderer, not merely a manifest-supplied hash. B owns the transaction writer; A owns later live acceptance integration.
 
+Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. B receives this provisioning boundary without needing changes to its frozen release/CLI contracts.
 
-## 6. Exact next work and isolation
+## 6. Exact next work
 
-Continue Task5 integration with independently trusted CoreAuthority: reviewed release digest, account and executable identity, helper provenance, fixed state/secret/run directories and no live orphan. Reuse the existing reservation, Core custody, supervisor, owned-health and file inspection components instead of rebuilding them. Bind cross-daemon currentCore and the separately verified restricted native tunnel port, then provide the runnable CLI. Finish Task2/3 trust/abandoned-lock gates alongside Task6 provisioning and stopped recovery. Do not enable the native default by injecting test grants or a synthetic ACL predicate.
+Continue A #143 with trusted bootstrap provisioning and production composition, then cross-daemon owned/current Core observation and the restricted native tunnel port. Reuse the authority/directory witnesses, native Core, reservation, checked-socket health and supervisor already implemented; do not build another engine or modify external lane files.
 
-Task6 administrative transactions, Task7 sealed packaging and Task8 independent/user-device launchd and reboot acceptance remain open. No real credential, service, account, Keychain/TCC/FileVault/SSH, tunnel, browser or HAAR operation was provisioned. No installer or live store write was executed.
+A must connect the independently provisioned trust inputs and shared run binding to runnable entries. Trusted stopped-owner/orphan recovery and installed acceptance remain prerequisites for unattended recovery, not inferred from a HELD file, label or port. Apply/install control is B; packaging is C; public diagnostic/CLI routing is D. Refresh their claims and PRs through #139; integrate under the existing authority and perform the deferred combined review before merge/deployment.
 
-Only `feat/macos-service-lifecycle` was written. Baseline separate refs: main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, documentation=31e66aa. Preserve later concurrent work. No main/WSL/shared product code, workflow, lockfile, migration, MAC-03–05 implementation or GPT-Bridge integration changed. No merge, force push, rebase, branch deletion, or Windows issue closure.
+No real service/account/credential/OS-security/store changes, administrator install, merge, force push, rebase, branch deletion or Windows issue closure occurred. Starting separate refs were main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, docs=31e66aa. Preserve concurrent changes rather than resetting those refs.
