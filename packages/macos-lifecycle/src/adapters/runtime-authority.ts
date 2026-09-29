@@ -5,6 +5,7 @@ import { root, type ServiceConfig } from '../contracts.js';
 import { configDigest, parseConfig } from '../config.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
 import { inspectRelease } from '../release-inspection.js';
+import type { RecordFiles } from '../telemetry-store.js';
 import type { CoreAuthority } from './native-core.js';
 import { createTrustedFiles, type AclProbe } from './trusted-files.js';
 import { inspectMacHost, inspectMacAccount, type LocalAccount } from './macos-inspection.js';
@@ -118,7 +119,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       const releasePath = join(layout.anchor, releasePrefix);
       const releaseFiles = createTrustedFiles(layout.anchor, layout.ownerUid, bootstrapAcl, releasePrefix);
       const rawRecords = createExecutionFilesAt(directories.runPolicy);
-      const execution = new ExecutionLeaseStore(Object.freeze({
+      const execution = new ExecutionLeaseStore(Object.freeze<RecordFiles>({
         async read(role) { await directories.verify(); const value = await rawRecords.read(role); await directories.verify(); return value; },
         async compareAndSwap(role, expected, slot, bytes) {
           await directories.verify(); await rawRecords.compareAndSwap(role, expected, slot, bytes); await directories.verify();
@@ -164,7 +165,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           });
         } catch { return fallback; }
       }
-      const proof: NativePeerProofPort = Object.freeze({
+      const proof: NativePeerProofPort = Object.freeze<NativePeerProofPort>({
         async capture(request, abort) {
           try { const copy = structuredClone(request); return await proofUse(abort, null, s => nativeProof.capture(copy, s)); }
           catch { return null; }
@@ -178,7 +179,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           catch { return 'UNKNOWN'; }
         },
       });
-      const authority: CoreAuthority = Object.freeze({
+      const authority: CoreAuthority = Object.freeze<CoreAuthority>({
         async acquire(input, abort) {
           try {
             const config = parseConfig(input); if (configDigest(config) !== review.configDigest) return null;
