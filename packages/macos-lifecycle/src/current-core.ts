@@ -39,6 +39,9 @@ export function createCurrentCoreReader(input: ServiceConfig, deps: CurrentCoreD
   try { config = parseConfig(input); Object.freeze(config.tunnel); Object.freeze(config); }
   catch { return async () => null; }
   const wantedDigest = configDigest(config);
+  // Reader-lifetime suppression only, not a durable credential policy or reset.
+  // A different, validated HELD acquisition establishes a new observation context.
+  let authBlockedToken: string | null = null;
   return async parent => {
     const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 10000);
     const signal = AbortSignal.any([parent, deadline.signal]); let lastTime = -1;
@@ -52,7 +55,8 @@ export function createCurrentCoreReader(input: ServiceConfig, deps: CurrentCoreD
       const source = await abortable(deps.registration.read(), signal); check();
       if (source === null) return null;
       const record = decodeCoreRegistration(encodeCoreRegistration(source));
-      if (record.configDigest !== wantedDigest || record.child.releaseDigest !== config.releaseDigest) return null;
+      if (record.configDigest !== wantedDigest || record.child.releaseDigest !== config.releaseDigest
+        || record.executionToken === authBlockedToken) return null;
       const expected = encodeCoreRegistration(record); const owner = record.child;
       const consistent = async (active: AbortSignal): Promise<boolean> => {
         try {
@@ -110,6 +114,7 @@ export function createCurrentCoreReader(input: ServiceConfig, deps: CurrentCoreD
       };
       const connections = deps.connections ? deps.connections(verifier) : createLoopbackConnections(verifier);
       const result = await abortable(probeCore(owner, connections, guarded, { signal, now }), signal);
+      if (result.code === 'AUTH_BLOCKED') { authBlockedToken = record.executionToken; return null; }
       if (!await current(owner) || result.state !== 'LOCAL_CORE_HEALTHY' || result.code !== 'OK') return null;
       check(); return Object.freeze({ ...result });
     } catch { return null; }

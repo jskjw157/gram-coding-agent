@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { root, type ServiceConfig } from '../contracts.js';
 import { configDigest, parseConfig } from '../config.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
+import { CoreRegistrationStore } from '../core-registration.js';
+import { decodeStatus, type ServiceStatus } from '../telemetry.js';
 import { inspectRelease } from '../release-inspection.js';
 import type { RecordFiles } from '../telemetry-store.js';
 import type { CoreAuthority } from './native-core.js';
@@ -11,6 +13,8 @@ import { createTrustedFiles, type AclProbe } from './trusted-files.js';
 import { inspectMacHost, inspectMacAccount, type LocalAccount } from './macos-inspection.js';
 import { copyRuntimeLayout, inspectRuntimeDirectories, type RuntimeLayout } from './runtime-directories.js';
 import { createExecutionFilesAt } from './execution-files.js';
+import { createCoreProcessFilesAt } from './core-process-files.js';
+import { createPrivateRecordFiles } from './private-record-files.js';
 import { createNativePeerProof, type ExecutableIdentity, type NativePeerProofPort } from './owned-process.js';
 
 /** Trusted bootstrap input, NOT candidate release.json/CLI/MCP data. Independent
@@ -29,7 +33,10 @@ export interface RuntimeEnvironment {
   account(): Promise<LocalAccount | null>;
   identity(): { uid: number; gid: number; groups: readonly number[] };
 }
-export interface ReviewedCoreRuntime { authority: CoreAuthority; execution: ExecutionLeaseStore }
+export interface ReviewedCoreRuntime {
+  authority: CoreAuthority; execution: ExecutionLeaseStore;
+  registration: CoreRegistrationStore; readCoreStatus(): Promise<ServiceStatus | null>;
+}
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
 function check(signal: AbortSignal): void { if (signal.aborted) refuse(); }
 function data(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -118,13 +125,23 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       const releasePrefix = layout.relative + '/releases/' + review.config.releaseId;
       const releasePath = join(layout.anchor, releasePrefix);
       const releaseFiles = createTrustedFiles(layout.anchor, layout.ownerUid, bootstrapAcl, releasePrefix);
-      const rawRecords = createExecutionFilesAt(directories.runPolicy);
-      const execution = new ExecutionLeaseStore(Object.freeze<RecordFiles>({
-        async read(role) { await directories.verify(); const value = await rawRecords.read(role); await directories.verify(); return value; },
+      const guardRecords = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
+        async read(role) { await directories.verify(); const value = await raw.read(role); await directories.verify(); return value; },
         async compareAndSwap(role, expected, slot, bytes) {
-          await directories.verify(); await rawRecords.compareAndSwap(role, expected, slot, bytes); await directories.verify();
+          await directories.verify(); await raw.compareAndSwap(role, expected, slot, bytes); await directories.verify();
         },
-      }));
+      });
+      const execution = new ExecutionLeaseStore(guardRecords(createExecutionFilesAt(directories.runPolicy)));
+      const registration = new CoreRegistrationStore(guardRecords(createCoreProcessFilesAt(directories.runPolicy)), execution);
+      const statusFiles = guardRecords(createPrivateRecordFiles('status', directories.runPolicy));
+      const readCoreStatus = async (): Promise<ServiceStatus | null> => {
+        const group = await statusFiles.read('core');
+        if (group.length !== 1) refuse();
+        const bytes = group[0];
+        if (bytes === null) return null;
+        if (!Buffer.isBuffer(bytes)) refuse();
+        const status = decodeStatus(bytes); if (status.role !== 'core') refuse(); return status;
+      };
       async function unchangedContext(abort: AbortSignal): Promise<void> {
         if (JSON.stringify(await context(abort)) !== JSON.stringify(initialAccount)) refuse();
         await directories.verify(); check(abort);
@@ -193,7 +210,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           } catch { return null; }
         },
       });
-      return Object.freeze({ authority, execution });
+      return Object.freeze({ authority, execution, registration, readCoreStatus });
     });
   } catch { return null; }
 }
