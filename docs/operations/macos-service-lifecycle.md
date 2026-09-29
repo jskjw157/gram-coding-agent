@@ -1,82 +1,72 @@
-# MAC-02 Service Lifecycle — Service Session and Entry Composition Checkpoint
+# MAC-02 Service Lifecycle — Runtime Review Metadata Checkpoint
 
-**Updated:** 2026-09-29 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Internal entry/session/store composition is tested; not an installed or deployable service.  
+**Updated:** 2026-09-30 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Metadata validation is implemented and tested; native bootstrap and installed service acceptance remain incomplete.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
 **Parallel ownership:** #139 v2; ChatGPT A #143; installer repairs #146–149; packaging #141; public CLI #142.  
-**Verified code/test checkpoint:** `1ed96987eaef17fc622764a65034ff7b4772ef66`.  
-**Product implementation checkpoint:** `55b7567342f49d1407e49f93a65243c65b68f95b`; the next commit adds tests only.  
-**Continuation baseline:** `7dcf782f60cd183580303715d3accb2e59e3e226`.  
+**Verified code/test checkpoint:** `c2275d4ff9e20336e5e507a61edf1703d0015446`.  
+**Continuation baseline:** `c7b51db11cddff6be0917a9fb6ac927f72ec0ff3`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
 
-## 1. Actual progress and unchanged boundaries
+## 1. Delivered scope and explicit interruption
 
-This increment adds three product modules and four test files (39 cases). Two existing A-owned adapters receive additive changes: `logsPolicy` on the directory witness and an extended runtime return type. No installer repair, public CLI, packaging, native C helper, shared configuration/release/preview schema, dependency, lockfile or workflow was changed.
+This increment adds `runtime-review.ts` and 36 tests in `runtime-review.test.ts`. The existing `adapters/runtime-authority.ts` now reuses the same validator instead of its private duplicate (+2/-12 lines). Existing public types, runtime interfaces and native behavior remain intact.
 
-| Area | Implemented in this increment |
+The initially proposed credential-file/private-ACL batch was rejected by the tool safety check. No tree or commit resulted from that request. That operation was stopped and was not retried through another tool, encoding or path. The delivered replacement is a different, metadata-only operation: validating already supplied configuration and reviewed binary hashes. It does not read credentials or files, execute a helper, modify ACLs, establish native trust, or launch a service. Credential-file/private-ACL work remains PAUSED, not implemented.
+
+**The generated plists remain NOT DEPLOYABLE.** `supervisor-cli.js` is still absent. This component does not complete the native bootstrap or connect real authentication. Independent whole-branch review remains deferred to integration.
+
+Previous verified store/session/internal-entry implementation, full history and contracts:
+https://github.com/jskjw157/gram-coding-agent/blob/c7b51db11cddff6be0917a9fb6ac927f72ec0ff3/docs/operations/macos-service-lifecycle.md
+
+## 2. RuntimeReview metadata contract
+
+`RuntimeReview` remains exported from `adapters/runtime-authority.ts` with the same fields: `config`, `configDigest`, `nodeDigest`, `fileAclDigest`, `peerOwnerDigest`. The new module imports/re-exports that type only; it does not import native adapters at runtime.
+
+Exports from `runtime-review.ts`:
+
+```ts
+copyRuntimeReview(value: unknown): Readonly<RuntimeReview>
+encodeRuntimeReview(value: unknown): Buffer
+decodeRuntimeReview(bytes: Buffer, expectedDigest: string): Readonly<RuntimeReview> | null
+```
+
+`copyRuntimeReview` accepts only exact plain data records, refuses accessors and unexpected fields without invoking them, normalizes configuration with the existing parser, and checks its normalized digest. All binary pins are exactly 64 lowercase hex characters. The output and nested configuration are detached and frozen. Invalid copy/encode requests throw only `INVALID_RUNTIME_REVIEW` without the offending value or cause.
+
+The private envelope is exactly `JSON.stringify({schemaVersion:1,review:normalizedReview}) + '\n'`, capped at 65536 bytes. Decoding copies the buffer, checks its SHA-256 against the supplied expected digest, parses strict UTF-8 and compares with canonical re-encoding. Duplicate fields, BOM, unknown keys, reordered envelopes, extra newlines, invalid text, mismatches and oversized input return null.
+
+**The expected digest must originate independently of the candidate.** Hashing the same untrusted bytes and passing that hash is not approval. This module cannot determine provenance or supply a trust anchor. Its record is not `release.json`, an installation manifest, a public CLI format, a credential store or an authorization grant.
+
+`RuntimeReview.configDigest` is the normalized configuration hash. It is not `Preview.configDigest` (composite preview token), `Preview.previousInstallDigest` (files+registry composite), installation `configSha256` (stored configuration bytes), or the expected digest of this review envelope.
+
+## 3. Verification actually executed
+
+Exact code/test checkpoint `c2275d4ff9e20336e5e507a61edf1703d0015446`:
+
+| Check | Observed result |
 |---|---|
-| Runtime stores | Existing circuit/status/event engines now consume the verified run/log directory witness, with checks before and after operations |
-| Service session | One invocation of the existing supervisor, bound configuration/methods, native clock and UUID defaults, no second state machine |
-| Internal entry | Fixed launchd argument grammar, cancellation hooks before bootstrap, bounded bootstrap and awaited session termination |
-| Composed tests | Actual temporary records plus controlled child lifecycle, real clock/UUID, delayed child completion, no credential reads on pre-cancellation |
-| Not delivered | Independently provisioned bootstrap, runnable `supervisor-cli.js`, verified native tunnel, installed acceptance or business operations |
+| Focused workflow | `36624597738`, completed/success |
+| Native Mac job | `109598227754`; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5; full log read |
+| Mac lifecycle | 58 files / 813 passed; zero failures/skips |
+| Mac root | 66 files / 861 passed; zero failures/skips |
+| Root quality checks | lint, typecheck, test, build and diff check passed on the exact-head Mac run |
+| Ubuntu job | `109598227614`; focused workflow completed successfully; precise final Linux test count not claimed from unread logs |
+| Compiled plist checks | 2 roles accepted, 12 altered cases refused; native plutil passed both files |
+| Existing root CI | `36624597750`, completed/success; synthetic PR merge preview, not an actual merge |
 
-**The generated plists are still NOT DEPLOYABLE.** `supervisor-entry.ts` is a library entry function, not a replacement executable or a permissive bootstrap. The production `supervisor-cli.js` is deliberately still absent rather than adding a fake success entry just to satisfy packaging.
+Root861 includes lifecycle813 plus pinned main48; separate MAC-01, Windows M2 and external-lane code are not included. Existing native suites were rerun, but the new 36 cases operate only on synthetic in-memory metadata. No installed service, native bootstrap, real credential, tunnel or reboot acceptance is implied. Tests/test-support remain excluded from production output.
 
-Previous runtime/discovery implementation and historical verification remain available at:
-https://github.com/jskjw157/gram-coding-agent/blob/7dcf782f60cd183580303715d3accb2e59e3e226/docs/operations/macos-service-lifecycle.md
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36624597738
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36624597750
 
-## 2. Runtime store binding
+RED evidence: `61a362c13c2fa1116076e51063ced852734610ac`, workflow36624310062, Ubuntu job109597245318. Full log read: 5 expected new positive-path failures,786 passes,22 native skips. The conservative scaffold already rejected invalid inputs; all36 cases are not claimed to have failed. The implementation then passed the full suites without weakening tests. Local clone failed DNS and local Node24/pnpm were unavailable; the full validation above used the existing read-only Actions exact-head isolated worktrees, not a local full-suite claim.
 
-`adapters/runtime-stores.ts` exports `createRuntimeStores(directories): RuntimeStores`. It reuses `LifecycleStore`, `TelemetryStore`, `createCircuitFilesAt` and `createTelemetryFilesAt`. No alternate file formats, migrations, filename choices or recovery algorithm are introduced.
+## 4. Existing installation and execution contracts retained
 
-`RuntimeDirectories` now exposes `logsPolicy` alongside `runPolicy`. All record operations call the existing directory witness before and after IO. Replacing the pinned run/log directory or changing private permissions invalidates the binding. Existing private-record CAS, descriptor/ACL checks, file/directory sync, transaction locks and safe errors are preserved.
+Fixed installation paths:
 
-`ReviewedCoreRuntime` remains unchanged for existing consumers. The bind functions return an additive `ReviewedServiceRuntime` subtype containing `configuration: Readonly<ServiceConfig>` and `stores`, in addition to authority, execution, registration and the Core status reader. The normalized configuration and nested tunnel settings are frozen.
-
-Construction does not initialize missing circuit history, clear execution reservations, repair directories or read secrets. Tests explicitly call the existing absent-only initializer to provision their temporary fixtures; the runtime/session path never does that. Existing HELD records and uncertain previous attempts remain blockers until independently verified stopped recovery exists.
-
-## 3. Single-use service session and internal entry
-
-`service-session.ts` exports `createServiceSession(role, config, deps)` and `createReviewedServiceSession(role, runtime, credentials, tunnel?)`.
-
-The first factory fixes configuration and port method bindings before its first asynchronous work and delegates to the existing `runSupervisor`. A session may run only once, including after a pre-cancelled invocation. The default clock uses actual time and abortable Node timers; default generations are UUIDs. Disabled tunnel sessions are no-ops. Enabled tunnel sessions cannot be constructed without a supplied local transport capability. These typed capabilities are trusted composition dependencies, not serialized authorization or proof that a provider is verified.
-
-The reviewed factory reuses `createReviewedCorePorts` for native Core custody, registration and independent discovery and supplies the verified stores. This does not provision bootstrap trust, secrets, old-process recovery or tunnel compatibility.
-
-`supervisor-entry.ts` accepts exactly `--role core|tunnel --config /Library/Application Support/HAAR/GramAgent/config/service.json`, with either flag pair first. Duplicate/missing/unknown flags, arbitrary paths, extra positional arguments, array accessors and malformed input are refused before preparation or signal registration. This is NOT the external lane D management CLI.
-
-`runSupervisorEntry(argv, bootstrap?, signals?)` installs SIGINT/SIGTERM hooks before preparation. `bootstrap.prepare` has a 10-second deadline and must be side-effect-free: no child launch, mutations or retained resources. Cancellation/timeout does not run a late returned session. Once a session is running, the entry awaits its completion rather than racing cancellation to a false success. Only its own listeners are removed, including after partial listener-registration failure. It never calls `process.exit`, loads arbitrary modules, prints raw provider errors or accepts credentials in arguments.
-
-Internal exit codes: 0 normal termination, 1 supervisor failure, 64 invalid usage, 70 fixed internal error, 78 bootstrap unavailable. Exit0 is not readiness or completion of shopping-mall work. A misbehaving running session that never resolves is not converted to success; correct owned shutdown is still the session/native port's contract.
-
-## 4. Verification actually executed
-
-Clean RED `d3f73245bb2c30776a97913fdb6d3fcf121fe5a5`, workflow36573621999 / native Mac109423497259: **36 new failures /738 prior passes**, no skips or unhandled rejections. The earlier scaffold run1ca59ce also exposed test-harness early-rejection handling; this was corrected before implementation without weakening assertions.
-
-First implementation1139983 passed behavioral tests but root lint found four issues: two unused test bindings, an invalid void payload and an unused initial assignment. Corrections55b7567 preserved all lint rules and supplied an explicit tunnel port type. The invalid-argv parameterized matrix was also corrected to pass complete vectors instead of spreading rows. Test-only1ed9698 added three composition/default-clock/listener-cleanup checks; these validate existing behavior and are not claimed as three newly failing implementation cases.
-
-Exact final code/test `1ed96987eaef17fc622764a65034ff7b4772ef66`, focused workflow **36574845587**, completed/success:
-
-- Native Mac job **109427695752**, complete job log read: macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
-- **Mac lifecycle:57 files /777 passed**, zero failed/skipped.
-- **Mac root:65 files /825 passed**, zero failed/skipped. Root825 includes lifecycle777 plus pinned main48; do not add these counts together.
-- Ubuntu job **109427695253**: all applicable steps completed successfully. Apple-only tests and native plutil are not counted as Linux-native passes; no separate final Linux test count is claimed here.
-- Root lint/typecheck/test/build/diff passed on both jobs. Production build excludes tests and test support.
-- Compiled plist validation accepted two roles and rejected12 altered structures; native plutil accepted both files.
-- Existing root workflow **36574845600**, completed/success; a synthetic PR merge preview, not an actual merge.
-
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36574845587
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36574845600
-
-New tests use real temporary record files, controlled account/bootstrap ACL/child ports and in-process signal emitters. One composition test uses real Node clock/UUID defaults and checks STOPPING until the controlled child is permitted to complete; it does not launch a real daemon. The reviewed native-port factory is tested only for construction/pre-cancellation here. Existing native helper/socket/ACL suites rerun separately. This is not installed launchd, combined real Core/libproc/health, real tunnel, credential or reboot acceptance. The earlier security-blocked combined fixture was not retried.
-
-Independent whole-branch review remains deferred/not performed for this increment. Local direct Git access failed DNS and the authoring environment lacks pnpm/Node24; full verification used unchanged read-only Actions exact-head isolated worktrees. Separate MAC-01, Windows M2 and external installer/repair/packaging/CLI code are not in these counts. Later documentation-head runs are separate from the counted code/test logs.
-
-## 5. Existing installation and execution contracts retained
-
-| Record | Fixed path |
+| Item | Path |
 |---|---|
 | Configuration | `/Library/Application Support/HAAR/GramAgent/config/service.json` |
 | Manifest | `/Library/Application Support/HAAR/GramAgent/config/installation.json` |
@@ -86,14 +76,14 @@ Independent whole-branch review remains deferred/not performed for this incremen
 
 Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind actual bytes; absent tunnel hash is null. The current static installation reader supports stopped/disabled, unregistered roles, not live-owned acceptance.
 
-Final journal exact fields: `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` matching exact manifest bytes. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused by the existing reader, not silently removed/replayed. Metadata limit262144 bytes. Plist bytes must match the fixed renderer, not merely a manifest-supplied hash. B owns the transaction writer; A owns later live acceptance integration.
+Final journal exact fields: `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` matching exact manifest bytes. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused by the existing reader, not silently removed/replayed. Metadata limit262144 bytes. Plist bytes must match the fixed renderer, not merely a manifest-supplied hash. Installer repair lanes own the transaction writers; A owns later live acceptance integration.
 
-Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. The Core process hint needs no installer initialization: absence remains unavailable until a validated Core publishes it. Preserve the run directory and last hint; no new external schema or path option is required.
+Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. The Core process hint needs no installer initialization: absence remains unavailable until a validated Core publishes it. Preserve the run directory and last hint.
 
-## 6. Parallel handoff and next exact work
+## 5. Parallel handoff and next exact work
 
-A #143 continues with independently provisioned bootstrap review/ACL/credential capabilities and the real fixed `supervisor-cli.ts` launcher, then the separately verified restricted native tunnel. Reuse `createReviewedServiceSession` and `runSupervisorEntry` instead of another lifecycle engine. Native bootstrap must obey the no-retained-resources preparation contract and supply validated configuration and use-only credentials without argv/env-based arbitrary module loading.
+A #143 owns this metadata codec and its use in runtime-authority. External B1–B4/C/D files and schemas were not changed or merged. No conclusion about the latest external repair quality is made by these tests. Their heads and combined regression results still require a separate review.
 
-B1–B4 (#146–149), packagingC #141 and public CLI D #142 remain independently owned. The installer branch advanced externally to463ca943331846013c78b7fa80aacc11ab433b4d while this increment was running. That update was preserved, not reviewed, reverted or merged here; no claim that prior PR144 review findings are now fixed. PR145 remains separate review evidence. Latest external heads require their own review/combined tests before integration.
+The next non-credential connection is admission of this exact reviewed metadata from an independently trusted local source before preparing the existing service session. Reuse `copyRuntimeReview`/`decodeRuntimeReview`, `createReviewedServiceSession` and `runSupervisorEntry`; do not invent another lifecycle engine or treat matching candidate hashes as provenance. No disk location, provisioning writer, automatic trust grant, public command or production stub was introduced by this increment.
 
-Actual fixed-root trust provisioning, full-size timing, supervisor-death/orphan recovery, installed launchd/logout/reboot, final integration and deferred review remain open. No administrator installation, service/account/credential/Keychain/TCC/FileVault/SSH/tunnel/browser/store change, merge, force push, rebase, branch deletion or Windows issue closure was performed. Preserve other agents' concurrent updates.
+The paused credential/private-ACL operation must not be retried as a tool-safety workaround. Native trust provisioning, the standalone fixed supervisor entry, provider-verified restricted tunnel, full-size timing, orphan/stopped recovery, installation/logout/reboot acceptance and final integration remain open. No actual administrator, account, credential, Keychain, OS-security, tunnel, browser or store change was performed; no merge, force push, rebase, branch deletion or Windows issue closure.
