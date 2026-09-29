@@ -61,6 +61,14 @@ function manifestDigestOf(live: Map<PublishKind, Buffer | null>): string | null 
   } else if (tunnel === null || shaBytes(tunnel) !== m.plistSha256.tunnel) {
     return null;
   }
+  // R7: digest mirrors the unchanged installation reader
+  // (inspectInstallation): files in reader order with the real registry
+  // observation object (jobs absent + overrides), never a parallel string.
+  const tunnelPresent = m.plistSha256.tunnel !== null;
+  const registry = {
+    jobs: { core: 'absent', tunnel: 'absent' },
+    overrides: { core: true, tunnel: tunnelPresent ? true : null },
+  };
   const files: Array<[string, string | null]> = [
     ['configuration', config ? shaBytes(config) : null],
     ['manifest', shaBytes(manifest)],
@@ -68,7 +76,7 @@ function manifestDigestOf(live: Map<PublishKind, Buffer | null>): string | null 
     ['core', core ? shaBytes(core) : null],
     ['tunnel', tunnel ? shaBytes(tunnel) : null],
   ];
-  return shaBytes(Buffer.from(JSON.stringify({ files, registry: 'disabled-absent' }), 'utf8'));
+  return shaBytes(Buffer.from(JSON.stringify({ files, registry }), 'utf8'));
 }
 
 export interface InstallFixture {

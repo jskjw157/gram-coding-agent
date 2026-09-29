@@ -49,3 +49,25 @@ Duplicate apply: installed identity + desired disabled match + clean-committed j
 ## Baseline note
 
 Pre-existing `service-files` / `telemetry-files` public-file failures reproduce on `umask 0077` only (mode 600); pass on `umask 022`. Unrelated to Task 6; left untouched.
+
+## Review repair (PR #144 comment 2026-09-29, head e3c6589)
+
+- R1: rollback requires targetDigest == installed prior digest, then
+  restorePrior + re-verify digest; arbitrary digests blocked before mutation.
+- R2: stopBoth + isStopped verified before readClosedSchema; unknown closure blocks.
+- R3: uninstall honors removeManifestOwned=false as FOREIGN_SERVICE, preserves files.
+- R4: validateManifestBytes enforces uid>=1 / gid>=0 integer domain (<2^32),
+  matching the unchanged installation reader; buildManifest bounds aligned.
+- R5: withLock/control release rejection downgrades success to PARTIAL_INSTALL,
+  never retries unknown writes; failures preserved.
+- R6: LAB_ONLY stopped/disabled delivery — health proven via owned evidence,
+  then both jobs re-stopped before COMMITTED so output round-trips the
+  unchanged stopped-install reader; start/health failures compensate-stop;
+  tunnel disable removes the old manifest-owned tunnel plist.
+- R7: fixture digest uses the real registry observation object
+  ({jobs absent, overrides core:true/tunnel:bool|null}) in reader file order.
+- R8: authorizeLocalAdmin/lock exceptions become fixed safe codes, never escape.
+- Gaps: all journal/publish interruption points return bounded PARTIAL_INSTALL;
+  restart/reset-failure validate prior identity like start/uninstall.
+- Regression: installation-transaction/review-fixes.test.ts (17 tests) incl.
+  real inspectInstallation round-trip (digest equality) after apply.

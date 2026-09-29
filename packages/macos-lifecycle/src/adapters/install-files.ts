@@ -62,8 +62,8 @@ export function buildManifest(input: {
   tunnelPlist: Buffer | null;
 }): BuiltManifest {
   if (input.runtime.name !== 'gram-agent') throw new Error('FOREIGN_SERVICE');
-  if (!Number.isSafeInteger(input.runtime.uid) || input.runtime.uid <= 0) throw new Error('FOREIGN_SERVICE');
-  if (!Number.isSafeInteger(input.runtime.gid) || input.runtime.gid < 0) throw new Error('FOREIGN_SERVICE');
+  if (!Number.isSafeInteger(input.runtime.uid) || input.runtime.uid <= 0 || input.runtime.uid >= 0xffff_ffff) throw new Error('FOREIGN_SERVICE');
+  if (!Number.isSafeInteger(input.runtime.gid) || input.runtime.gid < 0 || input.runtime.gid >= 0xffff_ffff) throw new Error('FOREIGN_SERVICE');
   if (!Buffer.isBuffer(input.configBytes) || input.configBytes.length === 0
     || input.configBytes.length > INSTALL_LIMIT) throw new Error('INVALID_CONFIG');
   if (!Buffer.isBuffer(input.corePlist) || input.corePlist.length === 0
@@ -101,6 +101,10 @@ export function validateManifestBytes(bytes: Buffer): boolean {
     const runtime = parsed.runtime;
     if (!isRecord(runtime) || !exactKeys(runtime, ['name', 'uid', 'gid'])) return false;
     if (runtime.name !== 'gram-agent') return false;
+    const uid = (runtime as Record<string, unknown>).uid;
+    const gid = (runtime as Record<string, unknown>).gid;
+    if (typeof uid !== 'number' || !Number.isSafeInteger(uid) || uid <= 0 || uid >= 0xffff_ffff) return false;
+    if (typeof gid !== 'number' || !Number.isSafeInteger(gid) || gid < 0 || gid >= 0xffff_ffff) return false;
     const hashes = parsed.plistSha256;
     const enabled = parsed.desiredEnabled;
     if (!isRecord(hashes) || !exactKeys(hashes, ['core', 'tunnel'])) return false;

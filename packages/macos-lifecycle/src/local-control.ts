@@ -20,11 +20,22 @@ function fail(code: SafeCode): InstallResult {
  */
 export async function control(action: ControlAction, ports: InstallPorts): Promise<InstallResult> {
   if (!isControlAction(action)) return fail('INVALID_CONFIG');
-  if (await ports.authorizeLocalAdmin() !== true) return fail('NOT_AUTHORIZED');
-
-  const session = await ports.lock();
-  if (!session.acquired) return fail('BUSY');
+  let authed: boolean;
   try {
+    authed = await ports.authorizeLocalAdmin();
+  } catch {
+    return fail('NOT_AUTHORIZED');
+  }
+  if (authed !== true) return fail('NOT_AUTHORIZED');
+
+  let session;
+  try {
+    session = await ports.lock();
+  } catch {
+    return fail('PARTIAL_INSTALL');
+  }
+  if (!session.acquired) return fail('BUSY');
+  const run = async (): Promise<InstallResult> => {
     let prior;
     try {
       prior = await ports.readPrior();
@@ -90,7 +101,8 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         return { ok: true, code: 'OK' };
       }
       case 'restart': {
-        if (prior.digest === null || prior.manifest === null) return fail('FOREIGN_SERVICE');
+        if (prior.digest === null || prior.manifest === null
+          || !validateManifestBytes(prior.manifest)) return fail('FOREIGN_SERVICE');
         const stopped = await stopBoth();
         if (stopped !== null) return stopped;
         const started = await startDesired();
@@ -98,6 +110,8 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         return { ok: true, code: 'OK' };
       }
       case 'reset-failure': {
+        if (prior.digest === null || prior.manifest === null
+          || !validateManifestBytes(prior.manifest)) return fail('FOREIGN_SERVICE');
         // Confirmed stop + local authorization (already checked) + runtime UID
         // via the sealed narrow reset helper. No general helper/callback that
         // creates root-owned records the supervisor cannot update.
@@ -121,10 +135,13 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         try {
           const restore = ports.restore();
           if (prior.corePlist !== null) {
-            await restore.removeManifestOwned('core', prior.corePlist);
+            const removedCore = await restore.removeManifestOwned('core', prior.corePlist);
+            // R3: denial/uncertainty preserves foreign files as bounded failure.
+            if (removedCore !== true) return fail('FOREIGN_SERVICE');
           }
           if (prior.tunnelPlist !== null) {
-            await restore.removeManifestOwned('tunnel', prior.tunnelPlist);
+            const removedTunnel = await restore.removeManifestOwned('tunnel', prior.tunnelPlist);
+            if (removedTunnel !== true) return fail('FOREIGN_SERVICE');
           }
           // Second uninstall is a no-op OK: missing live plists are fine.
           // DB/secret/workspace/release/log/run history are never purged here.
@@ -137,7 +154,23 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
       default:
         return fail('INVALID_CONFIG');
     }
-  } finally {
-    await session.release().catch(() => undefined);
+  };
+  let result: InstallResult;
+  try {
+    result = await run();
+  } catch {
+    try {
+      await session.release();
+    } catch { /* already failing; preserve bounded failure */ }
+    return fail('PARTIAL_INSTALL');
   }
+  try {
+    await session.release();
+  } catch {
+    // R5: committed-but-cleanup-uncertain is never clean success; never
+    // retry unknown writes blindly. Preserve failures, downgrade success.
+    if (result.ok) return fail('PARTIAL_INSTALL');
+    return result;
+  }
+  return result;
 }

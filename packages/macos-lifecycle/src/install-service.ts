@@ -35,12 +35,40 @@ function fail(code: SafeCode): InstallResult {
 }
 
 async function withLock(ports: InstallPorts, use: () => Promise<InstallResult>): Promise<InstallResult> {
-  const session = await ports.lock();
-  if (!session.acquired) return fail('BUSY');
+  let session;
   try {
-    return await use();
-  } finally {
-    await session.release().catch(() => undefined);
+    session = await ports.lock();
+  } catch {
+    return fail('PARTIAL_INSTALL');
+  }
+  if (!session.acquired) return fail('BUSY');
+  let result: InstallResult;
+  try {
+    result = await use();
+  } catch {
+    try {
+      await session.release();
+    } catch { /* already failing; preserve bounded failure */ }
+    return fail('PARTIAL_INSTALL');
+  }
+  try {
+    await session.release();
+  } catch {
+    // Committed but cleanup uncertain: never report clean success when the
+    // lock release is rejected, and never retry unknown writes blindly.
+    if (result.ok) return result.stage === undefined
+      ? { ok: false, code: 'PARTIAL_INSTALL' }
+      : { ok: false, code: 'PARTIAL_INSTALL', stage: result.stage };
+    return result;
+  }
+  return result;
+}
+
+async function authorizeAdmin(ports: InstallPorts): Promise<boolean> {
+  try {
+    return (await ports.authorizeLocalAdmin()) === true;
+  } catch {
+    return false;
   }
 }
 
@@ -74,7 +102,7 @@ function manifestMatchesPrior(prior: PriorInstall, config: ServiceConfig, config
 /** Journaled apply. Ordering: admin -> lock -> revalidate -> PREPARED ->
  * tunnel disable/bootout -> core stop/verify -> STOPPED -> same-filesystem
  * stage -> FILES_STAGED -> per-file publish -> PUBLISHED -> core owned health
- * (+ optional tunnel) -> STARTED/COMMITTED. No multi-file atomicity is
+ * (+ optional tunnel) -> STARTED -> restop parked stopped -> COMMITTED. No multi-file atomicity is
  * claimed; journal + idempotent recovery cover rename gaps.
  */
 export async function apply(
@@ -102,7 +130,7 @@ export async function apply(
   }
   if (preview.configDigest !== expectedToken) return fail('CONFIG_CHANGED');
 
-  if (await ports.authorizeLocalAdmin() !== true) return fail('NOT_AUTHORIZED');
+  if (!(await authorizeAdmin(ports))) return fail('NOT_AUTHORIZED');
 
   const locked = await withLock(ports, async (): Promise<InstallResult> => {
     let revalidated;
@@ -213,15 +241,35 @@ export async function apply(
         previousDigest: prior.digest, nextDigest: manifestBuilt.sha, inventory,
       }));
 
+      const compensateStop = async (): Promise<void> => {
+        try { await services.stop('tunnel'); } catch { /* bounded: original failure preserved */ }
+        try { await services.stop('core'); } catch { /* bounded: original failure preserved */ }
+      };
       const startCore = await services.start('core');
-      if (!startCore.ok) return { ok: false, code: startCore.code, stage: 'PUBLISHED' };
-      if (await services.ownedHealthy('core') !== true) {
+      if (!startCore.ok) { await compensateStop(); return { ok: false, code: startCore.code, stage: 'PUBLISHED' }; }
+      let coreHealthy: boolean;
+      try {
+        coreHealthy = await services.ownedHealthy('core');
+      } catch {
+        await compensateStop();
+        return { ok: false, code: 'HEALTH_UNKNOWN', stage: 'PUBLISHED' };
+      }
+      if (coreHealthy !== true) {
+        await compensateStop();
         return { ok: false, code: 'HEALTH_UNKNOWN', stage: 'PUBLISHED' };
       }
       if (tunnelPlist !== null) {
         const startTunnel = await services.start('tunnel');
-        if (!startTunnel.ok) return { ok: false, code: startTunnel.code, stage: 'PUBLISHED' };
-        if (await services.ownedHealthy('tunnel') !== true) {
+        if (!startTunnel.ok) { await compensateStop(); return { ok: false, code: startTunnel.code, stage: 'PUBLISHED' }; }
+        let tunnelHealthy: boolean;
+        try {
+          tunnelHealthy = await services.ownedHealthy('tunnel');
+        } catch {
+          await compensateStop();
+          return { ok: false, code: 'HEALTH_UNKNOWN', stage: 'PUBLISHED' };
+        }
+        if (tunnelHealthy !== true) {
+          await compensateStop();
           return { ok: false, code: 'HEALTH_UNKNOWN', stage: 'PUBLISHED' };
         }
       }
@@ -229,6 +277,35 @@ export async function apply(
       await journal.writeStage('STARTED', buildIntermediateJournal('STARTED', {
         previousDigest: prior.digest, nextDigest: manifestBuilt.sha, inventory,
       }));
+      // R6 LAB_ONLY stopped/disabled delivery boundary: health is proven above
+      // with owned evidence, then both jobs are stopped again before COMMITTED
+      // so the committed manifest (desiredEnabled false/false) round-trips the
+      // unchanged stopped-install reader (jobs absent). Never deliver running
+      // jobs with a disabled manifest.
+      const restopTunnel = await services.stop('tunnel');
+      if (!restopTunnel.ok) return { ok: false, code: restopTunnel.code, stage: 'STARTED' };
+      const restopCore = await services.stop('core');
+      if (!restopCore.ok) return { ok: false, code: restopCore.code, stage: 'STARTED' };
+      let parkedTunnel: boolean;
+      let parkedCore: boolean;
+      try {
+        parkedTunnel = await services.isStopped('tunnel');
+        parkedCore = await services.isStopped('core');
+      } catch {
+        return fail('PARTIAL_INSTALL');
+      }
+      if (parkedTunnel !== true || parkedCore !== true) return fail('PARTIAL_INSTALL');
+      // Disabling a previously installed tunnel must remove/verify the old
+      // manifest-owned tunnel plist; skipping publish alone leaves it live.
+      if (tunnelPlist === null && prior.tunnelPlist !== null) {
+        let removed: boolean;
+        try {
+          removed = await ports.restore().removeManifestOwned('tunnel', prior.tunnelPlist);
+        } catch {
+          return fail('PARTIAL_INSTALL');
+        }
+        if (removed !== true) return fail('FOREIGN_SERVICE');
+      }
       await publish.publishFile('journal', committedJournal);
       await journal.writeStage('COMMITTED', committedJournal);
       return { ok: true, code: 'OK', stage: 'COMMITTED' };
@@ -251,7 +328,7 @@ export async function apply(
  */
 export async function rollback(targetDigest: string, ports: InstallPorts): Promise<InstallResult> {
   if (!isDigest(targetDigest)) return fail('ROLLBACK_BLOCKED_SCHEMA');
-  if (await ports.authorizeLocalAdmin() !== true) return fail('NOT_AUTHORIZED');
+  if (!(await authorizeAdmin(ports))) return fail('NOT_AUTHORIZED');
 
   const locked = await withLock(ports, async (): Promise<InstallResult> => {
     let prior: PriorInstall;
@@ -261,17 +338,9 @@ export async function rollback(targetDigest: string, ports: InstallPorts): Promi
       return fail('PARTIAL_INSTALL');
     }
     if (prior.digest === null || prior.manifest === null) return fail('FOREIGN_SERVICE');
-
-    let reading;
-    let accepted: readonly (readonly number[])[] | null;
-    try {
-      reading = await ports.readClosedSchema();
-      accepted = await ports.trustedAcceptedSets();
-    } catch {
-      return fail('ROLLBACK_BLOCKED_SCHEMA');
-    }
-    const decision = guardRollbackSchema(reading, accepted);
-    if (!decision.ok) return fail('ROLLBACK_BLOCKED_SCHEMA');
+    // R1: arbitrary digests never restore. The target must resolve to the
+    // reviewed installed identity; otherwise refuse without mutating.
+    if (targetDigest !== prior.digest) return fail('ROLLBACK_BLOCKED_SCHEMA');
 
     const services = ports.services();
     try {
@@ -279,8 +348,43 @@ export async function rollback(targetDigest: string, ports: InstallPorts): Promi
       if (!stopTunnel.ok) return { ok: false, code: stopTunnel.code, stage: 'STOPPED' };
       const stopCore = await services.stop('core');
       if (!stopCore.ok) return { ok: false, code: stopCore.code, stage: 'STOPPED' };
-      if (await services.isStopped('tunnel') !== true) return fail('PARTIAL_INSTALL');
-      if (await services.isStopped('core') !== true) return fail('PARTIAL_INSTALL');
+      let stoppedTunnel: boolean;
+      let stoppedCore: boolean;
+      try {
+        stoppedTunnel = await services.isStopped('tunnel');
+        stoppedCore = await services.isStopped('core');
+      } catch {
+        return fail('PARTIAL_INSTALL');
+      }
+      if (stoppedTunnel !== true || stoppedCore !== true) return fail('PARTIAL_INSTALL');
+      // R2: schema is read only after both services are confirmed stopped
+      // with DB closure. Unknown/unreadable closure blocks rollback.
+      let reading;
+      let accepted: readonly (readonly number[])[] | null;
+      try {
+        reading = await ports.readClosedSchema();
+        accepted = await ports.trustedAcceptedSets();
+      } catch {
+        return fail('ROLLBACK_BLOCKED_SCHEMA');
+      }
+      const decision = guardRollbackSchema(reading, accepted);
+      if (!decision.ok) return fail('ROLLBACK_BLOCKED_SCHEMA');
+      // R1: actually restore/verify target bytes; restore count 0 is refusal.
+      try {
+        await ports.restore().restorePrior(prior);
+      } catch {
+        return fail('PARTIAL_INSTALL');
+      }
+      let after: PriorInstall;
+      try {
+        after = await ports.readPrior();
+      } catch {
+        return fail('PARTIAL_INSTALL');
+      }
+      if (after.digest !== targetDigest || after.manifest === null
+        || !validateManifestBytes(after.manifest)) {
+        return fail('ROLLBACK_BLOCKED_SCHEMA');
+      }
       // Compatible rollback proven; executables stay stopped in the lab
       // disabled snapshot. No DB copy/delete, no migration invocation, and the
       // previous release is not auto-started here (integrator A sequences a
