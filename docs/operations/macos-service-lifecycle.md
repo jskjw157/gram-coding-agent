@@ -1,94 +1,97 @@
-# MAC-02 Service Lifecycle — Reviewed Runtime Binding Checkpoint
+# MAC-02 Service Lifecycle — Independent Core Discovery Checkpoint
 
 **Updated:** 2026-09-29 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Lane A authority/directory composition is tested; not an installed or deployable service.  
+**Status:** IN_PROGRESS / PARTIAL. Core registration, independent observation and composition are tested components; not an installed/deployable service.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
 **Parallel ownership:** #139 coordination; #143 ChatGPT A; #140 installer B; #141 packaging C; #142 diagnostic/CLI D.  
-**Verified code/test checkpoint:** `23b75462ffb7528e1d0f6b202f6146a73267b1a7`.  
-**Continuation baseline:** `3f5a3509055144358324bd1c41b436833097ab9a`.  
+**Verified code/test checkpoint:** `c393e7056493dac3d5a3793df84669ba5b737a82`.  
+**Continuation baseline:** `6d76d6fc1ec3cc9dae32880676c1cac724c28150`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
 
-## 1. Progress and parallel ownership
+## 1. Actual progress and parallel boundary
 
-This increment adds `adapters/runtime-authority.ts`, `adapters/runtime-directories.ts`, their two test files and `test-support/runtime/fixture.ts`. No previously existing product module, shared schema, dependency, lockfile or workflow changed. The only preexisting file updated at handoff is this A-owned runbook.
-
-B/C/D continue from the pinned baseline, on separate branches with PR base `feat/macos-service-lifecycle`. A does not edit their installer, packaging, diagnostic/CLI files or lane notes. Their claims/PRs must be refreshed through #139 before later integration; this checkpoint makes no claim that external work is complete.
-
-Per the user's instruction, independent review is deferred to combined integration rather than repeated between component steps. Targeted TDD and full quality checks remain mandatory. No merge or deployment was requested or performed.
+This increment adds five runtime modules, seven test files (54 cases) and one test fixture. Two existing A-owned adapters receive additive changes: the private record family and reviewed-runtime observation ports. No B/C/D file, shared configuration/release/preview/installation schema, dependency, lockfile, workflow or original Windows product module changed.
 
 | Area | Actual state |
 |---|---|
-| Task 1 | Existing strict LAB_ONLY config and fixed renderer retained |
-| Tasks 2–4 | Existing file/ACL/account checks, persistence, telemetry, process/peer and authenticated-health components reused |
-| Task 5 new | Independently reviewed digest inputs, actual file/owner/ACL checks and a pinned shared run-directory binding compose a CoreAuthority and ExecutionLeaseStore |
-| Task 5 remaining | Bootstrap trust-anchor provisioning, fixed-root installed acceptance, orphan/stopped recovery, cross-daemon currentCore, real restricted tunnel composition and runnable entry |
-| Task 6 | Installer/control/rollback component delegated to B #140; A owns native integration |
-| Task 7 | Packaging delegated to C #141; diagnostic/CLI routing delegated to D #142; A owns final entries/glue |
-| Task 8 | Combined native launchd/reboot/user-device acceptance and deferred independent review remain open |
-| MAC-03–05 | Separate detailed design/plans at docs ref `31e66aa21b705b1793f11122c1b12d5ebf41715c`; not implemented by this change |
+| Task 5 producer | Managed Core identity is published against its actual HELD reservation before the start is returned |
+| Task 5 observer | Independent currentCore checks reservation, fresh status, reviewed native identity, exact accepted socket and the existing authenticated MCP protocol |
+| Task 5 composition | Reviewed runtime exposes registration/status readers; createReviewedCorePorts composes existing native Core, registration wrapper and independent reader |
+| Still open | Independently provisioned bootstrap trust, actual runnable entries, provider-verified restricted native tunnel, full-sized installed timing and orphan/stopped recovery |
+| External installer | Draft PR #144 was observed at `e3c65890d276d471ea083cf30fa50e74ade91a29`; submitted, not reviewed/merged/included in these results |
+| External packaging/CLI | Remain separate lane ownership; no completion claim or takeover |
+| Overall | Task 5 and MAC-02 are not complete; no installed launchd/logout/reboot acceptance or business operations |
 
-`supervisor-cli.js` still does not exist on this branch. Generated plists are **NOT DEPLOYABLE**. No real account, service, credential, Keychain/TCC/FileVault/SSH, tunnel, browser or store action occurred.
+`supervisor-cli.js` is still absent on this branch. Generated plists remain **NOT DEPLOYABLE**. Independent review is deferred until combined integration per the user's instruction; this is not an independent approval.
 
-Prior reservation/native Core details are preserved at the immutable baseline:
-https://github.com/jskjw157/gram-coding-agent/blob/3f5a3509055144358324bd1c41b436833097ab9a/docs/operations/macos-service-lifecycle.md
+Prior authority/directory implementation and installer contract history:
+https://github.com/jskjw157/gram-coding-agent/blob/6d76d6fc1ec3cc9dae32880676c1cac724c28150/docs/operations/macos-service-lifecycle.md
 
-## 2. Implemented runtime authority
+## 2. Private process registration and producer
 
-`bindReviewedCoreRuntime(review, bootstrapAcl, signal)` uses the fixed `/Library/Application Support/HAAR/GramAgent` root, root-owned ancestors, actual macOS host/account probes and the current process identity. It returns `{ authority: CoreAuthority, execution: ExecutionLeaseStore }` or null. It neither launches Core nor reads a credential.
+New `core-registration.ts` exports `CoreRegistrationStore.read/publish`, canonical encode/decode, native start-identity parsing and reservation matching. A registration has exactly `schemaVersion:1`, `role:'core'`, `configDigest`, `executionRevision`, `executionToken` and the existing six-field `OwnedChild`. The execution UUID is occupancy metadata, not a credential.
 
-`RuntimeReview` contains `config`, normalized `configDigest`, `nodeDigest`, `fileAclDigest` and `peerOwnerDigest`. This is an internal trusted-bootstrap input, not a newly serialized release/installation schema. It must be independently approved, not populated from the candidate's own manifest. The normalized config digest is **not** `Preview.configDigest`, which remains the existing composite preview token.
+`adapters/core-process-files.ts` reuses private-record CAS with the fixed `process` family. Only `core.process.json` and `core.process.lock` under the already trusted private run directory are selected. Files require the existing owner/mode/descriptor/ACL checks; tunnel role, malformed records, links, writable files and preexisting transaction locks are refused. Existing circuit/status/event/execution mechanics and filenames are retained.
 
-The binder copies inputs before asynchronous work. It validates darwin/arm64/Node24, exact gram-agent account/UID/GID, non-admin membership and absence of inherited administrative group IDs. It compares the stored config, reuses the full existing `inspectRelease` inventory/hash/link verification, and separately checks the three executable pins, file modes and Node device/inode identity.
+Publication reads the real HELD token/revision and matching normalized configuration/release/generation; callers do not choose those occupancy fields. Identical publication is a no-op. A different child in the same or older reservation is refused; a later actual HELD revision can replace an older hint. The execution record is checked around CAS. This is not a multi-file atomic transaction: a changed lease makes the hint unusable and reports failure rather than repairing history.
 
-A launch grant requires a matching HELD execution reservation and repeated account/config/release/directory checks. Binding alone does not reserve or initialize a record. A missing/corrupt record returns unavailable; an existing HELD record is retained. Occupancy is still cooperative evidence, not process liveness or authentication.
+New `registered-core.ts` wraps only the existing managed native Core port. It publishes the original validated child before exposing startup. Failed/cancelled publication requests bounded cleanup and requires confirmed termination before a no-child rejection. If cleanup is uncertain, the start stays pending and another start is blocked. Stop uses the original managed object, not a copied PID. Discovery metadata is retained after exit; reservation release and native/freshness checks invalidate it.
 
-The native peer proof is wrapped with fixed helper-path/pin/context rechecks and bounded use. Binding only constructs that proof; it does not execute candidate helpers. A candidate manifest rewritten together with helper bytes cannot replace the independently supplied helper pin. No new command, arbitrary path or raw-secret MCP API was added.
+No missing/corrupt execution record is initialized, no HELD slot is freed by age, no lock is stolen, and no process is killed by a port/PID guess.
 
-**Trust boundary still open:** this module consumes an already trustworthy bootstrap ACL capability and reviewed pins. It does not install/sign that capability, authenticate a human approval, or prove the provenance of a caller-supplied function. Never pass an always-true test ACL or derive both pins and trust from the candidate bundle to enable a production launch. Root/admin and hostile same-UID code are not sandboxed by these checks.
+## 3. Independent observer and runtime wiring
 
-## 3. Private directory identity and shared execution storage
+New `current-core.ts` exports `createCurrentCoreReader(config, deps)`. It returns `CoreEvidence | null`, not secrets or a process-control endpoint. Its dependencies are trusted local ports, not serialized tool responses.
 
-`inspectRuntimeDirectories` checks existing `run`, `state`, `secrets` and `logs` directories. Each leaf must be owned by the runtime UID with mode0700; ancestors must have the supplied trusted owner and no unsafe group/world writes. Opened descriptors, path identity and ACL checks must agree.
+Observation requires all of the following:
 
-It does not enumerate secret contents, create missing directories, change permissions or repair state. The directory witness pins device/inode/owner/group/mode rather than size or modification time, because ordinary record writes change directory contents. Later store reads/writes revalidate the witness before and after using the existing private-file adapter. Replacing the run directory with another otherwise valid directory is refused, rather than granting a fresh empty execution slot.
+1. Canonical registration for the expected normalized configuration/release.
+2. Matching current HELD execution token/revision/generation.
+3. Existing status record with matching generation/release, `LOCAL_CORE_HEALTHY`, code `OK`, and age strictly below 30000ms; future/stale/malformed/stopping evidence is refused.
+4. Independently trusted CoreAuthority grant with the recorded UID and reviewed executable identity.
+5. Native proof using the recorded libproc start identity, not a new capture or a fabricated ChildProcess. The exact connected 127.0.0.1 client/server tuple must belong to the expected Core on port3847.
+6. Existing checked-socket health/MCP flow: health, initialize, initialized, tools/list, agent_health. The tool surface and response parser are reused, not filtered or reimplemented.
 
-All bindings to the same approved layout reuse the same fixed execution record family. There is still no TTL, abandoned-lock deletion or automatic reset. An uncertain post-write outcome stays an error and requires reconciliation.
+Record/lease/status and process identity are rechecked around native proof, before credential access, inside the credential-use callback, and after the final result. A normal heartbeat refresh is allowed; a different process/generation/lease is not. Observation has a10000ms total deadline; existing wire requests retain their2000ms/64KiB limits. These conservative repeated checks still need full-sized installed timing validation.
 
-Ruling: keep the existing Core launcher path `${root}/state` unchanged during parallel work. A prior spec sketch mentions `state/lab`; this increment follows the already pinned implementation and does not relocate data or silently change the launch contract. Any later layout change needs coordinated migration/installer/packager treatment.
+An explicit `AUTH_BLOCKED` result suppresses subsequent sequential credential attempts for that execution token in the same reader. A distinct validated HELD acquisition may be checked anew. This latch is in-memory, not durable across reader/daemon reconstruction, not a credential-rotation policy, and not a global concurrency/rate-limit guarantee. No claim of autonomous login recovery is made.
 
-Ruling: consume independent bootstrap trust instead of treating candidate file-acl as its own verifier. Benefit: no circular self-approval. Cost: installed trust-anchor provisioning and full-size bundle timing remain acceptance gates. Initial binding/grant checks use a10000ms bound; peer operations use2000ms. No timing success for a real full deployment is claimed.
+`ReviewedCoreRuntime` now additionally returns `registration` and `readCoreStatus()`. Both use the same pinned run-directory witness before/after file access. Construction/read of absent observation files is read-only and returns unavailable; a replaced directory is refused. Existing authority/execution operations remain available.
+
+New `core-runtime.ts` exports `createReviewedCorePorts(config, runtime, credentials) -> {core,currentCore}`. It composes the actual native Core factory with registration and the independent observer. Construction does not spawn, acquire a slot, create files or read credentials. It does not supply the missing trusted bootstrap inputs, launchd entry, service state writer wiring or tunnel provider.
 
 ## 4. Verification actually executed
 
-Added **38 tests**:35 authority/filesystem cases and3 native descriptor/ACL cases. The35 cases were observed failing before implementation.
+Seven new test files add54 cases: registration14, observer20, producer4, process files8, runtime observation3, auth refusal4 and composition1. Real temporary files exercise persistence and pinned directory identity; identity/account/ACL/wire responses in the new composed cases are controlled fixtures. Existing native helper, socket, ACL and Core custody suites rerun separately.
 
-| Checkpoint | Evidence |
+| Checkpoint | Observed result |
 |---|---|
-| RED `58914ad` | Focused36501462342; native Mac109193037874:35 NOT_IMPLEMENTED failures and646 prior passes |
-| Implementation `c3181df` | Native behavioral681 passes; quality gate found an unused test type import |
-| Native fixture `9c9a4bf` | Adds3 Mac-only ACL/directory cases and uses the imported type; typecheck exposed missing contextual parameter types through Object.freeze |
-| Final `23b7546` | Typed immutable RecordFiles/NativePeerProofPort/CoreAuthority wrappers; no relaxed compiler rules, security checks or assertions |
+| RED1 `ff5bdfa` | Focused36565210619, Ubuntu109395352103:38 expected new failures /662 prior passes /22 native skips |
+| First implementation `74e8526` | Focused36565577016: both Mac and Ubuntu jobs passed all applicable steps |
+| RED2 `4e6e2bb` | Focused36565945822, Mac109397746865:13 failures /725 passes; missing file/wiring behavior and repeated authentication attempt (expected1, actual2) |
+| Final code `c393e70` | Focused36566552733 and root36566552798 completed successfully |
 
-Exact code/test `23b75462ffb7528e1d0f6b202f6146a73267b1a7`:
+The producer fixture's initial placeholder digest was corrected to the actual `configDigest(config)` required by its contract; identity assertions were retained. New file fixtures use a real anchor/run layout, not an empty relative path, preserving the existing path validator.
 
-- Focused workflow **36502578062**, Mac and Ubuntu completed/success.
-- Mac job **109196615734**, full log read: macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
-- **Mac lifecycle:46 files /684 passed**, zero failed/skipped.
-- **Mac root:54 files /732 passed**, zero failed/skipped. This includes lifecycle684 plus pinned main48, not additional732 tests.
-- Ubuntu job **109196615271**, applicable steps completed/success. Apple-only cases are explicitly skipped, not counted as native passes.
-- Root lint/typecheck/test/build/diff checks passed. Production build excludes tests/test-support.
-- Compiled plist validation passed both roles and rejected12 altered structures; native plutil accepted both files.
-- Existing root workflow **36502578100** completed/success, using the synthetic PR merge preview, not an actual merge.
+Exact code/test `c393e7056493dac3d5a3793df84669ba5b737a82`:
 
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36502578062
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36502578100
+- Native Mac job **109399780364**, full log read: macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5.
+- **Mac lifecycle:53 files /738 passed**, zero failed/skipped.
+- **Mac root:61 files /786 passed**, zero failed/skipped. Root786 includes lifecycle738 plus pinned main48.
+- Ubuntu job **109399780078**, full log read: Node24.21.0, pnpm10.34.5; lifecycle716 passed/22 native skips; root764 passed/22 native skips.
+- Root lint/typecheck/test/build/diff checks passed on both focused jobs. Test support and test JavaScript are excluded from production output.
+- Compiled plist checks passed two roles and rejected12 altered structures; native plutil accepted both.
+- Existing root CI **36566552798** passed its synthetic PR merge preview; no actual merge occurred.
 
-The native tests compile the existing ACL helper separately, outside the candidate fixture, and exercise actual descriptors and temporary directory ACLs. They confirm read-only binding, real shared-record acquire/release and refusal of an ACL write grant despite0700 POSIX mode. The account/host source and candidate executable bytes are controlled fixtures. This is **not** a real gram-agent account, `/Library` deployment, Core launch, combined Core/libproc/health, signed-bootstrap, tunnel or reboot test.
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36566552733
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36566552798
 
-The earlier security-blocked combined Core/libproc/health fixture was not retried and remains NOT_ADDED/NOT_RUN. These directory tests are a different scoped task, not substitute acceptance evidence. Independent review remains deferred/not performed. New bindings add no claim that Task5 or MAC-02 is complete.
+A log request while the Mac job was still running returned BlobNotFound; the completed full log was subsequently fetched. No test was bypassed or treated as passed from that failed log request.
 
-Local direct Git access failed DNS, and local Node22 is not the target toolchain. Full verification used unchanged read-only GitHub Actions exact-head isolated worktrees. A later documentation-head run is separate from the counted code/test log. Upstream deprecation notices and the existing empty workspace-importer normalization are not claimed fixed. Separate MAC-01, Windows M2 and external-lane changes are not included in these counts.
+The new observer tests use synthetic native verdicts and wire responses through the real parser and orchestration. File/runtime tests use actual temporary files but controlled account/bootstrap trust. This is **not an installed two-daemon, real credential, native end-to-end tunnel or reboot acceptance result**. Existing native tests are not substitute evidence for that missing integration. The earlier security-blocked combined fixture was not retried.
+
+Local direct Git access failed DNS and Node22 is not the target toolchain. Full verification used unchanged read-only Actions exact-head isolated worktrees. Separate MAC-01, Windows M2 and external PR#144 code are not included. Later documentation-head runs are separate from the counted code/test log. Upstream deprecation warnings and existing empty-importer normalization were not changed.
 
 ## 5. Existing installation and execution contracts retained
 
@@ -104,12 +107,12 @@ Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,ui
 
 Final journal exact fields: `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` matching exact manifest bytes. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused by the existing reader, not silently removed/replayed. Metadata limit262144 bytes. Plist bytes must match the fixed renderer, not merely a manifest-supplied hash. B owns the transaction writer; A owns later live acceptance integration.
 
-Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. B receives this provisioning boundary without needing changes to its frozen release/CLI contracts.
+Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. The new Core process hint needs no installer initialization: absence remains unavailable until a validated Core publishes it. Preserve the run directory and last hint; no new B/C/D schema or path option is required.
 
 ## 6. Exact next work
 
-Continue A #143 with trusted bootstrap provisioning and production composition, then cross-daemon owned/current Core observation and the restricted native tunnel port. Reuse the authority/directory witnesses, native Core, reservation, checked-socket health and supervisor already implemented; do not build another engine or modify external lane files.
+Continue A #143 with independently provisioned bootstrap trust and runnable supervisor composition, including actual status/history/event writers, then the separately verified restricted native tunnel. Reuse the new `createReviewedCorePorts` and existing runtime binding, custody, reservations and supervisor; do not rebuild B/C/D features.
 
-A must connect the independently provisioned trust inputs and shared run binding to runnable entries. Trusted stopped-owner/orphan recovery and installed acceptance remain prerequisites for unattended recovery, not inferred from a HELD file, label or port. Apply/install control is B; packaging is C; public diagnostic/CLI routing is D. Refresh their claims and PRs through #139; integrate under the existing authority and perform the deferred combined review before merge/deployment.
+Refresh #139 and external PRs before integration. Installer PR#144 has been submitted but is not part of this branch. Its reported tests have not been adopted as combined acceptance. Integrate external results only under the agreed authority and keep tests/review/device approval distinct. Independent review remains deferred/not performed.
 
-No real service/account/credential/OS-security/store changes, administrator install, merge, force push, rebase, branch deletion or Windows issue closure occurred. Starting separate refs were main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, docs=31e66aa. Preserve concurrent changes rather than resetting those refs.
+Actual `/Library` trust setup, full-sized timing, supervisor-death/orphan recovery, installed launchd/logout/reboot and real restricted transport remain open. No service/account/credential/Keychain/TCC/FileVault/SSH/tunnel/browser/store operation, administrator installation, merge, force push, rebase, branch deletion or Windows issue closure was performed. Preserve concurrent external branch updates rather than resetting them.
