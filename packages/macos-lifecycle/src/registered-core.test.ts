@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { configDigest } from './config.js';
 import { withRegisteredCore } from './registered-core.js';
 import type { SupervisorDeps, ManagedChild } from './supervisor.js';
 import { child, config, deferred, signal } from './test-support/runtime/discovery.js';
@@ -16,7 +17,7 @@ describe('Core identity publication before exposing a managed start', () => {
   it('publishes the exact managed child before returning and delegates stop using the original handle', async () => {
     const f = fixture();
     const wrapped = withRegisteredCore(f.core, { async publish(c, owner) { expect(c).toEqual(config()); expect(owner).toEqual(child()); f.calls.push('publish');
-      return { schemaVersion: 1, role: 'core', configDigest: 'b'.repeat(64), executionRevision: 1,
+      return { schemaVersion: 1, role: 'core', configDigest: configDigest(c), executionRevision: 1,
         executionToken: '11111111-1111-4111-8111-111111111111', child: owner }; } });
     const managed = await wrapped.spawn(config(), 'g1', signal()); expect(f.calls).toEqual(['spawn', 'publish']);
     await wrapped.stop(managed, 20000, signal()); await managed.exited; expect(f.calls).toEqual(['spawn', 'publish', 'stop']);
