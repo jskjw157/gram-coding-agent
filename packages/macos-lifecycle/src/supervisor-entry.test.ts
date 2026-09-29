@@ -43,7 +43,8 @@ describe('fixed supervisor invocation and cancellation', () => {
     const events = new EventEmitter(); const ready = deferred<Awaited<ReturnType<SupervisorBootstrap['prepare']>>>();
     const entered = deferred<void>(); let runs = 0;
     const work = runSupervisorEntry(args, { async prepare() { entered.resolve(); return ready.promise; } }, events);
-    await entered.promise; events.emit('SIGTERM'); expect(await work).toBe(0);
+    await Promise.race([entered.promise, work.then(() => { throw new Error('BOOTSTRAP_NOT_ENTERED'); })]);
+    events.emit('SIGTERM'); expect(await work).toBe(0);
     ready.resolve({ async run() { runs++; return 0; } }); await Promise.resolve(); await Promise.resolve();
     expect(runs).toBe(0); expect(events.eventNames()).toEqual([]);
   });
@@ -51,14 +52,16 @@ describe('fixed supervisor invocation and cancellation', () => {
     const events = new EventEmitter(); const entered = deferred<AbortSignal>(); const stopped = deferred<number>();
     let settled = false;
     const work = runSupervisorEntry(args, { async prepare() { return { async run(signal) { entered.resolve(signal); return stopped.promise; } }; } }, events);
-    void work.then(() => { settled = true; }); const signal = await entered.promise;
+    void work.then(() => { settled = true; }, () => { settled = true; });
+    const signal = await Promise.race([entered.promise, work.then(() => { throw new Error('SESSION_NOT_ENTERED'); })]);
     events.emit('SIGINT'); await Promise.resolve(); expect(signal.aborted).toBe(true); expect(settled).toBe(false);
     stopped.resolve(1); expect(await work).toBe(1); expect(events.eventNames()).toEqual([]);
   });
   it('bounds bootstrap waiting and never runs a timed-out late session', async () => {
     vi.useFakeTimers(); const events = new EventEmitter(); const ready = deferred<Awaited<ReturnType<SupervisorBootstrap['prepare']>>>(); let runs = 0;
     const work = runSupervisorEntry(args, { async prepare() { return ready.promise; } }, events);
-    await vi.advanceTimersByTimeAsync(10001); expect(await work).toBe(78);
+    const observed = work.then(value => value as unknown, (error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10001); expect(await observed).toBe(78);
     ready.resolve({ async run() { runs++; return 0; } }); await Promise.resolve(); await Promise.resolve();
     expect(runs).toBe(0); expect(events.eventNames()).toEqual([]);
   });
