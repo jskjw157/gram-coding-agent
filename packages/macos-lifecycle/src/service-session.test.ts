@@ -28,7 +28,7 @@ async function setup(initialize = true) {
       },
       async probe(child) { actions.push('probe'); return { state: 'LOCAL_CORE_HEALTHY', code: 'OK', generation: child.generation,
         releaseDigest: child.releaseDigest, observedAtMs: 1000 }; },
-      async stop(_child: ManagedChild) { actions.push('stop'); finish(); },
+      async stop(child: ManagedChild) { expect(child.child.role).toBe('core'); actions.push('stop'); finish(); },
     },
     async currentCore() { actions.push('currentCore'); return null; },
   };

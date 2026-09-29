@@ -29,7 +29,8 @@ describe('reviewed circuit/status/event store composition', () => {
     const leaseBefore = await readFile(join(f.base, 'run/core.execution.json'));
     await runtime.stores.lifecycle.initializeNew('core', 1);
     const event = status(f.review.config.releaseDigest); await runtime.stores.telemetry.writeStatus('core', event, owner(event.releaseDigest));
-    const { state: _state, ...safeEvent } = event; await runtime.stores.telemetry.appendEvent('core', safeEvent);
+    const { state, ...safeEvent } = event; expect(state).toBe('STARTING');
+    await runtime.stores.telemetry.appendEvent('core', safeEvent);
     expect(await runtime.readCoreStatus()).toMatchObject({ state: 'STARTING', generation: 'store-1' });
     expect(await readFile(join(f.base, 'run/core.execution.json'))).toEqual(leaseBefore);
     for (const name of ['run/core.circuit.json', 'run/core.status.json', 'logs/core.events.0.jsonl']) {

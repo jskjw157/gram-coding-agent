@@ -49,7 +49,7 @@ export async function runSupervisorEntry(argv: readonly string[], bootstrap?: Su
   try { if (!bootstrap || typeof bootstrap.prepare !== 'function') return 78; prepare = bootstrap.prepare.bind(bootstrap); }
   catch { return 78; }
   const controller = new AbortController(); const stop = () => controller.abort();
-  let result = 70;
+  let result: number;
   async function execute(): Promise<number> {
     signals.on('SIGINT', stop); signals.on('SIGTERM', stop);
     if (controller.signal.aborted) return 0;

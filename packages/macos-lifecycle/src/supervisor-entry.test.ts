@@ -16,7 +16,7 @@ describe('fixed supervisor invocation and cancellation', () => {
     ['--role', 'core', '--config', '/tmp/service.json'], ['--config', configPath, '--config', configPath],
     ['--role', 'core', '--config', configPath, '--force'], ['core', '--role', 'core', '--config', configPath],
     ['--role', 'core', '--config', configPath + '\n'], ['--role=core', '--config', configPath],
-  ])('rejects invalid argv before bootstrap or signal hooks: %j', async argv => {
+  ].map(argv => ({ argv })))('rejects invalid argv before bootstrap or signal hooks: $argv', async ({ argv }) => {
     let prepared = 0; const events = new EventEmitter();
     expect(await runSupervisorEntry(argv, { async prepare() { prepared++; return null; } }, events)).toBe(64);
     expect(prepared).toBe(0); expect(events.eventNames()).toEqual([]);
@@ -41,8 +41,8 @@ describe('fixed supervisor invocation and cancellation', () => {
   });
   it('does not start a late bootstrap result after cancellation', async () => {
     const events = new EventEmitter(); const ready = deferred<Awaited<ReturnType<SupervisorBootstrap['prepare']>>>();
-    const entered = deferred<void>(); let runs = 0;
-    const work = runSupervisorEntry(args, { async prepare() { entered.resolve(); return ready.promise; } }, events);
+    const entered = deferred<undefined>(); let runs = 0;
+    const work = runSupervisorEntry(args, { async prepare() { entered.resolve(undefined); return ready.promise; } }, events);
     await Promise.race([entered.promise, work.then(() => { throw new Error('BOOTSTRAP_NOT_ENTERED'); })]);
     events.emit('SIGTERM'); expect(await work).toBe(0);
     ready.resolve({ async run() { runs++; return 0; } }); await Promise.resolve(); await Promise.resolve();

@@ -19,7 +19,7 @@ const nativeClock: Clock = Object.freeze({
   nowMs: () => Date.now(),
   async sleep(ms: number, signal: AbortSignal) { await sleep(ms, undefined, { signal }); },
 });
-const noTunnel: SupervisorDeps['tunnel'] = Object.freeze({
+const noTunnel: SupervisorDeps['tunnel'] = Object.freeze<SupervisorDeps['tunnel']>({
   async compatibility() { return null; }, async credentialAvailable() { return false; },
   async spawn() { throw new Error('TUNNEL_COMPATIBILITY_REQUIRED'); },
   async probe() { return 'UNKNOWN'; }, async stop() { throw new Error('TUNNEL_COMPATIBILITY_REQUIRED'); },
