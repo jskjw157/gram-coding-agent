@@ -15,6 +15,7 @@ import { copyRuntimeLayout, inspectRuntimeDirectories, type RuntimeLayout } from
 import { createExecutionFilesAt } from './execution-files.js';
 import { createCoreProcessFilesAt } from './core-process-files.js';
 import { createPrivateRecordFiles } from './private-record-files.js';
+import { createRuntimeStores, type RuntimeStores } from './runtime-stores.js';
 import { createNativePeerProof, type ExecutableIdentity, type NativePeerProofPort } from './owned-process.js';
 
 /** Trusted bootstrap input, NOT candidate release.json/CLI/MCP data. Independent
@@ -36,6 +37,11 @@ export interface RuntimeEnvironment {
 export interface ReviewedCoreRuntime {
   authority: CoreAuthority; execution: ExecutionLeaseStore;
   registration: CoreRegistrationStore; readCoreStatus(): Promise<ServiceStatus | null>;
+}
+/** Additive return type; existing Core-only consumers retain their contract. */
+export interface ReviewedServiceRuntime extends ReviewedCoreRuntime {
+  configuration: Readonly<ServiceConfig>;
+  stores: RuntimeStores;
 }
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
 function check(signal: AbortSignal): void { if (signal.aborted) refuse(); }
@@ -86,7 +92,7 @@ async function bounded<T>(ms: number, parent: AbortSignal, use: (signal: AbortSi
  * Supplying just a self-hashed candidate manifest is intentionally insufficient.
  */
 export async function bindReviewedCoreRuntime(review?: RuntimeReview, bootstrapAcl?: AclProbe,
-  signal: AbortSignal = new AbortController().signal): Promise<ReviewedCoreRuntime | null> {
+  signal: AbortSignal = new AbortController().signal): Promise<ReviewedServiceRuntime | null> {
   if (!review || typeof bootstrapAcl !== 'function') return null;
   return bindReviewedCoreRuntimeAt({ anchor: '/', relative: root.slice(1), ownerUid: 0 }, review, bootstrapAcl, {
     host: inspectMacHost, account: inspectMacAccount,
@@ -100,7 +106,7 @@ export async function bindReviewedCoreRuntime(review?: RuntimeReview, bootstrapA
  * a tool response. Root/admin and hostile same-UID code are outside isolation.
  */
 export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inputReview: RuntimeReview,
-  bootstrapAcl: AclProbe, inputEnvironment: RuntimeEnvironment, parent: AbortSignal): Promise<ReviewedCoreRuntime | null> {
+  bootstrapAcl: AclProbe, inputEnvironment: RuntimeEnvironment, parent: AbortSignal): Promise<ReviewedServiceRuntime | null> {
   try {
     const layout = copyRuntimeLayout(inputLayout); const review = copyReview(inputReview);
     if (typeof bootstrapAcl !== 'function') refuse();
@@ -121,6 +127,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       }
       const initialAccount = await context(signal);
       const directories = await inspectRuntimeDirectories(layout, initialAccount.uid, bootstrapAcl, signal);
+      const stores = createRuntimeStores(directories);
       const configFiles = createTrustedFiles(layout.anchor, layout.ownerUid, bootstrapAcl, layout.relative + '/config');
       const releasePrefix = layout.relative + '/releases/' + review.config.releaseId;
       const releasePath = join(layout.anchor, releasePrefix);
@@ -210,7 +217,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           } catch { return null; }
         },
       });
-      return Object.freeze({ authority, execution, registration, readCoreStatus });
+      return Object.freeze({ authority, execution, registration, readCoreStatus, configuration: review.config, stores });
     });
   } catch { return null; }
 }

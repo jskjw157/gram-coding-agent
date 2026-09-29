@@ -8,6 +8,7 @@ import type { StateDirectoryPolicy } from './private-record-files.js';
 export interface RuntimeLayout { anchor: string; relative: string; ownerUid: number }
 export interface RuntimeDirectories {
   runPolicy: Readonly<StateDirectoryPolicy>;
+  logsPolicy: Readonly<StateDirectoryPolicy>;
   verify(): Promise<void>;
 }
 function unsafe(): never { throw new Error('UNSAFE_PATH'); }
@@ -78,5 +79,6 @@ export async function inspectRuntimeDirectories(input: RuntimeLayout, runtimeUid
   const initial = await scan(undefined, signal); await scan(initial, signal);
   const runPolicy = Object.freeze({ anchor: layout.anchor, relative: layout.relative + '/run',
     ancestorUid: layout.ownerUid, stateUid: runtimeUid, acl });
-  return Object.freeze({ runPolicy, async verify() { await scan(initial); } });
+  const logsPolicy = Object.freeze({ ...runPolicy, relative: layout.relative + '/logs' });
+  return Object.freeze({ runPolicy, logsPolicy, async verify() { await scan(initial); } });
 }
