@@ -1,7 +1,7 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PolicyEngine } from '@gram/policy';
 import {
   ApprovalRequiredError,
@@ -10,6 +10,23 @@ import {
   type ApprovalConsumptionPort,
   type ProcessSpawner,
 } from './command-runner.js';
+
+// Temporary agent homes created by the worktree preflight tests. Tracked at
+// module scope and removed in afterEach so a test run leaves nothing behind.
+const tempHomes: string[] = [];
+
+function tempHome(): string {
+  const home = mkdtempSync(join(tmpdir(), 'gram-runner-home-'));
+  tempHomes.push(home);
+  return home;
+}
+
+afterEach(() => {
+  let home: string | undefined;
+  while ((home = tempHomes.pop()) !== undefined) {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 function evidencePorts() {
   return {
@@ -120,7 +137,7 @@ describe('CommandRunner policy gate', () => {
   });
 
   it('denies an ALLOW-shaped worktree add outside agent home before approval or spawn', async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), 'gram-runner-home-'));
+    const homeDir = tempHome();
     const taskId = '0191a2b3-c4d5-7000-8000-000000000021';
     const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
       exitCode: 0,
@@ -157,7 +174,7 @@ describe('CommandRunner policy gate', () => {
   });
 
   it('denies a forced worktree removal outside agent home before approval or spawn', async () => {
-    const homeDir = mkdtempSync(join(tmpdir(), 'gram-runner-home-'));
+    const homeDir = tempHome();
     const taskId = '0191a2b3-c4d5-7000-8000-000000000022';
     const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
       exitCode: 0,
