@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { Socket } from 'node:net';
 import { isAbsolute } from 'node:path';
-import type { OwnedChild } from '../contracts.js';
+import type { OwnedChild, Role } from '../contracts.js';
 import { copyCoreChild } from '../health-probe.js';
 import type { ConnectedPeerVerifier } from './loopback-http.js';
 
@@ -28,9 +28,10 @@ export interface MacProcessSeal {
   handle: LiveProcessHandle;
   identity: Readonly<NativeProcessIdentity>;
 }
-export interface SealInput {
-  role: 'core'; uid: number; generation: string; releaseDigest: string; executable: ExecutableIdentity;
+export interface ProcessSealInput {
+  role: Role; uid: number; generation: string; releaseDigest: string; executable: ExecutableIdentity;
 }
+export interface SealInput extends ProcessSealInput { role: 'core' }
 
 const DECIMAL = /^(0|[1-9][0-9]*)$/u;
 function validUint(value: string): boolean {
@@ -143,22 +144,34 @@ export function createNativePeerProof(helper: string): NativePeerProofPort {
   return Object.freeze(port);
 }
 
-export async function sealMacOwnedChild(handle: LiveProcessHandle, input: SealInput, proof: NativePeerProofPort,
+function copyProcessChild(value: OwnedChild): OwnedChild {
+  if (value.role !== 'core' && value.role !== 'tunnel') throw new Error('HEALTH_UNKNOWN');
+  const normalized = copyCoreChild({ ...value, role: 'core' });
+  return Object.freeze({ ...normalized, role: value.role });
+}
+
+export async function sealMacOwnedProcess(handle: LiveProcessHandle, input: ProcessSealInput, proof: NativePeerProofPort,
   signal: AbortSignal): Promise<MacProcessSeal | null> {
   try {
-    if (!live(handle) || signal.aborted || !validExecutable(input.executable)) return null;
+    if ((input.role !== 'core' && input.role !== 'tunnel') || !live(handle) || signal.aborted
+      || !validExecutable(input.executable)) return null;
     const pid = handle.pid;
     const request = Object.freeze({ pid, uid: input.uid,
       executable: Object.freeze({ dev: input.executable.dev, ino: input.executable.ino }) });
     const captured = await bounded(signal, s => proof.capture(request, s));
     if (!captured || !validUint(captured.sec) || !validUsec(captured.usec) || !live(handle) || handle.pid !== pid) return null;
-    const child = copyCoreChild({ role: input.role, pid, uid: input.uid,
+    const child = copyProcessChild({ role: input.role, pid, uid: input.uid,
       startIdentity: `${captured.sec}.${captured.usec}`,
       generation: input.generation, releaseDigest: input.releaseDigest });
     const identity = Object.freeze({ pid, uid: child.uid, startSec: captured.sec, startUsec: captured.usec,
       executable: request.executable });
-    return Object.freeze({ child: Object.freeze({ ...child }), handle, identity });
+    return Object.freeze({ child, handle, identity });
   } catch { return null; }
+}
+
+export async function sealMacOwnedChild(handle: LiveProcessHandle, input: SealInput, proof: NativePeerProofPort,
+  signal: AbortSignal): Promise<MacProcessSeal | null> {
+  return sealMacOwnedProcess(handle, input, proof, signal);
 }
 
 export function createMacConnectedPeerVerifier(seal: MacProcessSeal, proof: NativePeerProofPort): ConnectedPeerVerifier {
