@@ -97,7 +97,7 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
         const head = url.searchParams.get('head');
         const base = url.searchParams.get('base');
         const matches = pullRequests.filter((pullRequest) => {
-          const exactHead = \`\${pullRequest.owner}:\${pullRequest.head.ref}\`;
+          const exactHead = `${pullRequest.owner}:${pullRequest.head.ref}`;
           return (
             pullRequest.owner === pullsRepo.owner &&
             pullRequest.repo === pullsRepo.repo &&
@@ -136,9 +136,9 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
 
         const number = pullRequests.length + 1;
         const pullRequest: FakeGitHubPullRequest = {
-          node_id: \`PR_fake_\${number}\`,
+          node_id: `PR_fake_${number}`,
           number,
-          html_url: \`\${apiBaseUrl}/\${pullsRepo.owner}/\${pullsRepo.repo}/pull/\${number}\`,
+          html_url: `${apiBaseUrl}/${pullsRepo.owner}/${pullsRepo.repo}/pull/${number}`,
           state: 'open',
           head: { ref: body.head },
           base: { ref: body.base },
@@ -165,7 +165,7 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
               name: 'verify',
               status: complete ? 'completed' : 'in_progress',
               conclusion: complete ? 'success' : null,
-              details_url: \`\${apiBaseUrl}/\${checkRepo.owner}/\${checkRepo.repo}/actions/runs/1001\`,
+              details_url: `${apiBaseUrl}/${checkRepo.owner}/${checkRepo.repo}/actions/runs/1001`,
               started_at: '2026-01-01T00:00:00.000Z',
               completed_at: complete ? '2026-01-01T00:00:01.000Z' : null,
               head_sha: checkRepo.sha,
@@ -199,7 +199,7 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
   });
 
   const address = server.address() as AddressInfo;
-  apiBaseUrl = \`http://127.0.0.1:\${address.port}\`;
+  apiBaseUrl = `http://127.0.0.1:${address.port}`;
 
   return {
     apiBaseUrl,
