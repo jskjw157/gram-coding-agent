@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { configDigest } from './config.js';
 import { root } from './contracts.js';
 import type { CoreCredentials } from './health-probe.js';
 import { encodeRuntimeReview } from './runtime-review.js';
@@ -22,7 +21,7 @@ async function setup() {
   const bytes = encodeRuntimeReview(f.review);
   let credentialsUsed = 0; let binds = 0; let candidateReads = 0; let approvalReads = 0;
   const credentials: CoreCredentials = Object.freeze({
-    async withValue<T>(_use: (secret: string) => Promise<T>): Promise<T> {
+    async withValue<T>(): Promise<T> {
       credentialsUsed++; throw new Error('CREDENTIAL_USE_DURING_PREPARE');
     },
   });
