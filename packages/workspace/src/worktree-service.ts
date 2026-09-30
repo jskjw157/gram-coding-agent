@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { TaskId } from '@gram/domain';
 import { WorkspaceRepository } from '@gram/persistence';
+import { assertTaskWorktreeTarget } from '@gram/policy';
 
 export type TaskBranchType = 'FIX' | 'FEATURE' | 'CHORE';
 
@@ -90,9 +91,28 @@ export class WorktreeService {
       String(input.repo.githubRepositoryId),
       input.taskId,
     );
+    // Fail closed before any mapping or directory creation: an escaping
+    // taskId or repository id must never produce a mapped or created path.
+    // The shared reason string propagates unchanged to the caller.
+    assertTaskWorktreeTarget({
+      homeDir: this.options.homeDir,
+      taskId: input.taskId,
+      repoId: input.repo.githubRepositoryId,
+      target: linuxPath,
+      mode: 'add',
+    });
     const windowsPath = await this.options.pathMapper.toWindows(linuxPath, input.taskId);
 
     mkdirSync(dirname(linuxPath), { recursive: true, mode: 0o700 });
+    // Re-run the full check after the parent exists and immediately before
+    // spawning Git, so a raced or pre-existing path cannot slip through.
+    assertTaskWorktreeTarget({
+      homeDir: this.options.homeDir,
+      taskId: input.taskId,
+      repoId: input.repo.githubRepositoryId,
+      target: linuxPath,
+      mode: 'add',
+    });
     const created = await this.options.git.createWorktree({
       repoPath: input.repo.localBasePath,
       worktreePath: linuxPath,

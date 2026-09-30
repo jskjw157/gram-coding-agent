@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -297,5 +297,49 @@ describe('WorktreeService', () => {
 
     expect(removeWorktree).toHaveBeenCalledTimes(1);
     expect(pruneWorktrees).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an escaping task or repository id before mapping or creating directories', async () => {
+    const root = tempRoot();
+    const homeDir = join(root, 'home');
+    mkdirSync(homeDir, { recursive: true });
+    const { localBasePath } = createCanonicalRepository(root);
+    const { task, workspaces } = setupPersistence(root, localBasePath);
+    const toWindows = vi.fn(async () => 'C:\\mapped');
+    const createWorktree = vi.fn(async () => ({ headSha: 'a'.repeat(40) }));
+    const service = new WorktreeService({
+      homeDir,
+      git: {
+        createWorktree,
+        removeWorktree: vi.fn(async () => {}),
+        pruneWorktrees: vi.fn(async () => {}),
+      },
+      workspaces,
+      pathMapper: { toWindows },
+    });
+
+    await expect(
+      service.create({
+        taskId: '../../escape',
+        repo: { githubRepositoryId: 84722133, localBasePath },
+        baseRef: 'origin/main',
+        branch: 'fix/escape',
+      }),
+    ).rejects.toThrow('worktree target must be within the agent task-worktree layout');
+    expect(toWindows).toHaveBeenCalledTimes(0);
+    expect(createWorktree).toHaveBeenCalledTimes(0);
+    expect(existsSync(join(root, 'escape'))).toBe(false);
+    expect(existsSync(join(homeDir, '.gram-agent', 'worktrees', '84722133', '..', '..', 'escape'))).toBe(false);
+
+    await expect(
+      service.create({
+        taskId: task.id,
+        repo: { githubRepositoryId: Number.NaN, localBasePath },
+        baseRef: 'origin/main',
+        branch: 'fix/escape',
+      }),
+    ).rejects.toThrow('worktree target must be within the agent task-worktree layout');
+    expect(toWindows).toHaveBeenCalledTimes(0);
+    expect(createWorktree).toHaveBeenCalledTimes(0);
   });
 });

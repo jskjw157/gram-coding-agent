@@ -139,6 +139,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         spawner: new NodeProcessSpawner(),
         commandRuns: commandRunRepository,
         outputCapture: new OutputCapture({ homeDir: homedir(), redactor }),
+        homeDir: homedir(),
       });
       const worktreeService = new WorktreeService({
         homeDir: homedir(),

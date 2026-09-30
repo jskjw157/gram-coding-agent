@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PolicyEngine } from '@gram/policy';
 import {
@@ -114,5 +117,115 @@ describe('CommandRunner policy gate', () => {
     await expect(runner.run(request('git status'))).resolves.toMatchObject({ exitCode: 0 });
     expect(evaluate).toHaveBeenCalled();
     expect(events).toEqual(['policy', 'spawn']);
+  });
+
+  it('denies an ALLOW-shaped worktree add outside agent home before approval or spawn', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'gram-runner-home-'));
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000021';
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      homeDir,
+      ...ports,
+    });
+
+    const error = await runner
+      .run({
+        taskId,
+        cwd: process.cwd(),
+        category: 'GIT',
+        executable: 'git',
+        args: ['worktree', 'add', '-b', 'feat/task-000021-x', '/tmp/gram-outside-evil/wt', 'origin/main'],
+      })
+      .catch((candidate: unknown) => candidate);
+    expect(error).toBeInstanceOf(PolicyDeniedError);
+    expect((error as PolicyDeniedError).decision.ruleId).toBe('POL-GIT-WORKTREE-PATH');
+    expect((error as PolicyDeniedError).decision.reason).toBe(
+      'worktree target must be within the agent task-worktree layout',
+    );
+    expect(consume).toHaveBeenCalledTimes(0);
+    expect(ports.commandRuns.start).toHaveBeenCalledTimes(0);
+    expect(spawn).toHaveBeenCalledTimes(0);
+  });
+
+  it('denies a forced worktree removal outside agent home before approval or spawn', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'gram-runner-home-'));
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000022';
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      homeDir,
+      ...ports,
+    });
+
+    const error = await runner
+      .run({
+        taskId,
+        cwd: process.cwd(),
+        category: 'GIT',
+        executable: 'git',
+        args: ['worktree', 'remove', '--force', '/tmp/gram-outside-evil/wt'],
+      })
+      .catch((candidate: unknown) => candidate);
+    expect(error).toBeInstanceOf(PolicyDeniedError);
+    expect((error as PolicyDeniedError).decision.ruleId).toBe('POL-GIT-WORKTREE-PATH');
+    expect(consume).toHaveBeenCalledTimes(0);
+    expect(ports.commandRuns.start).toHaveBeenCalledTimes(0);
+    expect(spawn).toHaveBeenCalledTimes(0);
+  });
+
+  it('fails closed for a worktree command when no homeDir is configured', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000023';
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      ...ports,
+    });
+
+    const error = await runner
+      .run({
+        taskId,
+        cwd: process.cwd(),
+        category: 'GIT',
+        executable: 'git',
+        args: [
+          'worktree',
+          'add',
+          '-b',
+          'feat/task-000023-x',
+          `/home/agent/.gram-agent/worktrees/7/${taskId}`,
+          'origin/main',
+        ],
+      })
+      .catch((candidate: unknown) => candidate);
+    expect(error).toBeInstanceOf(PolicyDeniedError);
+    expect((error as PolicyDeniedError).decision.ruleId).toBe('POL-GIT-WORKTREE-PATH');
+    expect(consume).toHaveBeenCalledTimes(0);
+    expect(ports.commandRuns.start).toHaveBeenCalledTimes(0);
+    expect(spawn).toHaveBeenCalledTimes(0);
   });
 });

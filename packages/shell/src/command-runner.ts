@@ -1,8 +1,10 @@
 import { spawn as spawnProcess } from 'node:child_process';
 import type { PolicyDecision, PublishMode } from '@gram/domain';
 import {
+  assertTaskWorktreeTarget,
   normalizeExecutableCommand,
   normalizeShellCommand,
+  WORKTREE_PATH_REASON,
   type PolicyContext,
   PolicyEngine,
 } from '@gram/policy';
@@ -135,6 +137,10 @@ export interface CommandRunnerOptions {
   commandRuns: CommandRunStore;
   outputCapture: CommandOutputCapturePort;
   environment?: NodeJS.ProcessEnv;
+  // Agent home used by the worktree path preflight. Optional for existing
+  // callers, but a worktree add/remove that needs the guard fails closed
+  // when it is absent.
+  homeDir?: string;
 }
 
 const SAFE_ENV_KEYS = [
@@ -194,6 +200,65 @@ function operationsFor(request: CommandRequest) {
       request.cwd,
     ),
   ];
+}
+
+interface WorktreeTarget {
+  mode: 'add' | 'remove';
+  target: string;
+}
+
+// Mirrors the ALLOW shapes in risk-classifier classifyGit: `worktree add
+// -b <branch> <path> <base>` (6 args) and `worktree remove --force <path>`
+// (4 args). Anything else (including `worktree prune`, which has no target)
+// returns null and needs no path check. Kept in sync with
+// POL-GIT-WORKTREE-TASK by construction: only shapes the classifier allows
+// reach the preflight as ALLOW.
+function worktreeTargetFor(args: readonly string[]): WorktreeTarget | null {
+  if (
+    args.length === 6 &&
+    args[0] === 'worktree' &&
+    args[1] === 'add' &&
+    args[2] === '-b' &&
+    args[3] !== undefined &&
+    args[3].length > 0 &&
+    args[4] !== undefined &&
+    args[4].length > 0 &&
+    args[5] !== undefined &&
+    args[5].length > 0
+  ) {
+    return { mode: 'add', target: args[4] };
+  }
+  if (
+    args.length === 4 &&
+    args[0] === 'worktree' &&
+    args[1] === 'remove' &&
+    args[2] === '--force' &&
+    args[3] !== undefined &&
+    args[3].length > 0
+  ) {
+    return { mode: 'remove', target: args[3] };
+  }
+  return null;
+}
+
+// The layout segment directly above the task directory is the repository id:
+// <home>/.gram-agent/worktrees/<repoId>/<taskId>. Parsing it from the target
+// keeps a single shared guard: a non-numeric segment fails the guard's
+// identity check, and a task segment that differs from the requesting task
+// fails its lexical check. Both fail closed with the shared reason.
+function repoIdForWorktreeTarget(target: string): number {
+  const segments = target.split('/').filter((segment) => segment.length > 0);
+  const repoSegment = segments.length >= 2 ? segments[segments.length - 2] : undefined;
+  return repoSegment === undefined ? Number.NaN : Number(repoSegment);
+}
+
+function worktreePathDenied(decision: PolicyDecision): PolicyDeniedError {
+  return new PolicyDeniedError({
+    kind: 'DENY',
+    ruleId: 'POL-GIT-WORKTREE-PATH',
+    reason: WORKTREE_PATH_REASON,
+    operationHash: decision.operationHash,
+  });
 }
 
 export class NodeProcessSpawner implements ProcessSpawner {
@@ -262,6 +327,45 @@ export class CommandRunner {
         decision.operationHash,
       );
       if (!consumed) throw new ApprovalRequiredError(decision);
+    }
+
+    // Worktree path preflight: now that `git worktree add` and
+    // `git worktree remove --force` classify ALLOW, a direct CommandRunner
+    // call must not bypass the workspace-level guard. This runs after policy
+    // evaluation and approval consumption (DENY and NEEDS_APPROVAL behavior
+    // is unchanged) but BEFORE commandRuns.start and spawner.spawn, so a
+    // denied path leaves no run record and no child process. `worktree
+    // prune` has no target and needs no check. PolicyContext and
+    // operationHash() are untouched, so outstanding approvals stay valid.
+    for (let index = 0; index < decisions.length; index += 1) {
+      const decision = decisions[index];
+      const operation = operations[index];
+      if (decision === undefined || operation === undefined) {
+        throw new PolicyDeniedError({
+          kind: 'DENY',
+          ruleId: 'POL-GIT-WORKTREE-PATH',
+          reason: WORKTREE_PATH_REASON,
+          operationHash: decision?.operationHash ?? 'unknown',
+        });
+      }
+      if (decision.kind !== 'ALLOW') continue;
+      if (operation.executable !== 'git') continue;
+      const found = worktreeTargetFor(operation.args);
+      if (found === null) continue;
+      const homeDir = this.options.homeDir;
+      // Fail closed when the guard has no home directory to check against.
+      if (homeDir === undefined || homeDir.length === 0) throw worktreePathDenied(decision);
+      try {
+        assertTaskWorktreeTarget({
+          homeDir,
+          taskId: request.taskId,
+          repoId: repoIdForWorktreeTarget(found.target),
+          target: found.target,
+          mode: found.mode,
+        });
+      } catch {
+        throw worktreePathDenied(decision);
+      }
     }
 
     const commandRunId = this.options.commandRuns.start({

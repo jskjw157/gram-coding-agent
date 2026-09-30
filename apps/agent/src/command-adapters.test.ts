@@ -61,7 +61,7 @@ interface Harness {
   commandRuns: { start: ReturnType<typeof vi.fn>; finish: ReturnType<typeof vi.fn> };
 }
 
-function harness(options: { approve: boolean; spawner?: ProcessSpawner }): Harness {
+function harness(options: { approve: boolean; spawner?: ProcessSpawner; homeDir?: string }): Harness {
   const seen: SpawnRequest[] = [];
   const inner = options.spawner ?? new NodeProcessSpawner();
   const spawner: ProcessSpawner = {
@@ -81,6 +81,7 @@ function harness(options: { approve: boolean; spawner?: ProcessSpawner }): Harne
     approvals: { consume },
     spawner,
     commandRuns,
+    ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
     outputCapture: {
       redactText: (text: string) => text,
       capture: async ({
@@ -131,11 +132,13 @@ describe('policy-gated git and worktree command adapters', () => {
   it('fetches and creates a worktree through CommandRunner with the owning task id', async () => {
     const taskId = '0191a2b3-c4d5-7000-8000-000000000006';
     const root = trackRoot();
+    const home = join(root, 'home');
     const { localBasePath } = createCanonicalRepository(root);
 
-    const denying = harness({ approve: false });
+    const denying = harness({ approve: false, homeDir: home });
     const denyingWorktrees = new PolicyWorktreeAdapter({ runner: denying.runner });
-    const deniedPath = join(root, 'wt-denied');
+    const deniedPath = join(home, '.gram-agent', 'worktrees', '84722133', taskId);
+    mkdirSync(dirname(deniedPath), { recursive: true });
     const denyingCreated = await denyingWorktrees.createWorktree({
       repoPath: localBasePath,
       worktreePath: deniedPath,
@@ -147,13 +150,14 @@ describe('policy-gated git and worktree command adapters', () => {
     worktrees.push({ repoPath: localBasePath, path: deniedPath });
     expect(denying.consume).not.toHaveBeenCalled();
 
-    const { runner, seen } = harness({ approve: true });
+    const { runner, seen } = harness({ approve: true, homeDir: home });
     const gitAdapter = new PolicyGitAdapter({ runner });
     await gitAdapter.fetch(localBasePath, taskId);
 
     const store = recordStore();
     const worktreesAdapter = new PolicyWorktreeAdapter({ runner, records: store });
-    const worktreePath = join(root, 'wt-1');
+    const worktreePath = join(home, '.gram-agent', 'worktrees', '84722134', taskId);
+    mkdirSync(dirname(worktreePath), { recursive: true });
     const created = await worktreesAdapter.createWorktree({
       repoPath: localBasePath,
       worktreePath,
@@ -177,12 +181,14 @@ describe('policy-gated git and worktree command adapters', () => {
   it('returns a full worktree head and never persists before Git succeeds', async () => {
     const taskId = '0191a2b3-c4d5-7000-8000-000000000007';
     const root = trackRoot();
+    const home = join(root, 'home');
     const { localBasePath } = createCanonicalRepository(root);
-    const { runner } = harness({ approve: true });
+    const { runner } = harness({ approve: true, homeDir: home });
 
     const store = recordStore();
     const worktreesAdapter = new PolicyWorktreeAdapter({ runner, records: store });
-    const worktreePath = join(root, 'wt-ok');
+    const worktreePath = join(home, '.gram-agent', 'worktrees', '84722133', taskId);
+    mkdirSync(dirname(worktreePath), { recursive: true });
     const created = await worktreesAdapter.createWorktree({
       repoPath: localBasePath,
       worktreePath,
@@ -195,7 +201,8 @@ describe('policy-gated git and worktree command adapters', () => {
     expect(created.headSha).toMatch(/^[0-9a-f]{40}$/);
     expect(store.records).toHaveLength(1);
 
-    const failingPath = join(root, 'wt-bad');
+    const failingPath = join(home, '.gram-agent', 'worktrees', '84722134', taskId);
+    mkdirSync(dirname(failingPath), { recursive: true });
     await expect(
       worktreesAdapter.createWorktree({
         repoPath: localBasePath,
@@ -351,7 +358,7 @@ describe('policy-gated git and worktree command adapters', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
     };
-    const { runner } = harness({ approve: true, spawner: stub });
+    const { runner } = harness({ approve: true, spawner: stub, homeDir: '/home/agent' });
     const adapter = new PolicyWorktreeAdapter({ runner });
     const created = await adapter.createWorktree({
       repoPath: localBasePath,
@@ -384,7 +391,7 @@ describe('policy-gated git and worktree command adapters', () => {
         return { exitCode: 0, stdout: '', stderr: '' };
       },
     };
-    const denying = harness({ approve: false, spawner: denyingStub });
+    const denying = harness({ approve: false, spawner: denyingStub, homeDir: '/home/agent' });
     const denyingAdapter = new PolicyWorktreeAdapter({ runner: denying.runner });
     const denyingCreated = await denyingAdapter.createWorktree({
       repoPath: localBasePath,

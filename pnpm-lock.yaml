@@ -329,6 +329,9 @@ importers:
       '@gram/persistence':
         specifier: workspace:*
         version: link:../persistence
+      '@gram/policy':
+        specifier: workspace:*
+        version: link:../policy
     devDependencies:
       typescript:
         specifier: ^6.0.0
