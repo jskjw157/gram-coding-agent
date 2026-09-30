@@ -151,7 +151,7 @@ export class TaskRunner {
     await repoFetch.fetch(resolved);
     const workspace = await workspaceCreate.create(taskId);
     await progressPort.transition(taskId, 'PREPARING', 'RUNNING');
-    const instructions = await instructionsPort.load(workspace);
+    const instructions = await instructionsPort.load(workspace, taskId);
     const analysis = await analyzePort.analyze({
       task: resolved,
       workspace,

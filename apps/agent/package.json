@@ -24,7 +24,8 @@
     "@gram/shell": "workspace:*",
     "@gram/task-engine": "workspace:*",
     "@gram/verification": "workspace:*",
-    "@gram/workspace": "workspace:*"
+    "@gram/workspace": "workspace:*",
+    "@gram/filesystem": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.0",

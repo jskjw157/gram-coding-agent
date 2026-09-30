@@ -148,25 +148,31 @@ export class GitHubClient implements PullRequestClientPort {
     const lease = await this.options.secrets.getForUse(this.credentialName);
     try {
       return await lease.withValue(async (token) => {
-        const response = await this.options.fetch(
-          `${this.apiBaseUrl}${path}`,
-          {
-            method: input.method,
-            headers: {
-              Accept: 'application/vnd.github+json',
-              Authorization: `Bearer ${token}`,
-              'X-GitHub-Api-Version': '2022-11-28',
-              ...(input.body === undefined
-                ? {}
-                : { 'Content-Type': 'application/json' }),
+        let response: GitHubHttpResponse;
+        try {
+          response = await this.options.fetch(
+            `${this.apiBaseUrl}${path}`,
+            {
+              method: input.method,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                ...(input.body === undefined
+                  ? {}
+                  : { 'Content-Type': 'application/json' }),
+              },
+              ...(input.body === undefined ? {} : { body: input.body }),
             },
-            ...(input.body === undefined ? {} : { body: input.body }),
-          },
-        );
+          );
+        } catch {
+          // Transport errors may include request headers. Never persist them
+          // (or an unsafe cause) into scheduler/audit diagnostics.
+          throw new Error('GitHub request transport failed');
+        }
         if (!response.ok) {
-          const message = await response.text();
           throw new Error(
-            `GitHub request failed with status ${response.status}: ${message}`,
+            `GitHub request failed with status ${response.status}`,
           );
         }
         return response;

@@ -7,3 +7,4 @@ export * from './tools/git-tools.js';
 export * from './tools/verification-tools.js';
 export * from './tools/github-tools.js';
 export * from './tools/agent-tools.js';
+export * from './tools/coding-capability-tools.js';

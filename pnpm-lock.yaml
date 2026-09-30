@@ -35,6 +35,9 @@ importers:
       '@gram/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@gram/filesystem':
+        specifier: workspace:*
+        version: link:../../packages/filesystem
       '@gram/git':
         specifier: workspace:*
         version: link:../../packages/git

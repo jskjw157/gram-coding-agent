@@ -5,6 +5,7 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**'], environment: 'node' },
   resolve: {
     alias: {
+      '@gram/filesystem': new URL('../../packages/filesystem/src/index.ts', import.meta.url).pathname,
       '@gram/domain': new URL('../../packages/domain/src/index.ts', import.meta.url).pathname,
       '@gram/git': new URL('../../packages/git/src/index.ts', import.meta.url).pathname,
       '@gram/github': new URL('../../packages/github/src/index.ts', import.meta.url).pathname,

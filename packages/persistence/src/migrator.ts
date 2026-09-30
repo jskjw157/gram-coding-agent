@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 
-const INITIAL_VERSION = 1;
+const MIGRATIONS = [
+  { version: 1, file: './migrations/001_initial.sql' },
+  { version: 2, file: './migrations/002_coding_steps.sql' },
+];
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -11,18 +14,20 @@ export function runMigrations(db: Database.Database): void {
     ) STRICT;
   `);
 
-  const applied = db
-    .prepare('SELECT version FROM schema_migrations WHERE version = ?')
-    .get(INITIAL_VERSION) as { version: number } | undefined;
-  if (applied) return;
+  for (const migration of MIGRATIONS) {
+    const migrate = db.transaction(() => {
+      const applied = db
+        .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+        .get(migration.version) as { version: number } | undefined;
+      if (applied) return;
 
-  const sql = readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8');
-  const migrate = db.transaction(() => {
-    db.exec(sql);
-    db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(
-      INITIAL_VERSION,
-      new Date().toISOString(),
-    );
-  });
-  migrate.immediate();
+      const sql = readFileSync(new URL(migration.file, import.meta.url), 'utf8');
+      db.exec(sql);
+      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(
+        migration.version,
+        new Date().toISOString(),
+      );
+    });
+    migrate.immediate();
+  }
 }
