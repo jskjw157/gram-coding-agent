@@ -14,6 +14,7 @@ export const nativeIntervalScheduler: IntervalScheduler = {
 
 export class LeaseHeartbeat {
   private handle: unknown | undefined;
+  private inFlight: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly scheduler: IntervalScheduler,
@@ -25,7 +26,7 @@ export class LeaseHeartbeat {
   start(): void {
     if (this.handle !== undefined) return;
     this.handle = this.scheduler.setInterval(() => {
-      void (async () => {
+      this.inFlight = (async () => {
         try {
           await this.beat();
         } catch (beatError: unknown) {
@@ -46,5 +47,15 @@ export class LeaseHeartbeat {
     if (this.handle === undefined) return;
     this.scheduler.clearInterval(this.handle);
     this.handle = undefined;
+  }
+
+  /**
+   * Resolves once no tick callback is still executing, including its failure
+   * recovery path. Never rejects. Call `stop()` first so no new tick can start
+   * while draining. This is what lets a lease be quiesced (timer stopped, lease
+   * still held) without a beat touching SQLite after the database is closed.
+   */
+  async drain(): Promise<void> {
+    await this.inFlight;
   }
 }

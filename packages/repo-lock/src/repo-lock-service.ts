@@ -191,6 +191,10 @@ export class RepoLockService {
         if (quiesced) return;
         quiesced = true;
         heartbeatTimer.stop();
+        // The lease stays held, but no heartbeat may still be running once this
+        // resolves: the caller may close SQLite immediately afterwards, and an
+        // in-flight beat would otherwise touch the closed database.
+        await heartbeatTimer.drain();
       },
       release: async () => {
         if (released) return;
