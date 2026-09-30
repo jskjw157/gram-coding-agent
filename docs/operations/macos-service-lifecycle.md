@@ -1,13 +1,42 @@
-# MAC-02 Service Lifecycle — Runtime Review Metadata Checkpoint
+# MAC-02 Service Lifecycle — Reviewed Bootstrap and Tunnel Custody Checkpoint
 
 **Updated:** 2026-09-30 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. Metadata validation is implemented and tested; native bootstrap and installed service acceptance remain incomplete.  
+**Status:** IN_PROGRESS / PARTIAL. Reviewed-metadata admission, role-aware native sealing, fixed tunnel invocation and tunnel child custody are tested components; credential/provider wiring and installed acceptance remain incomplete.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
 **Parallel ownership:** #139 v2; ChatGPT A #143; installer repairs #146–149; packaging #141; public CLI #142.  
-**Verified code/test checkpoint:** `c2275d4ff9e20336e5e507a61edf1703d0015446`.  
-**Continuation baseline:** `c7b51db11cddff6be0917a9fb6ac927f72ec0ff3`.  
+**Verified code/test checkpoint:** `56acae2035b543fa7fe5007573ee2ae9f0ae8b71`.  
+**Continuation baseline:** `c2275d4ff9e20336e5e507a61edf1703d0015446`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
+
+
+## Current increment — reviewed bootstrap and tunnel custody
+
+This increment adds three narrow runtime pieces without taking over installer, packager or public-CLI lanes:
+
+1. `reviewed-bootstrap.ts` requires an independently supplied expected SHA-256 before it reads candidate review bytes, copies those bytes, decodes the existing canonical RuntimeReview envelope, revalidates the bound runtime configuration, and only then prepares the existing service session. Preparation uses no credentials and launches no child.
+2. `owned-process.ts` now has additive `sealMacOwnedProcess` support for both core and tunnel roles while the existing core-only API remains compatible. The connected-peer verifier remains core-specific.
+3. `adapters/native-tunnel.ts` derives only the fixed OpenAI `tunnel-client run --config <fixed path>` command with a nonsecret environment, then provides a custody-only adapter that accepts a reviewed authority grant, seals the exact tunnel child, discards child output, permits one launch attempt, and stops only the exact ManagedChild it returned after rechecking native ownership. It does not read a control-plane key, authenticate a tunnel, inspect provider protocol, or claim tunnel readiness.
+
+The previously safety-blocked credential-file/private-ACL source was not retried or bypassed. Production credential/provider integration therefore remains an explicit missing gate. No fake `supervisor-cli.js` or deployable tunnel entry was created.
+
+### Fresh exact-head verification
+
+Exact code/test head `56acae2035b543fa7fe5007573ee2ae9f0ae8b71`:
+- focused workflow `36700329553`: completed/success on Ubuntu and native Apple Silicon Mac.
+- native Mac job `109837995559`: **62 lifecycle files / 831 tests passed, zero failures/skips**; root **70 files / 879 tests passed, zero failures/skips**.
+- root lint, typecheck, test, build and diff checks passed; production-output exclusions passed.
+- plist verifier accepted 2 roles and rejected 12 altered cases; native `plutil` passed both generated plists.
+- root workflow `36700329445`: completed/success; this is still CI evidence, not an actual merge or installed-daemon acceptance.
+
+RED evidence was kept separate:
+- reviewed-bootstrap scaffold failed only its new positive paths before implementation.
+- role-aware native seal failed because the new function was absent.
+- tunnel launch-plan scaffold produced explicit `NOT_IMPLEMENTED` failures.
+- tunnel custody scaffold produced six explicit `NOT_IMPLEMENTED` failures while the prior suite remained green.
+
+Current tunnel custody tests execute real temporary Node child processes, including one that ignores SIGTERM and requires bounded SIGKILL. The native ownership verdict itself is a controlled proof port in these tests; this is not evidence that a real OpenAI tunnel-client session was authenticated or connected.
+
 
 ## 1. Delivered scope and explicit interruption
 
