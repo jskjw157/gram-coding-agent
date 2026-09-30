@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { safeJsonResult } from './read-sanitizer.js';
 
 const TaskId = z.string().uuid();
 
@@ -35,9 +36,9 @@ export function createVerificationToolHandlers(
     run: async ({ taskId }: VerificationTaskInputValue) =>
       jsonResult(await verification.run(taskId)),
     status: async ({ taskId }: VerificationTaskInputValue) =>
-      jsonResult(await verification.status(taskId)),
+      safeJsonResult(await verification.status(taskId)),
     evidence: async ({ taskId }: VerificationTaskInputValue) =>
-      jsonResult(await verification.evidence(taskId)),
+      safeJsonResult(await verification.evidence(taskId)),
   };
 }
 
