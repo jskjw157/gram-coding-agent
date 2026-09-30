@@ -218,7 +218,7 @@ export class GitHubChecksClient implements ChecksClientPort {
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`GitHub required status checks are unavailable: ${detail}`);
+      throw new Error(`GitHub required status checks are unavailable: ${detail}`, { cause: error });
     }
     const rules = requiredRules(protection);
 
