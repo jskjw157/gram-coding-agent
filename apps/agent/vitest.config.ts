@@ -14,6 +14,7 @@ export default defineConfig({
       '@gram/policy': new URL('../../packages/policy/src/index.ts', import.meta.url).pathname,
       '@gram/publishing': new URL('../../packages/publishing/src/index.ts', import.meta.url).pathname,
       '@gram/repo-lock': new URL('../../packages/repo-lock/src/index.ts', import.meta.url).pathname,
+      '@gram/repo-registry': new URL('../../packages/repo-registry/src/index.ts', import.meta.url).pathname,
       '@gram/secrets': new URL('../../packages/secrets/src/index.ts', import.meta.url).pathname,
       '@gram/shell': new URL('../../packages/shell/src/index.ts', import.meta.url).pathname,
       '@gram/task-engine': new URL('../../packages/task-engine/src/index.ts', import.meta.url).pathname,
