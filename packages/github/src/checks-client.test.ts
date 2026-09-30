@@ -43,7 +43,7 @@ describe('GitHubChecksClient', () => {
       if (url.includes('/protection/required_status_checks')) {
         return response(200, {
           strict: true,
-          contexts: ['legacy-required'],
+          contexts: ['verify'],
           checks: [{ context: 'verify', app_id: 15368 }],
         });
       }
