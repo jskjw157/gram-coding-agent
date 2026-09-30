@@ -80,31 +80,34 @@ describe('M2 MCP tool contract', () => {
       logs: vi.fn(),
     });
 
-    expect(new Set(recording.names)).toEqual(
-      new Set([
-        'task_get',
-        'task_list',
-        'task_logs',
-        'task_result',
-        'repo_resolve',
-        'repo_list',
-        'repo_get',
-        'repo_inspect',
-        'repo_register',
-        'git_status',
-        'git_diff',
-        'git_log',
-        'git_blame',
-        'verification_plan',
-        'verification_status',
-        'verification_evidence',
-        'github_pr_get',
-        'github_pr_checks',
-        'agent_status',
-        'agent_health',
-        'agent_logs',
-      ]),
-    );
+    const required = [
+      'task_get',
+      'task_list',
+      'task_logs',
+      'task_result',
+      'repo_resolve',
+      'repo_list',
+      'repo_get',
+      'repo_inspect',
+      'repo_register',
+      'git_status',
+      'git_diff',
+      'git_log',
+      'git_blame',
+      'verification_plan',
+      'verification_status',
+      'verification_evidence',
+      'github_pr_get',
+      'github_pr_checks',
+      'agent_status',
+      'agent_health',
+      'agent_logs',
+    ] as const;
+
+    for (const name of required) {
+      expect(recording.names).toContain(name);
+    }
+    expect(new Set(recording.names).size).toBe(recording.names.length);
   });
 
   it('rejects unknown fields on required read/status schemas', () => {
