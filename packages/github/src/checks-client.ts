@@ -231,18 +231,29 @@ export class GitHubChecksClient implements ChecksClientPort {
     }
     const rules = requiredRules(protection);
 
-    const runs = decodeCheckRuns(
-      await this.api.getJson(
-        `/repos/${owner}/${repo}/commits/${pullRequest.headSha}/check-runs?filter=latest&per_page=100`,
-      ),
-    );
+    const runs: CheckRunPayload[] = [];
+    for (let page = 1; ; page += 1) {
+      const pageRuns = decodeCheckRuns(
+        await this.api.getJson(
+          `/repos/${owner}/${repo}/commits/${pullRequest.headSha}/check-runs?filter=latest&per_page=100&page=${page}`,
+        ),
+      );
+      runs.push(...pageRuns);
+      // getJson exposes the body, not Link headers. Exhaust every full page,
+      // including an empty final page when the count is a multiple of 100.
+      if (pageRuns.length < 100) break;
+    }
 
-    return rules.map((rule) => {
+    return rules.flatMap((rule) => {
+      const matches: RequiredCheckSnapshot[] = [];
       for (const run of runs) {
         const snapshot = snapshotFromRun(rule, run, pullRequest.headSha);
-        if (snapshot !== undefined) return snapshot;
+        if (snapshot !== undefined) matches.push(snapshot);
       }
-      return syntheticQueued(rule);
+      // Duplicate names can be ambiguous across suites or apps. The provider
+      // supplies latest runs; response ordering must never allow one passing
+      // entry to hide another matching pending, failed or malformed entry.
+      return matches.length > 0 ? matches : [syntheticQueued(rule)];
     });
   }
 }
