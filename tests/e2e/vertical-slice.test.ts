@@ -1,12 +1,8 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  CommitService,
-  RemoteService,
-  type GitCommandRunnerPort,
-} from '@gram/git';
+import { CommitService, RemoteService } from '@gram/git';
 import {
   GitHubChecksClient,
   GitHubClient,
@@ -29,12 +25,18 @@ import {
   VerificationRepository,
   WorkspaceRepository,
 } from '@gram/persistence';
+import { PolicyEngine } from '@gram/policy';
 import { PublishingService } from '@gram/publishing';
 import { RepoLockService } from '@gram/repo-lock';
-import type { SecretProvider } from '@gram/secrets';
+import { SecretRedactor, type SecretProvider } from '@gram/secrets';
+import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
 import { CompletionEvaluator } from '@gram/verification';
 import { WorktreeService } from '@gram/workspace';
+import {
+  PolicyGitAdapter,
+  PolicyWorktreeAdapter,
+} from '../../apps/agent/src/command-adapters.js';
 import {
   PersistentCiContextResolver,
   RegisteredRepositoryProfiles,
@@ -54,23 +56,6 @@ const REPO_ID = 730001;
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim();
-}
-
-class LocalGitRunner implements GitCommandRunnerPort {
-  async run(request: Parameters<GitCommandRunnerPort['run']>[0]) {
-    if (!('executable' in request) || request.executable !== 'git') {
-      throw new Error('E2E Git runner accepts git executable requests only');
-    }
-    const result = spawnSync('git', [...(request.args ?? [])], {
-      cwd: request.cwd,
-      encoding: 'utf8',
-    });
-    return {
-      exitCode: result.status ?? 1,
-      stdout: result.stdout ?? '',
-      stderr: result.stderr ?? '',
-    };
-  }
 }
 
 function testSecrets(): SecretProvider {
@@ -207,27 +192,23 @@ describe('M2 deterministic vertical slice', () => {
         },
       };
 
+      const agentHome = join(fixture.rootPath, 'agent-home');
+      const commandRunner = new CommandRunner({
+        policy: new PolicyEngine(),
+        approvals: { consume: async () => false },
+        spawner: new NodeProcessSpawner(),
+        commandRuns,
+        outputCapture: new OutputCapture({
+          homeDir: agentHome,
+          redactor: new SecretRedactor(),
+        }),
+        homeDir: agentHome,
+      });
+      const policyGit = new PolicyGitAdapter({ runner: commandRunner });
+
       const worktreeService = new WorktreeService({
-        homeDir: join(fixture.rootPath, 'agent-home'),
-        git: {
-          createWorktree: async (input) => {
-            git(input.repoPath, [
-              'worktree',
-              'add',
-              '-b',
-              input.branch,
-              input.worktreePath,
-              input.baseRef,
-            ]);
-            return { headSha: git(input.worktreePath, ['rev-parse', 'HEAD']) };
-          },
-          removeWorktree: async (input) => {
-            git(input.repoPath, ['worktree', 'remove', '--force', input.worktreePath]);
-          },
-          pruneWorktrees: async (input) => {
-            git(input.repoPath, ['worktree', 'prune']);
-          },
-        },
+        homeDir: agentHome,
+        git: new PolicyWorktreeAdapter({ runner: commandRunner }),
         workspaces,
         pathMapper: {
           toWindows: async (linuxPath) => `\\\\wsl.test\\Ubuntu${linuxPath.replaceAll('/', '\\\\')}`,
@@ -235,23 +216,23 @@ describe('M2 deterministic vertical slice', () => {
       });
 
       const gitPort = {
-        fetch: async (repoPath: string) => {
-          git(repoPath, ['fetch', '--prune', 'origin']);
+        fetch: (repoPath: string, taskId: string) =>
+          policyGit.fetch(repoPath, taskId),
+        status: (worktree: string, taskId: string) =>
+          policyGit.status(worktree, taskId),
+        headSha: async (worktree: string) => {
+          const result = await commandRunner.run({
+            taskId: created.id,
+            cwd: worktree,
+            category: 'GIT',
+            executable: 'git',
+            args: ['rev-parse', 'HEAD'],
+          });
+          if (result.exitCode !== 0) {
+            throw new Error('git rev-parse HEAD failed in E2E head binding');
+          }
+          return result.stdout.trim();
         },
-        status: async (worktree: string) => {
-          const output = execFileSync(
-            'git',
-            ['status', '--porcelain=v1', '-z', '--untracked-files=all'],
-            { cwd: worktree, encoding: 'utf8' },
-          );
-          return {
-            entries: output
-              .split('\0')
-              .filter(Boolean)
-              .map((entry) => ({ path: entry.slice(3) })),
-          };
-        },
-        headSha: async (worktree: string) => git(worktree, ['rev-parse', 'HEAD']),
       };
 
       const evaluator = new CompletionEvaluator(verificationRepository);
@@ -307,7 +288,6 @@ describe('M2 deterministic vertical slice', () => {
         listApprovedPaths: async () => ['src/counter.ts'],
       };
 
-      const gitRunner = new LocalGitRunner();
       const publishing = {
         publish: async (context: {
           taskId: string;
@@ -320,7 +300,7 @@ describe('M2 deterministic vertical slice', () => {
           lock: { release(): Promise<void> };
         }) => {
           const remote = new RemoteService(
-            gitRunner,
+            commandRunner,
             { taskId: context.taskId },
             context.worktree,
           );
@@ -332,7 +312,7 @@ describe('M2 deterministic vertical slice', () => {
                 }
               },
             },
-            commits: new CommitService(gitRunner, { taskId: context.taskId }),
+            commits: new CommitService(commandRunner, { taskId: context.taskId }),
             remote: {
               push: (worktree, branch) => remote.push(worktree, branch),
               confirmRemoteSha: async (remoteName, branch, expectedSha) => {
@@ -554,7 +534,26 @@ describe('M2 deterministic vertical slice', () => {
         Date.parse(auditRows[0]!.createdAt),
       ).toBeLessThanOrEqual(Date.parse(auditRows[1]!.createdAt));
 
-      expect(commandRuns).toBeDefined();
+      const persistedCommands = database
+        .prepare(
+          `SELECT executable, args_json AS argsJson, status
+           FROM command_runs
+           WHERE task_id = ?
+           ORDER BY id`,
+        )
+        .all(created.id) as Array<{
+          executable: string | null;
+          argsJson: string | null;
+          status: string;
+        }>;
+      expect(persistedCommands.length).toBeGreaterThan(5);
+      expect(persistedCommands.every((run) => run.status === 'SUCCEEDED')).toBe(true);
+      const gitArgs = persistedCommands
+        .filter((run) => run.executable === 'git' && run.argsJson !== null)
+        .map((run) => JSON.parse(run.argsJson!) as string[]);
+      expect(gitArgs.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(true);
+      expect(gitArgs.some((args) => args[0] === 'push')).toBe(true);
+      expect(gitArgs.some((args) => args[0] === 'ls-remote')).toBe(true);
     } finally {
       if (scheduler !== undefined) await scheduler.stop();
       if (database !== undefined && database.open) database.close();
