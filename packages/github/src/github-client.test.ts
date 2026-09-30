@@ -70,3 +70,24 @@ describe('GitHubClient credential scope', () => {
     });
   });
 });
+
+describe('GitHubClient safe failures', () => {
+  it.each(['http', 'transport'] as const)('does not propagate credential-bearing %s errors', async (kind) => {
+    const token = 'private-github-token';
+    const dispose = vi.fn();
+    const client = new GitHubClient({
+      secrets: { getForUse: async () => ({ withValue: <T>(use: (value: string) => T): T => use(token), dispose }) },
+      fetch: async () => {
+        if (kind === 'transport') throw new Error(`request Authorization: Bearer ${token}`);
+        return { ok: false, status: 403, text: async () => `denied ${token}`, json: async () => ({}) };
+      },
+    });
+    let error: unknown;
+    try { await client.getJson('/repos/acme/web'); } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain(token);
+    expect((error as Error).cause).toBeUndefined();
+    expect(String(error)).toContain(kind === 'http' ? 'status 403' : 'transport failed');
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+});

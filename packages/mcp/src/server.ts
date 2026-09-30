@@ -1,3 +1,4 @@
+import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -34,6 +35,7 @@ export interface CreateMcpHttpServerOptions {
   internalSecret: string;
   health?: () => unknown | Promise<unknown>;
   taskCreate?: TaskCreatePort;
+  codingCapability?: CodingCapabilityPort;
   taskRead?: TaskReadPort;
   repos?: RepoToolsPort;
   codeTools?: CodeToolsPort;
@@ -90,6 +92,7 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       );
     }
 
+    if (options.codingCapability !== undefined) registerCodingCapabilityTools(server, options.codingCapability);
     if (options.taskCreate !== undefined) registerTaskTools(server, options.taskCreate);
     if (options.taskRead !== undefined) registerTaskReadTools(server, options.taskRead);
     if (options.repos !== undefined) registerRepoTools(server, options.repos);

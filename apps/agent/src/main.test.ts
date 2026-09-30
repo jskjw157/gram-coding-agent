@@ -2,9 +2,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
+import { openDatabase, runMigrations, TaskRepository, RepositoryRepository, WorkspaceRepository, LockRepository } from '@gram/persistence';
 import { TaskRunner } from '@gram/task-engine';
 import { startAgent, type RunningAgent } from './main.js';
+import * as runnerComposition from './task-runner-composition.js';
+import * as githubServices from './github-services.js';
 import { TaskScheduler } from './task-scheduler.js';
 
 const tempDirs: string[] = [];
@@ -226,3 +228,67 @@ function readTaskStatus(stateDirectory: string, taskId: string): string | null {
     db.close();
   }
 }
+
+it('registers authenticated production coding tools without controller credentials or network calls', async () => {
+  const app = await startAgent({ ...fixture(), port: 0, installSignalHandlers: false });
+  running.push(app);
+  const response = await fetch(`${app.url}/mcp`, { method: 'POST', headers: {
+    'content-type': 'application/json', accept: 'application/json, text/event-stream', 'x-gram-agent-auth': 'integration-secret',
+  }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+  expect(response.status).toBe(200);
+  const tools = await response.text();
+  expect(tools).toContain('coding_step_get');
+  expect(tools).toContain('coding_step_submit');
+});
+
+
+it('composes fail-closed production GitHub services without acquiring a credential at startup', async () => {
+  const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');
+  const runnerFactory = vi.spyOn(runnerComposition, 'createTaskRunner');
+  try {
+    const app = await startAgent({ ...fixture(), port: 0, installSignalHandlers: false });
+    running.push(app);
+    expect(factory).toHaveBeenCalledOnce();
+    const services = factory.mock.results[0]?.value as ReturnType<typeof githubServices.createProductionGitHubServices>;
+    expect(services.pullRequests).toBeDefined();
+    expect(services.checks.client).toBeDefined();
+    expect(runnerFactory.mock.calls[0]?.[0].pullRequests).toBe(services.pullRequests);
+    expect(runnerFactory.mock.calls[0]?.[0].checks).toBe(services.checks);
+  } finally { factory.mockRestore(); runnerFactory.mockRestore(); }
+});
+
+
+it('shutdown interrupts a real coding wait, drains failure persistence and preserves the repository lease', async () => {
+  const paths = fixture();
+  const db = openDatabase(join(paths.stateDirectory, 'agent.sqlite'));
+  runMigrations(db);
+  const repoId = 159;
+  new RepositoryRepository(db).upsert({ githubRepositoryId: repoId, owner: 'fixture', name: 'repo', defaultBranch: 'main', localBasePath: paths.stateDirectory });
+  const tasks = new TaskRepository(db);
+  const task = tasks.create({ repoId, goal: 'Edit source', taskType: 'FIX', publishMode: 'PULL_REQUEST' });
+  const workspace = new WorkspaceRepository(db).create({ taskId: task.id, repoId, linuxPath: join(paths.stateDirectory, 'worktree'), branch: 'fix/task-source', headSha: 'a'.repeat(40) });
+  mkdirSync(workspace.linuxPath); writeFileSync(join(workspace.linuxPath, 'AGENTS.md'), 'Use tests');
+  const composition = vi.spyOn(runnerComposition, 'createTaskRunner');
+  const run = vi.spyOn(TaskRunner.prototype, 'run').mockImplementation(async (taskId) => {
+    const options = composition.mock.calls[0]?.[0];
+    if (options?.locks === undefined || options.capabilities?.instructions === undefined) throw new Error('Production capability not wired');
+    await options.locks.acquire(repoId, taskId);
+    tasks.transition(taskId, 'PREPARING', 'RUNNING');
+    await options.capabilities.instructions.load(workspace, taskId);
+  });
+  try {
+    const app = await startAgent({ ...paths, port: 0, installSignalHandlers: false });
+    running.push(app);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      if (db.prepare("SELECT id FROM coding_steps WHERE state = 'PENDING'").get() !== undefined) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(tasks.get(task.id)?.status).toBe('RUNNING');
+    expect(db.prepare("SELECT id FROM coding_steps WHERE state = 'PENDING'").get()).toBeDefined();
+    await app.close();
+    expect(tasks.get(task.id)?.status).toBe('FAILED');
+    expect(db.prepare('SELECT state FROM coding_steps').get()).toEqual({ state: 'INTERRUPTED' });
+    expect(new LockRepository(db).get(repoId)?.ownerTaskId).toBe(task.id);
+    expect(app.health().database).not.toBe('ok');
+  } finally { run.mockRestore(); composition.mockRestore(); db.close(); }
+});

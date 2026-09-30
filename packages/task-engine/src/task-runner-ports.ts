@@ -70,7 +70,7 @@ export interface WorkspaceCreatePort {
 }
 
 export interface InstructionsPort {
-  load(workspace: TaskWorkspace): Promise<RepositoryInstructions>;
+  load(workspace: TaskWorkspace, taskId?: TaskId): Promise<RepositoryInstructions>;
 }
 
 export interface AnalyzePort {

@@ -9,6 +9,9 @@ import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/o
 import {
   AuditRepository,
   CommandRunRepository,
+  CodingStepRepository,
+  CiRunRepository,
+  PullRequestEvidenceRepository,
   GitCommitRepository,
   LockRepository,
   openDatabase,
@@ -34,6 +37,8 @@ import {
   RegisteredRepositoryProfiles,
 } from './persistence-adapters.js';
 import { createTaskRunner, type CompositionLocks } from './task-runner-composition.js';
+import { createProductionGitHubServices } from './github-services.js';
+import { ExternalCodingCapability } from './external-coding-capability.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { TaskVerificationSnapshots } from './verification-snapshot.js';
 import { BoundPublishingVerification } from './verified-publishing.js';
@@ -150,7 +155,23 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: commandRunner })),
       });
       const snapshots = new TaskVerificationSnapshots({ runner: commandRunner, workspaces: workspaceRepository });
+      const codingCapability = new ExternalCodingCapability({
+        tasks: taskRepository,
+        workspaces: workspaceRepository,
+        locks: lockRepository,
+        steps: new CodingStepRepository(database),
+        ownsLease: (taskId) => heldLeases.has(taskId),
+        redactor,
+      });
+      const githubServices = createProductionGitHubServices({
+        secrets: secretProvider,
+        pullRequests: pullRequestRepository,
+        evidence: new PullRequestEvidenceRepository(database),
+        ciRuns: new CiRunRepository(database),
+      });
       const taskRunner = createTaskRunner({
+        ...githubServices,
+        capabilities: { instructions: codingCapability, analyze: codingCapability, modify: codingCapability },
         audit: auditRepository,
         tasks: taskRepository,
         repos: repoProfiles,
@@ -214,6 +235,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         internalSecret,
         health: () => healthService.status(),
         taskCreate: taskService,
+        codingCapability,
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
@@ -226,7 +248,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         await mcp.close();
         throw error;
       }
-      return { logger, mcp, scheduler };
+      return { logger, mcp, scheduler, codingCapability };
     });
 
     const exit = options.exit ?? ((code: number) => process.exit(code));
@@ -245,11 +267,13 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       removeSignalHandlers();
       // Safety-critical order: stop() synchronously blocks any further
       // dispatch, then stop accepting submissions, then wait for
-      // already-registered runs (no cancellation, no deadline), then stop the
+      // already-registered runs (pending controller waits are rejected, active
+      // operations are not forcibly interrupted), then stop the
       // heartbeat of any lease those runs deliberately left held, and only
       // then close SQLite. Quiescing never releases: a lease whose push was
       // not confirmed stays held for explicit recovery.
       const drained = composed.scheduler.stop();
+      composed.codingCapability.close();
       mcpReady = false;
       await composed.mcp.close();
       await drained;

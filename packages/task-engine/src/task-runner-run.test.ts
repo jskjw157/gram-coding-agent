@@ -163,7 +163,8 @@ function createRunDeps(
       },
     },
     instructions: {
-      load: async () => {
+      load: async (_workspace, identity) => {
+        expect(identity).toBe(taskId);
         calls.load += 1;
         events.push("instructions.load");
         if (controls.instructionsError !== undefined) throw controls.instructionsError;
