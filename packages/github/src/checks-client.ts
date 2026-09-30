@@ -56,9 +56,10 @@ function requiredRules(value: unknown): RequiredCheckRule[] {
     throw new Error('GitHub required status checks returned an invalid payload');
   }
   const payload = value as RequiredStatusChecksPayload;
+  const rules: RequiredCheckRule[] = [];
 
-  if (Array.isArray(payload.checks) && payload.checks.length > 0) {
-    return payload.checks.map((raw) => {
+  if (Array.isArray(payload.checks)) {
+    for (const raw of payload.checks) {
       if (raw === null || typeof raw !== 'object') {
         throw new Error('GitHub required status checks returned an invalid check rule');
       }
@@ -74,25 +75,33 @@ function requiredRules(value: unknown): RequiredCheckRule[] {
       ) {
         throw new Error('GitHub required status checks returned an invalid app id');
       }
-      return {
+      rules.push({
         context,
         ...(typeof rule.app_id === 'number' ? { appId: rule.app_id } : {}),
-      };
-    });
+      });
+    }
+  } else if (payload.checks !== undefined) {
+    throw new Error('GitHub required status checks returned invalid checks');
   }
 
   if (Array.isArray(payload.contexts)) {
-    const rules = payload.contexts.map((raw) => {
+    for (const raw of payload.contexts) {
       const context = nonEmptyString(raw);
       if (context === undefined) {
         throw new Error('GitHub required status checks returned an invalid context');
       }
-      return { context };
-    });
-    if (rules.length > 0) return rules;
+      if (!rules.some((rule) => rule.context === context)) {
+        rules.push({ context });
+      }
+    }
+  } else if (payload.contexts !== undefined) {
+    throw new Error('GitHub required status checks returned invalid contexts');
   }
 
-  throw new Error('GitHub branch has no required status checks configured');
+  if (rules.length === 0) {
+    throw new Error('GitHub branch has no required status checks configured');
+  }
+  return rules;
 }
 
 function normalizeStatus(value: unknown): RequiredCheckStatus {
