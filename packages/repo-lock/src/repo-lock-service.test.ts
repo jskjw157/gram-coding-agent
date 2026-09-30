@@ -201,4 +201,70 @@ describe('RepoLockService', () => {
     await expect(service.acquire(100, contender.id)).rejects.toThrow(RepoLockedError);
     expect(existsSync(join(lockDirectory, '100.lock'))).toBe(false);
   });
+
+  it('stops the heartbeat interval when a held lease is quiesced', async () => {
+    const { db, service, createWaitingTask, scheduler, setNow } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+    expect(scheduler.setInterval).toHaveBeenCalledTimes(1);
+
+    await lease.quiesce();
+    expect(scheduler.clearInterval).toHaveBeenCalledTimes(1);
+    expect(scheduler.clearInterval).toHaveBeenCalledWith(1);
+
+    // No scheduler-driven tick can fire after quiesce: advance time and
+    // flush the microtask queue without invoking any timer callback.
+    const advancedAt = new Date(FIXED_NOW.getTime() + 15_000);
+    setNow(advancedAt);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const row = db.prepare('SELECT heartbeat_at FROM repo_locks WHERE repo_id = 100').get() as {
+      heartbeat_at: string;
+    };
+    expect(row.heartbeat_at).toBe(FIXED_NOW.toISOString());
+
+    await lease.release();
+  });
+
+  it('keeps the lease held and the lock file in place after quiesce', async () => {
+    const { db, service, tasks, lockDirectory, createWaitingTask } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+
+    await lease.quiesce();
+
+    const count = db.prepare('SELECT COUNT(*) AS count FROM repo_locks WHERE repo_id = 100').get() as {
+      count: number;
+    };
+    expect(count.count).toBe(1);
+    expect(existsSync(join(lockDirectory, '100.lock'))).toBe(true);
+    expect(tasks.get(task.id)?.status).toBe('PREPARING');
+
+    await lease.release();
+  });
+
+  it('releases correctly after a lease has been quiesced', async () => {
+    const { db, service, lockDirectory, createWaitingTask } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+
+    await lease.quiesce();
+    await lease.release();
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM repo_locks').get()).toEqual({ count: 0 });
+    expect(existsSync(join(lockDirectory, '100.lock'))).toBe(false);
+  });
+
+  it('treats repeated quiesce calls as a no-op', async () => {
+    const { service, createWaitingTask, scheduler } = setup();
+    const task = createWaitingTask(100);
+    const lease = await service.acquire(100, task.id);
+
+    await lease.quiesce();
+    await lease.quiesce();
+
+    expect(scheduler.clearInterval).toHaveBeenCalledTimes(1);
+
+    await lease.release();
+  });
 });

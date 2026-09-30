@@ -25,10 +25,20 @@ export class LeaseHeartbeat {
   start(): void {
     if (this.handle !== undefined) return;
     this.handle = this.scheduler.setInterval(() => {
-      void this.beat().catch((error: unknown) => {
-        this.stop();
-        return this.onFailure(error);
-      });
+      void (async () => {
+        try {
+          await this.beat();
+        } catch (beatError: unknown) {
+          this.stop();
+          try {
+            await this.onFailure(beatError);
+          } catch {
+            // The beat already failed and the timer is stopped; a failing
+            // recovery callback (e.g. SQLite already closed during shutdown)
+            // must never surface as an unhandled rejection.
+          }
+        }
+      })();
     }, this.intervalMs);
   }
 

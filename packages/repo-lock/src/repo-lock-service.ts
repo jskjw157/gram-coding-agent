@@ -54,6 +54,16 @@ export interface RepoLockLease {
   readonly taskId: TaskId;
   readonly leaseToken: string;
   heartbeat(): Promise<void>;
+  /**
+   * Stop the background heartbeat while keeping the lease held.
+   *
+   * Quiescing is idempotent: calling it twice is a no-op. It touches
+   * neither the lock file nor the SQLite lease row, so the lease remains
+   * held and a later {@link release} still cleans up both. It never awaits
+   * an in-flight heartbeat, so a beat already running cannot throw to the
+   * quiesce caller.
+   */
+  quiesce(): Promise<void>;
   release(): Promise<void>;
 }
 
@@ -136,6 +146,7 @@ export class RepoLockService {
     }
 
     let released = false;
+    let quiesced = false;
 
     const moveTaskTowardRecovery = async (): Promise<void> => {
       const current = this.options.tasks.get(taskId);
@@ -176,6 +187,11 @@ export class RepoLockService {
       taskId,
       leaseToken,
       heartbeat,
+      quiesce: async () => {
+        if (quiesced) return;
+        quiesced = true;
+        heartbeatTimer.stop();
+      },
       release: async () => {
         if (released) return;
         released = true;
