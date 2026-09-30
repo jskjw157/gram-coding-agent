@@ -10,11 +10,6 @@ import type { CompositionGit } from './task-runner-composition.js';
  * policy-gated `CommandRunner` (executable form): git and wslpath are
  * never spawned directly, so policy evaluation and approval consumption
  * always happen before any child process starts.
- *
- * NOTE: `CompositionGit.headSha` is intentionally NOT implemented here.
- * Head-binding is out of scope for this work unit, so the composition's
- * head-binding path keeps failing closed with
- * `TaskRunnerConfigurationError` until a later slice wires it.
  */
 
 const FULL_SHA_RE = /^[0-9a-f]{40}$/;
@@ -56,9 +51,26 @@ export interface WorktreeRecordStore {
   create(record: CreatedWorktreeRecord): void;
 }
 
-/** Structural subset of `CompositionGit` minus the out-of-scope `headSha`. */
-export class PolicyGitAdapter implements Omit<CompositionGit, 'headSha'> {
+/** Policy-gated task-attributed Git operations. */
+export class PolicyGitAdapter implements CompositionGit {
   constructor(private readonly options: PolicyGitAdapterOptions) {}
+
+  async headSha(worktree: string, taskId: TaskId): Promise<string> {
+    requireNonEmpty('worktree', worktree);
+    requireNonEmpty('taskId', taskId);
+    const result = await this.options.runner.run({
+      taskId,
+      cwd: worktree,
+      category: 'GIT',
+      executable: 'git',
+      args: ['rev-parse', 'HEAD'],
+    });
+    const sha = result.stdout.trim();
+    if (result.exitCode !== 0 || !FULL_SHA_RE.test(sha)) {
+      throw new Error('git rev-parse HEAD failed to resolve a full HEAD SHA');
+    }
+    return sha;
+  }
 
   /** Runs `git fetch origin` (in `repoPath`) through the policy gate. */
   async fetch(repoPath: string, taskId: TaskId): Promise<void> {

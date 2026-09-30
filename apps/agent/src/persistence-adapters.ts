@@ -2,6 +2,8 @@ import type { TaskId } from '@gram/domain';
 import type { CiPullRequestContext } from '@gram/github';
 import type { CompletionEvaluator } from '@gram/verification';
 import type {
+  BoundVerificationPlan,
+  VerificationRepository,
   GitCommitRepository,
   PullRequestRepository,
   RepositoryRepository,
@@ -91,25 +93,24 @@ export class RegisteredRepositoryProfiles implements CompositionRepoProfiles {
   }
 }
 
-/**
- * Thin `CompletionEvaluator` binding for the composition's verification port
- * (`CompositionVerification.requiredChecksPassed`).
- *
- * SCOPE LIMIT (issue #70): head-bound verification reads (filtering checks by
- * `head_sha` in SQL) are explicitly out of scope. No SQL was added, no
- * migration was added, and `CompletionEvaluator.requiredChecksPassed` takes
- * only `taskId`. The optional `headSha` argument is therefore accepted for
- * interface conformance but is NOT honored: this adapter forwards only
- * `taskId` to the evaluator and evaluates the task's latest verification
- * plan, regardless of which HEAD the caller bound. Callers that need
- * per-HEAD evidence must not treat a `true` here as proof for their HEAD.
- */
+/** Reads one sealed plan; unbound historical evidence never authorizes publication. */
 export class PersistentVerificationCompletion implements CompositionVerification {
-  constructor(private readonly evaluator: CompletionEvaluator) {}
+  constructor(
+    // Retained for source compatibility with diagnostic callers; not a publish fallback.
+    _evaluator: CompletionEvaluator,
+    private readonly repository?: Pick<VerificationRepository, 'getBoundPlan'>,
+  ) {}
+
+  getVerifiedPlan(taskId: TaskId, headSha: string): BoundVerificationPlan | undefined {
+    return this.repository?.getBoundPlan(taskId, headSha);
+  }
 
   requiredChecksPassed(taskId: TaskId, headSha?: string): boolean {
-    void headSha;
-    return this.evaluator.requiredChecksPassed(taskId);
+    return headSha !== undefined && this.getVerifiedPlan(taskId, headSha) !== undefined;
+  }
+
+  listApprovedPaths(taskId: TaskId, headSha?: string): readonly string[] {
+    return headSha === undefined ? [] : this.getVerifiedPlan(taskId, headSha)?.approvedPaths ?? [];
   }
 }
 

@@ -190,3 +190,23 @@ describe('@gram/git architecture', () => {
     }
   });
 });
+
+describe('explicit staged deletion and rename publication', () => {
+  it('publishes both endpoints of git mv without sweeping unrelated staged changes', async () => {
+    const worktree = createRepository();
+    git(worktree, ['mv', 'baseline.txt', 'renamed.txt']);
+    writeFileSync(join(worktree, 'unrelated.txt'), 'not approved');
+    git(worktree, ['add', 'unrelated.txt']);
+    const sha = await new CommitService(new LocalGitRunner(), { taskId: 'rename-158' })
+      .commitExplicit(worktree, ['baseline.txt', 'renamed.txt'], 'rename reviewed file');
+    expect(git(worktree, ['show', '--format=', '--name-only', '--no-renames', sha]).split('\n').sort())
+      .toEqual(['baseline.txt', 'renamed.txt']);
+    expect(git(worktree, ['status', '--porcelain'])).toBe('A  unrelated.txt');
+  });
+  it('publishes an already staged git rm', async () => {
+    const worktree = createRepository(); git(worktree, ['rm', 'baseline.txt']);
+    const sha = await new CommitService(new LocalGitRunner(), { taskId: 'delete-158' })
+      .commitExplicit(worktree, ['baseline.txt'], 'remove reviewed file');
+    expect(git(worktree, ['show', '--format=', '--name-status', sha])).toBe('D\tbaseline.txt');
+  });
+});

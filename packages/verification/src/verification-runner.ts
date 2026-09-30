@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+import type { VerificationSnapshot } from '@gram/persistence';
 import type { VerificationCheckStatus } from './verification-planner.js';
 import type {
   PersistedVerificationCheck,
@@ -30,6 +32,7 @@ export interface VerificationCommandPort {
 }
 
 export interface VerificationEvidencePort {
+  sealSnapshot?(planId: number, snapshot: VerificationSnapshot): void | Promise<void>;
   recordCommandResult(input: {
     checkId: number;
     status: 'PASS' | 'FAIL';
@@ -40,6 +43,7 @@ export interface VerificationEvidencePort {
     checkId: number;
     status: 'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED';
     evidenceRef?: string;
+    approvedPaths?: readonly string[];
     reason?: string;
   }): void | Promise<void>;
 }
@@ -55,9 +59,7 @@ export interface SecretScanPort {
 }
 
 export interface DiffReviewPort {
-  review(
-    context: VerificationTaskContext,
-  ): Promise<VerificationGateResult & { changedPaths?: readonly string[] }>;
+  review(context: VerificationTaskContext): Promise<VerificationGateResult & { changedPaths?: readonly string[] }>;
 }
 
 export interface BrowserVerificationPort {
@@ -70,6 +72,7 @@ export interface VerificationRunnerOptions {
   secretScan: SecretScanPort;
   diffReview: DiffReviewPort;
   browser?: BrowserVerificationPort;
+  snapshots?: { capture(taskId: string, expectedCwd?: string): Promise<VerificationSnapshot> };
 }
 
 export interface VerificationCheckResult {
@@ -102,12 +105,24 @@ function resultFrom(
 export class VerificationRunner {
   constructor(private readonly options: VerificationRunnerOptions) {}
 
-  async run(
-    plan: PersistedVerificationPlan,
-    context: VerificationTaskContext,
-  ): Promise<VerificationResult> {
-    if (context.taskId !== plan.taskId) {
+  async run(plan: PersistedVerificationPlan, context: VerificationTaskContext): Promise<VerificationResult> {
+    const boundContext = Object.freeze({ taskId: context.taskId, cwd: context.cwd });
+    if (boundContext.taskId !== plan.taskId) {
       throw new Error('Verification plan task does not match task context');
+    }
+
+    let before: VerificationSnapshot | undefined;
+    if (this.options.snapshots !== undefined) {
+      if (this.options.evidence.sealSnapshot === undefined) {
+        throw new Error('Snapshot verification requires evidence sealing');
+      }
+      if (plan.checks.some((check) => check.required && check.status !== 'PENDING')) {
+        throw new Error('Snapshot verification requires fresh PENDING required checks');
+      }
+      before = structuredClone(await this.options.snapshots.capture(boundContext.taskId, boundContext.cwd));
+      if (before.taskId !== plan.taskId || before.headSha !== plan.headSha) {
+        throw new Error('Verification snapshot task and HEAD do not match the plan');
+      }
     }
 
     const results: VerificationCheckResult[] = [];
@@ -124,8 +139,8 @@ export class VerificationRunner {
         }
 
         const command = await this.options.commands.run({
-          taskId: context.taskId,
-          cwd: context.cwd,
+          taskId: boundContext.taskId,
+          cwd: boundContext.cwd,
           category: 'VERIFICATION',
           shellText: check.command,
         });
@@ -139,41 +154,49 @@ export class VerificationRunner {
         continue;
       }
 
-      const gate = await this.runNonCommandCheck(check, context);
+      const gate = await this.runNonCommandCheck(check, boundContext);
       await this.options.evidence.recordNonCommandResult({
         checkId: check.id,
         status: gate.status,
         ...(gate.evidenceRef === undefined ? {} : { evidenceRef: gate.evidenceRef }),
+        ...(gate.approvedPaths === undefined ? {} : { approvedPaths: gate.approvedPaths }),
         ...(gate.reason === undefined ? {} : { reason: gate.reason }),
       });
       results.push(resultFrom(check, gate.status, gate.reason));
     }
 
-    return {
-      passed: results
-        .filter((check) => check.required)
-        .every((check) => check.status === 'PASS'),
-      checks: results,
-    };
+    const required = results.filter((check) => check.required);
+    const passed = required.length > 0 && required.every((check) => check.status === 'PASS');
+    if (passed && before !== undefined && this.options.snapshots !== undefined) {
+      const after = await this.options.snapshots.capture(boundContext.taskId, boundContext.cwd);
+      if (!isDeepStrictEqual(before, after)) {
+        throw new Error('Verification snapshot changed while checks were running');
+      }
+      await this.options.evidence.sealSnapshot?.(plan.id, before);
+    }
+    return { passed, checks: results };
   }
 
   private async runNonCommandCheck(
     check: PersistedVerificationCheck,
     context: VerificationTaskContext,
   ): Promise<{
-    status: Extract<
-      VerificationCheckStatus,
-      'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED'
-    >;
+    status: Extract<VerificationCheckStatus, 'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED'>;
     evidenceRef?: string;
+    approvedPaths?: readonly string[];
     reason?: string;
   }> {
     let result: VerificationGateResult | undefined;
+    let approvedPaths: readonly string[] | undefined;
 
     if (check.name === 'secret-scan') {
       result = await this.options.secretScan.scan(context);
     } else if (check.name === 'diff-review') {
-      result = await this.options.diffReview.review(context);
+      const review = await this.options.diffReview.review(context);
+      result = review;
+      if (review.passed && review.changedPaths !== undefined) {
+        approvedPaths = review.changedPaths;
+      }
     } else if (check.name === 'browser') {
       if (this.options.browser === undefined) {
         return {
@@ -194,6 +217,7 @@ export class VerificationRunner {
     return {
       status: result.passed ? 'PASS' : 'FAIL',
       evidenceRef: result.evidenceRef,
+      ...(approvedPaths === undefined ? {} : { approvedPaths }),
       ...(result.reason === undefined ? {} : { reason: result.reason }),
     };
   }

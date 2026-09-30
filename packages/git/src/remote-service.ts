@@ -7,12 +7,15 @@ export class RemoteService {
     private readonly confirmationCwd: string,
   ) {}
 
-  async push(worktree: string, branch: string): Promise<void> {
+  async push(worktree: string, branch: string, expectedSha?: string): Promise<void> {
+    if (expectedSha !== undefined && !/^[0-9a-f]{40}$/.test(expectedSha)) {
+      throw new Error("expectedSha must be a full lowercase Git SHA");
+    }
     await runGit(
       this.runner,
       { ...this.context, targetBranch: branch },
       worktree,
-      ['push', 'origin', `HEAD:refs/heads/${branch}`],
+      ['push', 'origin', `${expectedSha ?? "HEAD"}:refs/heads/${branch}`],
     );
   }
 
