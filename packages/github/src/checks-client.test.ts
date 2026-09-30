@@ -116,6 +116,61 @@ describe('GitHubChecksClient', () => {
     expect(dispose).toHaveBeenCalledTimes(2);
   });
 
+
+  it('keeps distinct legacy contexts while preferring fine-grained app rules for duplicate names', async () => {
+    const fetch: GitHubFetch = vi.fn(async (url) => {
+      if (url.includes('/protection/required_status_checks')) {
+        return response(200, {
+          strict: true,
+          contexts: ['verify', 'security-scan'],
+          checks: [{ context: 'verify', app_id: 15368 }],
+        });
+      }
+      return response(200, {
+        total_count: 2,
+        check_runs: [
+          {
+            id: 3001,
+            name: 'verify',
+            head_sha: CONTEXT.headSha,
+            status: 'completed',
+            conclusion: 'success',
+            app: { id: 15368 },
+          },
+          {
+            id: 3002,
+            name: 'security-scan',
+            head_sha: CONTEXT.headSha,
+            status: 'in_progress',
+            conclusion: null,
+            app: { id: 991 },
+          },
+        ],
+      });
+    });
+
+    const client = new GitHubChecksClient({
+      secrets: secretProvider(),
+      fetch,
+      apiBaseUrl: 'https://api.github.test',
+    });
+
+    await expect(client.listRequiredChecks(CONTEXT)).resolves.toEqual([
+      expect.objectContaining({
+        providerCheckId: '3001',
+        checkName: 'verify',
+        status: 'completed',
+        conclusion: 'success',
+      }),
+      expect.objectContaining({
+        providerCheckId: '3002',
+        checkName: 'security-scan',
+        status: 'in_progress',
+        conclusion: null,
+      }),
+    ]);
+  });
+
   it('returns a synthetic queued required check instead of treating a missing provider check as success', async () => {
     const fetch: GitHubFetch = vi.fn(async (url) => {
       if (url.includes('/protection/required_status_checks')) {
