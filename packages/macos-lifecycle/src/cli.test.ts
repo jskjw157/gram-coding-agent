@@ -143,12 +143,14 @@ describe('strict local lifecycle CLI', () => {
       expect(await runCli(args, f.deps)).toBe(70);
       expect(f.lines.join('')).toContain('INTERNAL_ERROR');
   });
-  it.each([null, { ok: 'true', code: 'OK' }, { ok: true, code: 'AUTH_BLOCKED' },
+  it.each([null, undefined, { ok: 'true', code: 'OK' }, { ok: true, code: 'AUTH_BLOCKED' },
     { ok: false, code: 'OK' }, { ok: true, code: 'OK', secret: 'never-output' }])(
     'contains malformed mutation results (%j)', async value => {
       const f = await makeCliFixture(); f.deps.apply = async () => value as unknown as Result;
-      expect(await runCli(mutationArgs('apply', f.previewResult.configDigest), f.deps)).toBe(value === null ? 2 : 70);
-      expect(output(f.lines)).toEqual(failure('apply', value === null ? 'CAPABILITY_UNAVAILABLE' : 'INTERNAL_ERROR'));
+      let invoked = 0;
+      f.deps.apply = async () => { invoked++; return value as unknown as Result; };
+      expect(await runCli(mutationArgs('apply', f.previewResult.configDigest), f.deps)).toBe(70);
+      expect(invoked).toBe(1); expect(output(f.lines)).toEqual(failure('apply', 'INTERNAL_ERROR'));
     });
   it.each(['preview', 'status', 'apply', 'rollback', 'control'] as const)('redacts a thrown %s provider error', async port => {
     const f = await makeCliFixture(); Reflect.set(f.deps, port, async () => { throw new Error('FAKE_SECRET /private/token'); });
@@ -171,11 +173,11 @@ describe('strict local lifecycle CLI', () => {
       expect(output(f.lines)).toEqual(failure('preview', 'INTERNAL_ERROR'));
     }
   });
-  it('handles null status as unavailable and malformed clock evidence as internal failure', async () => {
+  it('handles malformed status provider returns as internal failure', async () => {
     for (const value of [null, {}, { nowMs: -1, core: {}, tunnel: {} }]) {
       const f = await makeCliFixture(); f.deps.status = async () => value as unknown as DiagnosticEvidence;
-      expect(await runCli(['status', '--json'], f.deps)).toBe(value === null ? 2 : 70);
-      expect(output(f.lines)).toEqual(failure('status', value === null ? 'CAPABILITY_UNAVAILABLE' : 'INTERNAL_ERROR'));
+      expect(await runCli(['status', '--json'], f.deps)).toBe(70);
+      expect(output(f.lines)).toEqual(failure('status', 'INTERNAL_ERROR'));
     }
   });
   it('rejects accessor-bearing results without invoking the accessor', async () => {
@@ -189,6 +191,25 @@ describe('strict local lifecycle CLI', () => {
     const f = await makeCliFixture(); let attempts = 0;
     f.deps.output = () => { attempts++; throw new Error('FAKE_SECRET'); };
     expect(await runCli([], f.deps)).toBe(70); expect(attempts).toBe(1);
+  });
+  it('waits for deferred JSON output completion before reporting success', async () => {
+    const f = await makeCliFixture(); let finish: (() => void) | undefined;
+    f.deps.output = line => new Promise<void>(resolve => { finish = () => { f.lines.push(line); resolve(); }; });
+    let completed = false; const pending = runCli([], f.deps).then(exit => { completed = true; return exit; });
+    for (let index = 0; index < 3; index++) await Promise.resolve();
+    try { expect(completed).toBe(false); expect(f.lines).toEqual([]); }
+    finally { finish?.(); }
+    expect(await pending).toBe(0); expect(f.lines).toHaveLength(1);
+  });
+  it('contains a deferred output rejection and returns70 with one attempt', async () => {
+    const f = await makeCliFixture(); let fail: (() => void) | undefined; let attempts = 0;
+    const outputPromise = new Promise<void>((_resolve, reject) => { fail = () => reject(new Error('FAKE_SECRET')); });
+    // Observe the reproduction's rejected promise even before the fix awaits it.
+    void outputPromise.catch(() => undefined);
+    f.deps.output = () => { attempts++; return outputPromise; };
+    const pending = runCli([], f.deps);
+    for (let index = 0; index < 3; index++) await Promise.resolve();
+    fail?.(); expect(await pending).toBe(70); expect(attempts).toBe(1); expect(f.lines).toEqual([]);
   });
   it('leaves real fixture bytes unchanged across preview and status', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'gram-cli-read-'));

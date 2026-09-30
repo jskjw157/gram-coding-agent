@@ -120,34 +120,38 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     if (!command) { exit = 64; report = resultReport(null, false, 'INVALID_USAGE'); }
     else {
       action = command.action;
-      let raw: unknown;
-      if (command.action === 'preview') raw = await deps.preview?.();
-      else if (command.action === 'status') raw = await deps.status?.();
-      else if (command.action === 'apply') raw = await deps.apply?.(command.request);
-      else if (command.action === 'rollback') raw = await deps.rollback?.(command.request);
-      else raw = await deps.control?.(command.action, command.request);
-      if (raw === null || raw === undefined) { exit = 2; report = resultReport(action, false, 'CAPABILITY_UNAVAILABLE'); }
-      else if (command.action === 'preview') {
-        const preview = previewResult(raw);
-        if (!preview) throw new Error('INTERNAL_ERROR');
-        exit = preview.ok ? 0 : preview.code === 'INTERNAL_ERROR' ? 70 : 2;
-        report = { schemaVersion: 1, mode: 'LAB_ONLY', action: 'preview', businessReadiness: 'UNAVAILABLE', preview };
-      } else if (command.action === 'status') {
-        const input = record(raw, ['nowMs', 'core', 'tunnel']);
-        if (!input || typeof input.nowMs !== 'number' || !Number.isSafeInteger(input.nowMs) || input.nowMs < 0) throw new Error('INTERNAL_ERROR');
-        report = projectStatus(input); exit = 0;
-      } else {
-        const result = operationResult(raw);
-        if (!result) throw new Error('INTERNAL_ERROR');
-        report = resultReport(action, result.ok, result.code);
-        exit = result.ok ? 0 : result.code === 'INTERNAL_ERROR' ? 70 : 2;
+      const portKey = command.action === 'preview' ? 'preview' : command.action === 'status' ? 'status'
+        : command.action === 'apply' ? 'apply' : command.action === 'rollback' ? 'rollback' : 'control';
+      if (typeof deps[portKey] !== 'function') { exit = 2; report = resultReport(action, false, 'CAPABILITY_UNAVAILABLE'); }
+      else {
+        let raw: unknown;
+        if (command.action === 'preview') raw = await deps.preview?.();
+        else if (command.action === 'status') raw = await deps.status?.();
+        else if (command.action === 'apply') raw = await deps.apply?.(command.request);
+        else if (command.action === 'rollback') raw = await deps.rollback?.(command.request);
+        else raw = await deps.control?.(command.action, command.request);
+        if (command.action === 'preview') {
+          const preview = previewResult(raw);
+          if (!preview) throw new Error('INTERNAL_ERROR');
+          exit = preview.ok ? 0 : preview.code === 'INTERNAL_ERROR' ? 70 : 2;
+          report = { schemaVersion: 1, mode: 'LAB_ONLY', action: 'preview', businessReadiness: 'UNAVAILABLE', preview };
+        } else if (command.action === 'status') {
+          const input = record(raw, ['nowMs', 'core', 'tunnel']);
+          if (!input || typeof input.nowMs !== 'number' || !Number.isSafeInteger(input.nowMs) || input.nowMs < 0) throw new Error('INTERNAL_ERROR');
+          report = projectStatus(input); exit = 0;
+        } else {
+          const result = operationResult(raw);
+          if (!result) throw new Error('INTERNAL_ERROR');
+          report = resultReport(action, result.ok, result.code);
+          exit = result.ok ? 0 : result.code === 'INTERNAL_ERROR' ? 70 : 2;
+        }
       }
     }
   } catch { report = resultReport(action, false, 'INTERNAL_ERROR'); exit = 70; }
   try {
     const line = JSON.stringify(report) + '\n';
     if (line.length > 65536) return 70;
-    deps.output(line);
+    await deps.output(line);
     return exit;
   } catch { return 70; }
 }

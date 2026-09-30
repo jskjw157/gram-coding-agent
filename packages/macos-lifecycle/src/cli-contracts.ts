@@ -40,5 +40,5 @@ export interface CliDeps {
   apply?(request: ExpectedInstallRequest): Promise<Result>;
   rollback?(request: RollbackRequest): Promise<Result>;
   control?(action: LocalControlAction, request: ExpectedInstallRequest): Promise<Result>;
-  output(jsonLine: string): void;
+  output(jsonLine: string): void | Promise<void>;
 }
