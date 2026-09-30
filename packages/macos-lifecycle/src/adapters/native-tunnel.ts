@@ -20,3 +20,8 @@ export function tunnelLaunchPlan(input: ServiceConfig): Readonly<TunnelLaunchPla
   const env = Object.freeze({ PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C', HOME: '/Users/gram-agent' });
   return Object.freeze({ file: `${release}/bin/tunnel-client`, args, cwd: release, env });
 }
+
+export interface TunnelCustodyOptions {}
+export function createNativeTunnelCustody(_options: TunnelCustodyOptions = {}): unknown {
+  throw new Error('NOT_IMPLEMENTED');
+}
