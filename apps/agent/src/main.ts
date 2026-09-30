@@ -27,7 +27,7 @@ import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
 import { CompletionEvaluator } from '@gram/verification';
 import { PathMapper, WorktreeService } from '@gram/workspace';
-import { PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
+import { PolicyGitAdapter, PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
 import {
   PersistentCiContextResolver,
   PersistentVerificationCompletion,
@@ -151,6 +151,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         tasks: taskRepository,
         repos: repoProfiles,
         locks: trackedLocks,
+        git: new PolicyGitAdapter({ runner: commandRunner }),
         worktrees: worktreeService,
         verification,
         publishing: {
