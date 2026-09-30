@@ -135,16 +135,17 @@ describe('policy-gated git and worktree command adapters', () => {
 
     const denying = harness({ approve: false });
     const denyingWorktrees = new PolicyWorktreeAdapter({ runner: denying.runner });
-    await expect(
-      denyingWorktrees.createWorktree({
-        repoPath: localBasePath,
-        worktreePath: join(root, 'wt-denied'),
-        baseRef: 'origin/main',
-        branch: 'feat/task-000006-denied',
-        taskId: taskId,
-      }),
-    ).rejects.toThrow(ApprovalRequiredError);
-    expect(denying.seen).toHaveLength(0);
+    const deniedPath = join(root, 'wt-denied');
+    const denyingCreated = await denyingWorktrees.createWorktree({
+      repoPath: localBasePath,
+      worktreePath: deniedPath,
+      baseRef: 'origin/main',
+      branch: 'feat/task-000006-denied',
+      taskId: taskId,
+    });
+    expect(denyingCreated.headSha).toMatch(/^[0-9a-f]{40}$/);
+    worktrees.push({ repoPath: localBasePath, path: deniedPath });
+    expect(denying.consume).not.toHaveBeenCalled();
 
     const { runner, seen } = harness({ approve: true });
     const gitAdapter = new PolicyGitAdapter({ runner });
@@ -328,6 +329,110 @@ describe('policy-gated git and worktree command adapters', () => {
     expect(seen[0] === undefined ? [] : [...(seen[0]?.args ?? [])]).toEqual(['-w', linuxPath]);
     expect(seen[0]?.taskId).toBe(taskId);
     expect(evaluate).toHaveBeenCalled();
-    expect(consume).toHaveBeenCalledOnce();
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it('classifies the issued worktree add as ALLOW and spawns without consuming approval', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000015';
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const branch = 'feat/task-000015-worktree';
+    const worktreePath = '/home/agent/.gram-agent/worktrees/7/0191a2b3-c4d5-7000-8000-000000000015';
+    const baseRef = 'origin/main';
+    const headSha = '0123456789abcdef0123456789abcdef01234567';
+
+    const seen: SpawnRequest[] = [];
+    const stub: ProcessSpawner = {
+      spawn: async (request: SpawnRequest): Promise<SpawnResult> => {
+        seen.push(request);
+        if ((request.args ?? []).includes('rev-parse')) {
+          return { exitCode: 0, stdout: `${headSha}\n`, stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const { runner } = harness({ approve: true, spawner: stub });
+    const adapter = new PolicyWorktreeAdapter({ runner });
+    const created = await adapter.createWorktree({
+      repoPath: localBasePath,
+      worktreePath,
+      baseRef,
+      branch,
+      taskId,
+    });
+    expect(created.headSha).toBe(headSha);
+    const request = seen[0];
+    expect(request).toBeDefined();
+    if (request === undefined) throw new Error('expected one worktree add command');
+    if (!('executable' in request) || request.executable !== 'git') {
+      throw new Error('expected a git executable command');
+    }
+    expect([...(request.args ?? [])]).toEqual(['worktree', 'add', '-b', branch, worktreePath, baseRef]);
+    expect([...(request.args ?? [])]).not.toContain('-C');
+    expect(request.cwd).toBe(localBasePath);
+    const policy = new PolicyEngine();
+    const operation = normalizeExecutableCommand('git', [...(request.args ?? [])], request.cwd);
+    expect(policy.evaluate(operation, { taskId }).kind).toBe('ALLOW');
+
+    const denyingSeen: SpawnRequest[] = [];
+    const denyingStub: ProcessSpawner = {
+      spawn: async (deniedRequest: SpawnRequest): Promise<SpawnResult> => {
+        denyingSeen.push(deniedRequest);
+        if ((deniedRequest.args ?? []).includes('rev-parse')) {
+          return { exitCode: 0, stdout: `${headSha}\n`, stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const denying = harness({ approve: false, spawner: denyingStub });
+    const denyingAdapter = new PolicyWorktreeAdapter({ runner: denying.runner });
+    const denyingCreated = await denyingAdapter.createWorktree({
+      repoPath: localBasePath,
+      worktreePath,
+      baseRef,
+      branch,
+      taskId,
+    });
+    expect(denyingCreated.headSha).toBe(headSha);
+    expect(denyingSeen).toHaveLength(2);
+    expect(denying.consume).not.toHaveBeenCalled();
+  });
+
+  it('allows the issued wslpath -w without consuming approval', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000016';
+    const linuxPath = '/home/agent/.gram-agent/worktrees/7/0191a2b3-c4d5-7000-8000-000000000016';
+    const windowsPath = 'C:\\gram\\worktrees\\7\\0191a2b3-c4d5-7000-8000-000000000016';
+    const seen: SpawnRequest[] = [];
+    const stub: ProcessSpawner = {
+      spawn: async (request: SpawnRequest): Promise<SpawnResult> => {
+        seen.push(request);
+        return { exitCode: 0, stdout: `${windowsPath}\n`, stderr: '' };
+      },
+    };
+    const denying = harness({ approve: false, spawner: stub });
+    const pathRunner = new PolicyWslPathRunner({ runner: denying.runner });
+    const result = await pathRunner.run(['-w', linuxPath], taskId);
+    expect(result).toBe(windowsPath);
+    expect(seen).toHaveLength(1);
+    expect(seen[0] === undefined ? [] : [...(seen[0]?.args ?? [])]).toEqual(['-w', linuxPath]);
+    expect(denying.consume).not.toHaveBeenCalled();
+  });
+
+  it('keeps approval denial for an unsupported worktree command', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000017';
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const denying = harness({ approve: false });
+    await expect(
+      denying.runner.run({
+        taskId,
+        cwd: localBasePath,
+        category: 'GIT',
+        executable: 'git',
+        args: ['worktree', 'list'],
+      }),
+    ).rejects.toThrow(ApprovalRequiredError);
+    expect(denying.consume).toHaveBeenCalledTimes(1);
+    expect(denying.seen).toHaveLength(0);
   });
 });
