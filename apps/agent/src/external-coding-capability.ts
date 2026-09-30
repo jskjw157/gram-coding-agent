@@ -15,7 +15,7 @@ export interface ExternalCodingOptions {
   workspaces: WorkspaceRepository;
   locks: LockRepository;
   steps: CodingStepRepository;
-  ownsLease(taskId: TaskId): boolean;
+  ownsLease(taskId: TaskId, leaseToken: string): boolean;
   redactor: SecretRedactor;
   stepTimeoutMs?: number;
 }
@@ -157,10 +157,9 @@ export class ExternalCodingCapability implements InstructionsPort, AnalyzePort, 
     const workspace = this.options.workspaces.getByTaskId(taskId);
     if (this.closed || task?.status !== 'RUNNING' || workspace === undefined ||
       workspace.taskId !== taskId || task.repoId !== workspace.repoId ||
-      workspace.linuxPath !== expected.linuxPath || workspace.branch !== expected.branch ||
-      !this.options.ownsLease(taskId)) throw new Error('Coding task/workspace is not active');
+      workspace.linuxPath !== expected.linuxPath || workspace.branch !== expected.branch) throw new Error('Coding task/workspace is not active');
     const lease = this.options.locks.get(workspace.repoId);
-    if (lease?.ownerTaskId !== taskId || Date.parse(lease.leaseUntil) <= Date.now()) throw new Error('Coding repository lease is not active');
+    if (lease?.ownerTaskId !== taskId || Date.parse(lease.leaseUntil) <= Date.now() || !this.options.ownsLease(taskId, lease.leaseToken)) throw new Error('Coding repository lease is not active');
     if (realpathSync(workspace.linuxPath) !== resolve(workspace.linuxPath)) throw new Error('Coding workspace root must be canonical');
     return { ...workspace, leaseToken: lease.leaseToken };
   }

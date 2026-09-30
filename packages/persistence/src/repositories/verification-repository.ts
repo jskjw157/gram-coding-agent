@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { VerificationReviewRepository } from './verification-review-repository.js';
 import { isAbsolute, resolve } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { TaskId } from '@gram/domain';
@@ -269,6 +271,11 @@ export class VerificationRepository {
       .immediate();
   }
 
+  isCurrentPlan(taskId: TaskId, planId: number, headSha: string): boolean {
+    const row = this.latestPlan(taskId);
+    return row?.id === planId && row.head_sha === headSha;
+  }
+
   getCheck(id: number): StoredVerificationCheck | undefined {
     const row = this.db.prepare('SELECT * FROM verification_checks WHERE id = ?').get(id) as
       VerificationCheckRow | undefined;
@@ -322,6 +329,9 @@ export class VerificationRepository {
         const evidence = readEvidence(plan);
         if (evidence.snapshot !== undefined) throw new Error('Verification plan is sealed');
         const evidenceRef = input.evidenceRef?.trim() ?? null;
+        if (plan.externalReviews === true && (check.name === 'secret-scan' || check.name === 'diff-review')) {
+          this.assertExternalReview(row, check, evidenceRef, input.status, input.approvedPaths);
+        }
         if (input.status === 'PASS') {
           if (input.commandRunId !== undefined && input.commandRunId !== null) {
             this.assertCommandEvidence(input.commandRunId, check.taskId, check.id, evidence.commandFloor);
@@ -428,6 +438,10 @@ export class VerificationRepository {
     const required = checks.filter((check) => check.required);
     if (required.length === 0) throw new Error('Verification requires required checks');
     for (const check of required) {
+      if (readPlanJson(row).externalReviews === true && (check.name === 'secret-scan' || check.name === 'diff-review')) {
+        const approved = evidence.reviews.find(review => review.checkId === check.id)?.approvedPaths;
+        this.assertExternalReview(row, check, check.evidenceRef, check.status, approved, snapshot);
+      }
       if (check.status !== 'PASS' || !check.hasEvidence) throw new Error('Required checks lack passed evidence');
       if (check.commandRunId !== null) this.assertCommandEvidence(check.commandRunId, row.task_id, check.id, evidence.commandFloor, true);
     }
@@ -460,6 +474,31 @@ export class VerificationRepository {
       approvedPaths: [...approvedPaths].sort(),
       checks,
     };
+  }
+
+  private assertExternalReview(row: VerificationPlanRow, check: StoredVerificationCheck, ref: string | null,
+    status: StoredVerificationCheckStatus, paths?: readonly string[], snapshot?: VerificationSnapshot): void {
+    const id = ref?.startsWith('external-review:') ? ref.slice('external-review:'.length) : undefined;
+    const review = id === undefined ? undefined : new VerificationReviewRepository(this.db).get(id);
+    if (review === undefined || review.state !== 'ACCEPTED' || review.taskId !== row.task_id ||
+        review.planId !== row.id || review.checkId !== check.id || review.checkName !== check.name ||
+        review.headSha !== row.head_sha || review.decision !== status ||
+        JSON.stringify([...review.approvedPaths].sort()) !== JSON.stringify([...(paths ?? [])].sort())) {
+      throw new Error('External review evidence does not match its accepted check');
+    }
+    if (snapshot !== undefined) {
+      const digest = createHash('sha256').update(JSON.stringify(snapshot)).digest('hex');
+      const candidates = snapshot.entries.map(entry => entry.path);
+      const seen = review.views.map(view => view.path).sort();
+      if (review.snapshotDigest !== digest || JSON.stringify(seen) !== JSON.stringify(candidates) ||
+          review.views.some(view => !/^[a-f0-9]{64}$/.test(view.digest))) {
+        throw new Error('External review evidence does not match the sealed snapshot');
+      }
+      const workspace = this.db.prepare('SELECT id, linux_path, branch FROM workspaces WHERE task_id=?').get(row.task_id) as {id:number;linux_path:string;branch:string} | undefined;
+      if (workspace?.id !== review.workspaceId || workspace.linux_path !== review.workspacePath || workspace.branch !== review.branch) {
+        throw new Error('External review workspace binding changed');
+      }
+    }
   }
 
   private saveEvidence(planId: number, plan: Record<string, unknown>, evidence: VerificationEvidence): void {

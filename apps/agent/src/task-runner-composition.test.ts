@@ -17,6 +17,7 @@ type RunEvent =
   | 'instructions.load'
   | 'analyze'
   | 'modify'
+  | 'verify.execute'
   | 'verify'
   | 'commit'
   | 'push'
@@ -49,6 +50,7 @@ const EXPECTED_HAPPY_ORDER: RunEvent[] = [
 ];
 
 interface Controls {
+  executeVerification?: boolean;
   boundPlan?: "valid" | "missing";
   verifyError?: Error;
   publishError?: Error;
@@ -246,6 +248,7 @@ function createHarness(controls: Controls = {}) {
   }
 
   const verification = {
+    ...(controls.executeVerification ? { execute: async (taskId: TaskId, headSha: string) => { expect(taskId).toBe(TASK_ID); expect(headSha).toBe(SHA); expect(status).toBe('VERIFYING'); events.push('verify.execute'); } } : {}),
     ...(controls.boundPlan === undefined ? {} : {
       getVerifiedPlan: async (taskId: TaskId, headSha: string) => {
         expect(taskId).toBe(TASK_ID); expect(headSha).toBe(SHA); events.push("verify");
@@ -1156,4 +1159,11 @@ describe('coherent bound verification composition', () => {
     await expect(runner.run(TASK_ID)).rejects.toThrow();
     expect(publishCalls).toEqual([]);
   });
+});
+
+it('executes fresh verification after MODIFY and before reading the sealed plan', async () => {
+ const {runner,events}=createHarness({boundPlan:'valid',executeVerification:true,initialStatus:'PREPARING'});
+ await runner.run(TASK_ID);
+ expect(events.indexOf('verify.execute')).toBeGreaterThan(events.indexOf('modify'));
+ expect(events.indexOf('verify.execute')).toBeLessThan(events.indexOf('verify'));
 });

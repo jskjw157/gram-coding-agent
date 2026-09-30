@@ -124,6 +124,7 @@ export interface CompositionVerifiedPlan {
 }
 
 export interface CompositionVerification {
+  execute?(taskId: TaskId, headSha: string): Promise<void>;
   getVerifiedPlan?(taskId: TaskId, headSha: string): CompositionVerifiedPlan | undefined | Promise<CompositionVerifiedPlan | undefined>;
   requiredChecksPassed(taskId: TaskId, headSha?: string): boolean | Promise<boolean>;
   /** Diff-review-approved paths for the bound HEAD. Absent providers approve nothing. */
@@ -426,6 +427,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       // equality immediately before any side effect.
       const worktreePath = await resolveWorkspacePath(taskId, 'Verify');
       const headSha = await resolveHeadSha(worktreePath, 'Verify', taskId);
+      await options.verification.execute?.(taskId, headSha);
       if (options.verification.getVerifiedPlan !== undefined) {
         const plan = await options.verification.getVerifiedPlan(taskId, headSha);
         if (plan === undefined || plan.taskId !== taskId || plan.headSha !== headSha) {

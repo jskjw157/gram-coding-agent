@@ -33,6 +33,7 @@ describe('coding step migrations', () => {
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
     const columns = db.pragma('table_info(coding_steps)') as Array<{ name: string }>;
     expect(columns.map(({ name }) => name)).toEqual([
@@ -59,6 +60,7 @@ describe('coding step migrations', () => {
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
     expect(db.prepare('SELECT applied_at FROM schema_migrations WHERE version = 1').get())
       .toEqual({ applied_at: '2026-09-01T00:00:00.000Z' });

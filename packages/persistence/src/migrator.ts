@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 const MIGRATIONS = [
   { version: 1, file: './migrations/001_initial.sql' },
   { version: 2, file: './migrations/002_coding_steps.sql' },
+  { version: 3, file: './migrations/003_verification_reviews.sql' },
 ];
 
 export function runMigrations(db: Database.Database): void {

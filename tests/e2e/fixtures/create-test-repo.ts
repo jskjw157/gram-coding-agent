@@ -1,10 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -32,13 +27,22 @@ function git(cwd: string, args: readonly string[], fixedCommitDate = false): str
   }).trim();
 }
 
-function writeFixtureFiles(canonicalPath: string): void {
+export const NODE_ONLY_VERIFICATION_COMMANDS = {
+  lint: 'node --check src/counter.ts',
+  test: 'node --test test/counter.test.js',
+  // This fixture declares syntax checking as its build: no package install/compiler is required.
+  build: 'node --check src/counter.ts',
+} as const;
+
+type FixtureCommands = Record<'lint' | 'test' | 'build', string>;
+
+function writeFixtureFiles(canonicalPath: string, commands?: FixtureCommands): void {
   const packageJson = {
     name: 'gram-e2e-fixture',
     version: '0.0.0',
     private: true,
     type: 'module',
-    scripts: {
+    scripts: commands ?? {
       lint: 'tsc --noEmit',
       test: 'node --test test/*.test.js',
       build: 'tsc',
@@ -48,11 +52,7 @@ function writeFixtureFiles(canonicalPath: string): void {
     },
   };
 
-  writeFileSync(
-    join(canonicalPath, 'package.json'),
-    JSON.stringify(packageJson, null, 2) + '\n',
-    'utf8',
-  );
+  writeFileSync(join(canonicalPath, 'package.json'), JSON.stringify(packageJson, null, 2) + '\n', 'utf8');
   writeFileSync(
     join(canonicalPath, 'tsconfig.json'),
     JSON.stringify(
@@ -106,16 +106,10 @@ function writeFixtureFiles(canonicalPath: string): void {
   );
 }
 
-export function createTestRepository(): TestRepositoryFixture {
+export function createTestRepository(commands?: FixtureCommands): TestRepositoryFixture {
   const rootPath = mkdtempSync(join(tmpdir(), 'gram-e2e-repo-'));
   const remotePath = join(rootPath, 'remote.git');
-  const canonicalPath = join(
-    rootPath,
-    'workspace',
-    'github',
-    'acme',
-    'gram-e2e-fixture',
-  );
+  const canonicalPath = join(rootPath, 'workspace', 'github', 'acme', 'gram-e2e-fixture');
 
   try {
     mkdirSync(dirname(canonicalPath), { recursive: true });
@@ -131,7 +125,7 @@ export function createTestRepository(): TestRepositoryFixture {
 
     git(canonicalPath, ['config', 'user.name', 'Gram E2E']);
     git(canonicalPath, ['config', 'user.email', 'gram-e2e@example.test']);
-    writeFixtureFiles(canonicalPath);
+    writeFixtureFiles(canonicalPath, commands);
 
     git(canonicalPath, ['add', '.']);
     git(canonicalPath, ['commit', '-m', 'test: seed failing counter fixture'], true);

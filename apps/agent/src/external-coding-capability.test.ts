@@ -330,3 +330,15 @@ it('stops between writes when lease ownership is lost, preserving uncertain fail
     expect(f.steps.get(step.stepId)?.state).toBe('FAILED');
   } finally { expireAfterWrite.mockRestore(); f.capability.close(); await wait.catch(() => undefined); }
 });
+
+it('rejects a replaced database lease token before a fresh coding phase is exposed', async () => {
+  const f=setup();const analysis=await analyze(f);
+  f.options.ownsLease=(_taskId?:string,token?:string)=>token===undefined||token==='fixture-lease';
+  f.db.prepare('UPDATE repo_locks SET lease_token=? WHERE repo_id=159').run('replacement-lease');
+  expect(()=>{
+    const pending=f.capability.modify({task:f.resolved,workspace:f.workspace,analysis});
+    void pending.catch(()=>undefined);
+  }).toThrow(/lease/);
+  expect(f.capability.get(f.task.id)).toBeNull();
+  expect(readFileSync(join(f.workspace.linuxPath,'src/app.ts'),'utf8')).toBe('old');
+});
