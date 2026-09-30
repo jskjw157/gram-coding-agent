@@ -4,6 +4,7 @@ import { z } from 'zod';
 export const RepoSelectorInput = z
   .object({ selector: z.string().trim().min(1) })
   .strict();
+export const RepoResolveInput = RepoSelectorInput;
 export const RepoListInput = z.object({}).strict();
 
 export type RepoResolveInputValue = z.infer<typeof RepoSelectorInput>;
