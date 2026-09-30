@@ -176,7 +176,8 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
   let active: Custody | null = null;
   const records = new WeakMap<ManagedChild, Custody>();
   return Object.freeze({
-    async spawn(input, compatibility, core, nextGeneration, signal) {
+    async spawn(input: ServiceConfig, compatibility: TunnelCompatibility, core: CoreEvidence,
+      nextGeneration: string, signal: AbortSignal) {
       if (attempted || signal.aborted || !authority || !launch || !generation(nextGeneration)) startFailed();
       attempted = true;
       let custody: Custody | null = null;
@@ -216,7 +217,7 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
         return startFailed();
       }
     },
-    async stop(managed, deadlineMs, signal) {
+    async stop(managed: ManagedChild, deadlineMs: number, signal: AbortSignal) {
       const custody = records.get(managed);
       if (!custody || active !== custody || custody.managed !== managed || signal.aborted) stopUnknown();
       if (custody.stopping === null) custody.stopping = stopCustody(custody, deadlineMs, signal);
