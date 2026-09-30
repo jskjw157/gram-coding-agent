@@ -1,5 +1,7 @@
 export interface VerificationCompletionPort {
   assertPassed(taskId: string): void | Promise<void>;
+  /** Validate the newly created commit before any push side effect. */
+  assertCommitted?(taskId: string, sha: string): void | Promise<void>;
 }
 
 export interface PublishingCommitPort {
@@ -11,7 +13,7 @@ export interface PublishingCommitPort {
 }
 
 export interface PublishingRemotePort {
-  push(worktree: string, branch: string): Promise<void>;
+  push(worktree: string, branch: string, expectedSha: string): Promise<void>;
   confirmRemoteSha(
     remote: string,
     branch: string,
@@ -121,12 +123,14 @@ export class PublishingService {
       payload: { commitId, sha, branch: context.branch },
     });
 
+    await this.options.verification.assertCommitted?.(context.taskId, sha);
+
     this.options.audit.append({
       taskId: context.taskId,
       eventType: 'PUSH_STARTED',
       payload: { sha, branch: context.branch, remote: context.remote },
     });
-    await this.options.remote.push(context.worktree, context.branch);
+    await this.options.remote.push(context.worktree, context.branch, sha);
 
     const confirmed = await this.options.remote.confirmRemoteSha(
       context.remote,

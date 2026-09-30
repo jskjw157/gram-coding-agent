@@ -129,6 +129,27 @@ afterEach(() => {
 });
 
 describe('policy-gated git and worktree command adapters', () => {
+  it('reads the exact worktree HEAD through the policy gate with call-time task attribution', async () => {
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const { runner, seen, consume } = harness({ approve: false });
+    const adapter = new PolicyGitAdapter({ runner });
+    expect(await adapter.headSha(localBasePath, 'task-head-a')).toBe(git(['rev-parse', 'HEAD'], localBasePath));
+    expect(await adapter.headSha(localBasePath, 'task-head-b')).toBe(git(['rev-parse', 'HEAD'], localBasePath));
+    expect(seen.map(({ taskId }) => taskId)).toEqual(['task-head-a', 'task-head-b']);
+    expect(seen.map(({ args }) => args)).toEqual([['rev-parse', 'HEAD'], ['rev-parse', 'HEAD']]);
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it.each(['HEAD\n', 'a'.repeat(39), 'a'.repeat(40) + '\n' + 'b'.repeat(40)])(
+    'rejects a malformed HEAD response: %s', async (stdout) => {
+      const { runner } = harness({ approve: false, spawner: {
+        spawn: async () => ({ exitCode: 0, stdout, stderr: '' }),
+      } });
+      await expect(new PolicyGitAdapter({ runner }).headSha('/tmp/repo', 'task-head')).rejects.toThrow(/HEAD/);
+    },
+  );
+
   it('fetches and creates a worktree through CommandRunner with the owning task id', async () => {
     const taskId = '0191a2b3-c4d5-7000-8000-000000000006';
     const root = trackRoot();

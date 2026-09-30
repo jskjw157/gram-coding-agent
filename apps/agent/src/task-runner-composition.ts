@@ -102,7 +102,7 @@ export interface CompositionLocks {
 export interface CompositionGit {
   fetch(repoPath: string, taskId: TaskId): Promise<void>;
   status(worktree: string, taskId: TaskId): Promise<{ entries: readonly { path: string }[] }>;
-  headSha?(worktree: string): Promise<string>;
+  headSha?(worktree: string, taskId: TaskId): Promise<string>;
 }
 
 /** Structural subset of WorktreeService.create. */
@@ -116,7 +116,15 @@ export interface CompositionWorktrees {
 }
 
 /** Structural subset of CompletionEvaluator bound to a worktree HEAD. */
+export interface CompositionVerifiedPlan {
+  readonly id: number;
+  readonly taskId: TaskId;
+  readonly headSha: string;
+  readonly approvedPaths: readonly string[];
+}
+
 export interface CompositionVerification {
+  getVerifiedPlan?(taskId: TaskId, headSha: string): CompositionVerifiedPlan | undefined | Promise<CompositionVerifiedPlan | undefined>;
   requiredChecksPassed(taskId: TaskId, headSha?: string): boolean | Promise<boolean>;
   /** Diff-review-approved paths for the bound HEAD. Absent providers approve nothing. */
   listApprovedPaths?(taskId: TaskId, headSha?: string): readonly string[] | Promise<readonly string[]>;
@@ -130,6 +138,7 @@ export interface CompositionPublishing {
     worktree: string;
     branch: string;
     paths: readonly string[];
+    verification?: { planId: number; headSha: string };
     commitMessage: string;
     remote: string;
     lock: { release(): Promise<void> };
@@ -236,7 +245,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
     return value.length === 40 && FULL_SHA_RE.test(value);
   };
 
-  const resolveHeadSha = async (worktree: string, adapter: string): Promise<string> => {
+  const resolveHeadSha = async (worktree: string, adapter: string, taskId: TaskId): Promise<string> => {
     const gitPort = options.git;
     const headFn = gitPort === undefined ? undefined : gitPort.headSha;
     if (headFn === undefined) {
@@ -245,7 +254,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
         'git HEAD resolution (GitService rev-parse) is not wired in the agent composition root',
       );
     }
-    const sha = await headFn.call(gitPort, worktree);
+    const sha = await headFn.call(gitPort, worktree, taskId);
     if (isFullSha(sha) === false) {
       throw new Error(adapter + ' resolved an invalid HEAD SHA for ' + worktree + ': ' + sha);
     }
@@ -416,7 +425,17 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       // collect evidence for it. The returned headSha lets publish require
       // equality immediately before any side effect.
       const worktreePath = await resolveWorkspacePath(taskId, 'Verify');
-      const headSha = await resolveHeadSha(worktreePath, 'Verify');
+      const headSha = await resolveHeadSha(worktreePath, 'Verify', taskId);
+      if (options.verification.getVerifiedPlan !== undefined) {
+        const plan = await options.verification.getVerifiedPlan(taskId, headSha);
+        if (plan === undefined || plan.taskId !== taskId || plan.headSha !== headSha) {
+          return { passed: false, output: 'No matching sealed verification plan', headSha, approvedPaths: [] };
+        }
+        return {
+          passed: true, output: `verified plan ${plan.id}`, headSha,
+          planId: plan.id, approvedPaths: [...plan.approvedPaths],
+        };
+      }
       const passed = await options.verification.requiredChecksPassed(taskId, headSha);
       // Diff-review-approved paths are the sole publish input downstream.
       // Providers that expose no approved-path listing approve nothing.
@@ -448,7 +467,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
       if (typeof verification.headSha !== 'string' || isFullSha(verification.headSha) === false) {
         throw new Error('verification has no bound HEAD for task ' + task.taskId);
       }
-      const currentHeadSha = await resolveHeadSha(workspace.linuxPath, 'Publish');
+      const currentHeadSha = await resolveHeadSha(workspace.linuxPath, 'Publish', task.taskId);
       if ((currentHeadSha === verification.headSha) === false) {
         throw new Error(
           'verification HEAD ' + verification.headSha + ' does not match current HEAD ' + currentHeadSha + ' for task ' + task.taskId,
@@ -476,6 +495,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
         worktree: workspace.linuxPath,
         branch: task.branch,
         paths: [...approvedPaths],
+        ...(verification.planId === undefined ? {} : { verification: { planId: verification.planId, headSha: verification.headSha } }),
         commitMessage: `task ${task.taskId}: ${stored.goal}`,
         remote: task.remote,
         // Sole lock-release owner: the lease passes straight through to

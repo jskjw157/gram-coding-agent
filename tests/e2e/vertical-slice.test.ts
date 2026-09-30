@@ -31,7 +31,7 @@ import { RepoLockService } from '@gram/repo-lock';
 import { SecretRedactor, type SecretProvider } from '@gram/secrets';
 import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
-import { CompletionEvaluator } from '@gram/verification';
+import { CompletionEvaluator, EvidenceCollector, VerificationRunner } from '@gram/verification';
 import { WorktreeService } from '@gram/workspace';
 import {
   PolicyGitAdapter,
@@ -39,10 +39,13 @@ import {
 } from '../../apps/agent/src/command-adapters.js';
 import {
   PersistentCiContextResolver,
+  PersistentVerificationCompletion,
   RegisteredRepositoryProfiles,
 } from '../../apps/agent/src/persistence-adapters.js';
 import { createTaskRunner } from '../../apps/agent/src/task-runner-composition.js';
 import { TaskScheduler } from '../../apps/agent/src/task-scheduler.js';
+import { TaskVerificationSnapshots } from '../../apps/agent/src/verification-snapshot.js';
+import { BoundPublishingVerification } from '../../apps/agent/src/verified-publishing.js';
 import {
   createFakeGitHubServer,
   type FakeGitHubServer,
@@ -215,78 +218,31 @@ describe('M2 deterministic vertical slice', () => {
         },
       });
 
-      const gitPort = {
-        fetch: (repoPath: string, taskId: string) =>
-          policyGit.fetch(repoPath, taskId),
-        status: (worktree: string, taskId: string) =>
-          policyGit.status(worktree, taskId),
-        headSha: async (worktree: string) => {
-          const result = await commandRunner.run({
-            taskId: created.id,
-            cwd: worktree,
-            category: 'GIT',
-            executable: 'git',
-            args: ['rev-parse', 'HEAD'],
-          });
-          if (result.exitCode !== 0) {
-            throw new Error('git rev-parse HEAD failed in E2E head binding');
-          }
-          return result.stdout.trim();
-        },
-      };
-
+      const gitPort = policyGit;
+      const snapshots = new TaskVerificationSnapshots({ runner: commandRunner, workspaces });
       const evaluator = new CompletionEvaluator(verificationRepository);
-      const verifiedTasks = new Set<string>();
-      const verification = {
-        requiredChecksPassed: async (taskId: string, headSha?: string) => {
-          if (!verifiedTasks.has(taskId)) {
-            expect(locks.get(REPO_ID)?.ownerTaskId).toBe(taskId);
-            const workspace = workspaces.getByTaskId(taskId);
-            if (workspace === undefined) throw new Error('missing E2E workspace');
-            if (headSha === undefined) throw new Error('verification must be HEAD-bound');
-
-            execFileSync('node', ['--test', 'test/counter.test.js'], {
-              cwd: workspace.linuxPath,
-              encoding: 'utf8',
-              stdio: 'pipe',
-            });
-
-            const planId = verificationRepository.createPlan({
-              taskId,
-              headSha,
-              changeClass: 'BACKEND',
-              risk: 'LOW',
-              plan: {
-                required: ['target-test', 'diff-review'],
-                approvedPaths: ['src/counter.ts'],
-              },
-            });
-            const testCheck = verificationRepository.createCheck({
-              planId,
-              taskId,
-              name: 'target-test',
-              required: true,
-            });
-            verificationRepository.finishCheck(testCheck, {
-              status: 'PASS',
-              evidenceRef: 'e2e:node-test:counter',
-            });
-            const diffCheck = verificationRepository.createCheck({
-              planId,
-              taskId,
-              name: 'diff-review',
-              required: true,
-            });
-            verificationRepository.finishCheck(diffCheck, {
-              status: 'PASS',
-              evidenceRef: 'diff-review:src/counter.ts',
-            });
-            verifiedTasks.add(taskId);
-          }
-          return evaluator.requiredChecksPassed(taskId);
-        },
-        listApprovedPaths: async () => ['src/counter.ts'],
-      };
+      const verification = new PersistentVerificationCompletion(evaluator, verificationRepository);
+      const evidence = new EvidenceCollector(verificationRepository);
+      // Deterministic fixture non-command verifiers; production persistence,
+      // command execution, snapshot capture and publication guards are real.
+      const verificationRunner = new VerificationRunner({
+        commands: commandRunner,
+        evidence,
+        snapshots,
+        secretScan: { scan: async ({ cwd }) => ({
+          passed: !readFileSync(join(cwd, 'src/counter.ts'), 'utf8').includes('e2e-github-token'),
+          evidenceRef: 'e2e:fixture-token-scan',
+        }) },
+        diffReview: { review: async ({ taskId, cwd }) => {
+          const changes = await policyGit.status(cwd, taskId);
+          const changedPaths = changes.entries.map((entry) => entry.path);
+          return {
+            passed: changedPaths.length === 1 && changedPaths[0] === 'src/counter.ts',
+            changedPaths,
+            evidenceRef: 'e2e:reviewed-counter-only',
+          };
+        } },
+      });
 
       const publishing = {
         publish: async (context: {
@@ -295,26 +251,29 @@ describe('M2 deterministic vertical slice', () => {
           worktree: string;
           branch: string;
           paths: readonly string[];
+          verification?: {planId: number; headSha: string};
           commitMessage: string;
           remote: string;
           lock: { release(): Promise<void> };
         }) => {
+          if (context.verification === undefined) throw new Error("missing bound evidence");
           const remote = new RemoteService(
             commandRunner,
             { taskId: context.taskId },
             context.worktree,
           );
           const service = new PublishingService({
-            verification: {
-              assertPassed: (taskId) => {
-                if (!evaluator.requiredChecksPassed(taskId)) {
-                  throw new Error('E2E verification is not complete');
-                }
-              },
-            },
+            verification: new BoundPublishingVerification({
+              taskId: context.taskId,
+              planId: context.verification.planId,
+              headSha: context.verification.headSha,
+              paths: context.paths,
+              repository: verificationRepository,
+              snapshots,
+            }),
             commits: new CommitService(commandRunner, { taskId: context.taskId }),
             remote: {
-              push: (worktree, branch) => remote.push(worktree, branch),
+              push: (worktree, branch, expectedSha) => remote.push(worktree, branch, expectedSha),
               confirmRemoteSha: async (remoteName, branch, expectedSha) => {
                 expect(locks.get(REPO_ID)?.ownerTaskId).toBe(context.taskId);
                 const confirmed = await remote.confirmRemoteSha(
@@ -416,7 +375,18 @@ describe('M2 deterministic vertical slice', () => {
                 ].join('\n'),
                 'utf8',
               );
-              return { sha: git(workspace.linuxPath, ['rev-parse', 'HEAD']) };
+              const headSha = await policyGit.headSha(workspace.linuxPath, task.taskId);
+              const plan = evidence.persistPlan({
+                taskId: task.taskId, headSha, risk: 'LOW',
+                plan: { changeClass: 'BACKEND', checks: [
+                  { name: 'target-test', kind: 'COMMAND', required: true, status: 'PENDING', command: 'node --test test/counter.test.js' },
+                  { name: 'secret-scan', kind: 'NON_COMMAND', required: true, status: 'PENDING' },
+                  { name: 'diff-review', kind: 'NON_COMMAND', required: true, status: 'PENDING' },
+                ] },
+              });
+              const checked = await verificationRunner.run(plan, { taskId: task.taskId, cwd: workspace.linuxPath });
+              expect(checked.passed).toBe(true);
+              return { sha: headSha };
             },
           },
         },
@@ -461,7 +431,7 @@ describe('M2 deterministic vertical slice', () => {
       );
 
       const checks = verificationRepository.listForTask(created.id);
-      expect(checks).toHaveLength(2);
+      expect(checks).toHaveLength(3);
       expect(
         checks.every(
           (check) =>
@@ -470,6 +440,10 @@ describe('M2 deterministic vertical slice', () => {
             check.hasEvidence,
         ),
       ).toBe(true);
+
+      const sealedPlan = verificationRepository.getBoundPlan(created.id, fixture.initialSha);
+      expect(sealedPlan?.approvedPaths).toEqual(['src/counter.ts']);
+      expect(sealedPlan?.snapshot.entries.map((entry) => entry.path)).toEqual(['src/counter.ts']);
 
       const published = commits.getLatestForTask(created.id);
       expect(published?.remoteConfirmed).toBe(true);
@@ -552,7 +526,7 @@ describe('M2 deterministic vertical slice', () => {
         .filter((run) => run.executable === 'git' && run.argsJson !== null)
         .map((run) => JSON.parse(run.argsJson!) as string[]);
       expect(gitArgs.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(true);
-      expect(gitArgs.some((args) => args[0] === 'push')).toBe(true);
+      expect(gitArgs.some((args) => args[0] === 'push' && args[2] === `${published?.sha}:refs/heads/${published?.branch}`)).toBe(true);
       expect(gitArgs.some((args) => args[0] === 'ls-remote')).toBe(true);
     } finally {
       if (scheduler !== undefined) await scheduler.stop();

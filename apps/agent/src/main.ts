@@ -35,6 +35,8 @@ import {
 } from './persistence-adapters.js';
 import { createTaskRunner, type CompositionLocks } from './task-runner-composition.js';
 import { TaskScheduler } from './task-scheduler.js';
+import { TaskVerificationSnapshots } from './verification-snapshot.js';
+import { BoundPublishingVerification } from './verified-publishing.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -115,7 +117,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
     heldLeases.clear();
   };
   const completionEvaluator = new CompletionEvaluator(verificationRepository);
-  const verification = new PersistentVerificationCompletion(completionEvaluator);
+  const verification = new PersistentVerificationCompletion(completionEvaluator, verificationRepository);
   const ciContext = new PersistentCiContextResolver({
     tasks: taskRepository,
     repositories: repositoryRepository,
@@ -147,6 +149,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         workspaces: workspaceRepository,
         pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: commandRunner })),
       });
+      const snapshots = new TaskVerificationSnapshots({ runner: commandRunner, workspaces: workspaceRepository });
       const taskRunner = createTaskRunner({
         audit: auditRepository,
         tasks: taskRepository,
@@ -157,17 +160,19 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         verification,
         publishing: {
           publish: async (context) => {
+            if (context.verification === undefined) throw new Error("Publication requires sealed verification evidence");
             // Per-call task attribution: CommitService and RemoteService
             // bind one task at construction, and the publish context carries
             // the running task id, so fresh instances are built per call.
             const publishing = new PublishingService({
-              verification: {
-                assertPassed: (taskId) => {
-                  if (completionEvaluator.requiredChecksPassed(taskId) === false) {
-                    throw new Error(`verification has not passed for task ${taskId}`);
-                  }
-                },
-              },
+              verification: new BoundPublishingVerification({
+                taskId: context.taskId,
+                planId: context.verification.planId,
+                headSha: context.verification.headSha,
+                paths: context.paths,
+                repository: verificationRepository,
+                snapshots,
+              }),
               commits: new CommitService(commandRunner, { taskId: context.taskId }),
               remote: new RemoteService(
                 commandRunner,

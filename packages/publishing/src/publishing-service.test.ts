@@ -266,3 +266,38 @@ describe('PublishingService critical lock boundary', () => {
     ]);
   });
 });
+
+describe('PublishingService immutable content boundary', () => {
+  it('does not push or release when committed content fails verification', async () => {
+    const events: string[] = [];
+    const service = new PublishingService({
+      verification: {
+        assertPassed: async () => { events.push('verified'); },
+        assertCommitted: async () => { events.push('commit.checked'); throw new Error('snapshot mismatch'); },
+      },
+      commits: { commitExplicit: async () => { events.push('commit'); return sha; } },
+      remote: {
+        push: async () => { events.push('push'); },
+        confirmRemoteSha: async () => true,
+      },
+      persistence: { recordCommit: () => { events.push("persist.unconfirmed"); return 1; }, markRemoteConfirmed: () => undefined },
+      audit: { append: () => undefined },
+    });
+    await expect(service.publish(context({ lock: { release: async () => { events.push('release'); } } })))
+      .rejects.toThrow('snapshot mismatch');
+    expect(events).toEqual(['verified', 'commit', 'persist.unconfirmed', 'commit.checked']);
+  });
+});
+
+it('hands the verified commit SHA to the push port', async () => {
+  let pushed: string | undefined;
+  const service = new PublishingService({
+    verification: { assertPassed: () => undefined, assertCommitted: () => undefined },
+    commits: { commitExplicit: async () => sha },
+    remote: { push: async (_worktree, _branch, exactSha) => { pushed = exactSha; }, confirmRemoteSha: async () => true },
+    persistence: { recordCommit: () => 1, markRemoteConfirmed: () => undefined },
+    audit: { append: () => undefined },
+  });
+  await service.publish(context());
+  expect(pushed).toBe(sha);
+});

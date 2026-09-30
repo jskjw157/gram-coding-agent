@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  VerificationRunner,
-  type PersistedVerificationPlan,
-} from './verification-runner.js';
+import { VerificationRunner, type PersistedVerificationPlan } from './verification-runner.js';
 
 describe('VerificationRunner', () => {
   it('runs command checks and required publish gates with persisted evidence', async () => {
@@ -88,13 +85,10 @@ describe('VerificationRunner', () => {
       checkId: 13,
       status: 'PASS',
       evidenceRef: 'diff-review:src/app.ts',
+      approvedPaths: ['src/app.ts'],
     });
     expect(result.passed).toBe(true);
-    expect(result.checks.map((check) => check.status)).toEqual([
-      'PASS',
-      'PASS',
-      'PASS',
-    ]);
+    expect(result.checks.map((check) => check.status)).toEqual(['PASS', 'PASS', 'PASS']);
   });
 
   it('fails verification when a required command exits non-zero', async () => {

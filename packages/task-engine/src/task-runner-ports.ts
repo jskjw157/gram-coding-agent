@@ -34,6 +34,7 @@ export interface ModificationResult {
 }
 
 export interface VerificationResult {
+  readonly planId?: number;
   readonly passed: boolean;
   readonly output: string;
   readonly headSha?: string;

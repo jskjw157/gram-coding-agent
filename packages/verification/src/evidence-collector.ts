@@ -2,20 +2,18 @@ import type { TaskId } from '@gram/domain';
 import {
   VerificationRepository,
   type StoredVerificationCheckStatus,
+  type VerificationSnapshot,
 } from '@gram/persistence';
-import type {
-  PlannedVerificationCheck,
-  VerificationPlan,
-} from './verification-planner.js';
+import type { PlannedVerificationCheck, VerificationPlan } from './verification-planner.js';
 
 export interface PersistedVerificationCheck extends PlannedVerificationCheck {
   id: number;
 }
 
-export interface PersistedVerificationPlan
-  extends Omit<VerificationPlan, 'checks'> {
+export interface PersistedVerificationPlan extends Omit<VerificationPlan, 'checks'> {
   id: number;
   taskId: TaskId;
+  headSha?: string | null;
   checks: PersistedVerificationCheck[];
 }
 
@@ -53,9 +51,14 @@ export class EvidenceCollector {
     return {
       id: planId,
       taskId: input.taskId,
+      headSha: input.headSha ?? null,
       changeClass: input.plan.changeClass,
       checks,
     };
+  }
+
+  sealSnapshot(planId: number, snapshot: VerificationSnapshot): void {
+    this.repository.sealSnapshot(planId, snapshot);
   }
 
   recordCommandResult(input: {
@@ -73,16 +76,15 @@ export class EvidenceCollector {
 
   recordNonCommandResult(input: {
     checkId: number;
-    status: Extract<
-      StoredVerificationCheckStatus,
-      'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED'
-    >;
+    status: Extract<StoredVerificationCheckStatus, 'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED'>;
     evidenceRef?: string;
+    approvedPaths?: readonly string[];
     reason?: string;
   }): void {
     this.repository.finishCheck(input.checkId, {
       status: input.status,
       ...(input.evidenceRef === undefined ? {} : { evidenceRef: input.evidenceRef }),
+      ...(input.approvedPaths === undefined ? {} : { approvedPaths: input.approvedPaths }),
       ...(input.reason === undefined ? {} : { reason: input.reason }),
     });
   }

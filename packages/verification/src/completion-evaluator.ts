@@ -1,9 +1,4 @@
-export type CompletionCheckStatus =
-  | 'PENDING'
-  | 'PASS'
-  | 'FAIL'
-  | 'SKIPPED'
-  | 'NOT_REQUIRED';
+export type CompletionCheckStatus = 'PENDING' | 'PASS' | 'FAIL' | 'SKIPPED' | 'NOT_REQUIRED';
 
 export interface VerificationCheckSnapshot {
   required: boolean;
@@ -12,14 +7,14 @@ export interface VerificationCheckSnapshot {
 }
 
 export interface VerificationCheckReadPort {
-  listForTask(taskId: string): readonly VerificationCheckSnapshot[];
+  listForTask(taskId: string, headSha?: string): readonly VerificationCheckSnapshot[];
 }
 
 export class CompletionEvaluator {
   constructor(private readonly checks: VerificationCheckReadPort) {}
 
-  requiredChecksPassed(taskId: string): boolean {
-    const checks = this.checks.listForTask(taskId);
+  requiredChecksPassed(taskId: string, headSha?: string): boolean {
+    const checks = this.checks.listForTask(taskId, headSha);
     if (checks.length === 0) {
       return false;
     }

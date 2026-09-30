@@ -49,6 +49,7 @@ const EXPECTED_HAPPY_ORDER: RunEvent[] = [
 ];
 
 interface Controls {
+  boundPlan?: "valid" | "missing";
   verifyError?: Error;
   publishError?: Error;
   confirmResult?: boolean;
@@ -186,7 +187,8 @@ function createHarness(controls: Controls = {}) {
       return { entries: controls.statusEntries ?? [{ path: 'src/app.ts' }] };
     },
   };
-  const headSha = async (worktree: string) => {
+  const headSha = async (worktree: string, taskId?: TaskId) => {
+    if (controls.boundPlan !== undefined) expect(taskId).toBe(TASK_ID);
     expect(worktree).toBe('/wt/mamf-web');
     if (controls.headShaSequence !== undefined && controls.headShaSequence.length > 0) {
       const sha =
@@ -244,8 +246,15 @@ function createHarness(controls: Controls = {}) {
   }
 
   const verification = {
+    ...(controls.boundPlan === undefined ? {} : {
+      getVerifiedPlan: async (taskId: TaskId, headSha: string) => {
+        expect(taskId).toBe(TASK_ID); expect(headSha).toBe(SHA); events.push("verify");
+        return controls.boundPlan === "missing" ? undefined : { id: 17, taskId, headSha, approvedPaths: ["src/reviewed.ts"] };
+      },
+    }),
     requiredChecksPassed: (taskId: TaskId, headSha?: string) => {
       expect(taskId).toBe(TASK_ID);
+      if (controls.boundPlan !== undefined) throw new Error('must not split bound evidence reads');
       events.push('verify');
       if (controls.verifyError !== undefined) throw controls.verifyError;
       // F2C HEAD binding: stale unbound reads pass (pre-fix behavior), but
@@ -276,7 +285,9 @@ function createHarness(controls: Controls = {}) {
       remote: string;
       paths: readonly string[];
       lock: { release(): Promise<void> };
+      verification?: { planId: number; headSha: string };
     }) => {
+      if (controls.boundPlan === "valid") expect(context.verification).toEqual({planId:17,headSha:SHA});
       publishCalls.push(context.taskId);
       publishedPaths.push([...context.paths]);
       events.push('commit');
@@ -1130,5 +1141,19 @@ describe('task-runner composition', () => {
     expect(headHarness.events).not.toContain('commit');
     expect(headHarness.events).not.toContain('pr.ensure');
     expect(headHarness.events).not.toContain('complete');
+  });
+});
+
+
+describe('coherent bound verification composition', () => {
+  it('publishes one bound plan identity without independent legacy reads', async () => {
+    const { runner, publishedPaths } = createHarness({ boundPlan: 'valid' });
+    await runner.run(TASK_ID);
+    expect(publishedPaths).toEqual([['src/reviewed.ts']]);
+  });
+  it('fails closed when a bound provider has no matching sealed plan', async () => {
+    const { runner, publishCalls } = createHarness({ boundPlan: 'missing' });
+    await expect(runner.run(TASK_ID)).rejects.toThrow();
+    expect(publishCalls).toEqual([]);
   });
 });
