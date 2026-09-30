@@ -36,7 +36,7 @@ describe('role-aware native process seal', () => {
 
   it('fails closed for an invalid role supplied through an untyped boundary', async () => {
     const module = await import('./adapters/owned-process.js') as unknown as {
-      sealMacOwnedProcess?: (...args: any[]) => Promise<MacProcessSeal | null>;
+      sealMacOwnedProcess?: (...args: unknown[]) => Promise<MacProcessSeal | null>;
     };
     expect(module.sealMacOwnedProcess).toBeTypeOf('function');
     if (!module.sealMacOwnedProcess) return;
