@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PolicyEngine } from '@gram/policy';
+import { normalizeExecutableCommand, PolicyEngine } from '@gram/policy';
 import {
   ApprovalRequiredError,
   CommandRunner,
@@ -134,13 +134,21 @@ describe('policy-gated git and worktree command adapters', () => {
     const { localBasePath } = createCanonicalRepository(root);
 
     const denying = harness({ approve: false });
-    const denyingGit = new PolicyGitAdapter({ runner: denying.runner, taskId });
-    await expect(denyingGit.fetch(localBasePath)).rejects.toThrow(ApprovalRequiredError);
+    const denyingWorktrees = new PolicyWorktreeAdapter({ runner: denying.runner });
+    await expect(
+      denyingWorktrees.createWorktree({
+        repoPath: localBasePath,
+        worktreePath: join(root, 'wt-denied'),
+        baseRef: 'origin/main',
+        branch: 'feat/task-000006-denied',
+        taskId: taskId,
+      }),
+    ).rejects.toThrow(ApprovalRequiredError);
     expect(denying.seen).toHaveLength(0);
 
     const { runner, seen } = harness({ approve: true });
-    const gitAdapter = new PolicyGitAdapter({ runner, taskId });
-    await gitAdapter.fetch(localBasePath);
+    const gitAdapter = new PolicyGitAdapter({ runner });
+    await gitAdapter.fetch(localBasePath, taskId);
 
     const store = recordStore();
     const worktreesAdapter = new PolicyWorktreeAdapter({ runner, records: store });
@@ -158,7 +166,7 @@ describe('policy-gated git and worktree command adapters', () => {
     expect(created.headSha).toBe(git(['-C', worktreePath, 'rev-parse', 'HEAD']));
     expect(git(['-C', localBasePath, 'worktree', 'list', '--porcelain'])).toContain(worktreePath);
 
-    const status = await gitAdapter.status(worktreePath);
+    const status = await gitAdapter.status(worktreePath, taskId);
     expect(status.entries).toEqual([]);
 
     expect(seen.length).toBeGreaterThan(0);
@@ -198,6 +206,88 @@ describe('policy-gated git and worktree command adapters', () => {
     ).rejects.toThrow();
     expect(store.records).toHaveLength(1);
     expect(git(['-C', localBasePath, 'worktree', 'list', '--porcelain'])).not.toContain(failingPath);
+  });
+
+  it('issues git fetch with the subcommand in args[0] and the repo path in cwd', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000011';
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const seen: SpawnRequest[] = [];
+    const stub: ProcessSpawner = {
+      spawn: async (request: SpawnRequest): Promise<SpawnResult> => {
+        seen.push(request);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const { runner } = harness({ approve: true, spawner: stub });
+    const gitAdapter = new PolicyGitAdapter({ runner });
+    await gitAdapter.fetch(localBasePath, taskId);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.executable).toBe('git');
+    expect(seen[0] === undefined ? undefined : [...(seen[0].args ?? [])][0]).toBe('fetch');
+    expect(seen[0] === undefined ? [] : [...(seen[0].args ?? [])]).toEqual(['fetch', 'origin']);
+    expect(seen[0] === undefined ? [] : [...(seen[0].args ?? [])]).not.toContain('-C');
+    expect(seen[0]?.cwd).toBe(localBasePath);
+  });
+
+  it('attributes commands to the task id supplied at call time on one shared adapter', async () => {
+    const taskA = '0191a2b3-c4d5-7000-8000-000000000012';
+    const taskB = '0191a2b3-c4d5-7000-8000-000000000013';
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const seen: SpawnRequest[] = [];
+    const stub: ProcessSpawner = {
+      spawn: async (request: SpawnRequest): Promise<SpawnResult> => {
+        seen.push(request);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const { runner } = harness({ approve: true, spawner: stub });
+    const gitAdapter = new PolicyGitAdapter({ runner });
+    await gitAdapter.fetch(localBasePath, taskA);
+    await gitAdapter.fetch(localBasePath, taskB);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]?.taskId).toBe(taskA);
+    expect(seen[1]?.taskId).toBe(taskB);
+  });
+
+  it('classifies the issued fetch command as not-approval-required by the real PolicyEngine', async () => {
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000014';
+    const root = trackRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const seen: SpawnRequest[] = [];
+    const stub: ProcessSpawner = {
+      spawn: async (request: SpawnRequest): Promise<SpawnResult> => {
+        seen.push(request);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const { runner } = harness({ approve: true, spawner: stub });
+    const gitAdapter = new PolicyGitAdapter({ runner });
+    await gitAdapter.fetch(localBasePath, taskId);
+    const request = seen[0];
+    expect(request).toBeDefined();
+    if (request === undefined) throw new Error('expected one fetch command');
+    if (!('executable' in request) || request.executable !== 'git') {
+      throw new Error('expected a git executable command');
+    }
+    const policy = new PolicyEngine();
+    const operation = normalizeExecutableCommand('git', [...request.args], request.cwd);
+    const decision = policy.evaluate(operation, { taskId });
+    expect(decision.kind).toBe('ALLOW');
+
+    const denyingSeen: SpawnRequest[] = [];
+    const denyingStub: ProcessSpawner = {
+      spawn: async (deniedRequest: SpawnRequest): Promise<SpawnResult> => {
+        denyingSeen.push(deniedRequest);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    const denying = harness({ approve: false, spawner: denyingStub });
+    const denyingGit = new PolicyGitAdapter({ runner: denying.runner });
+    await denyingGit.fetch(localBasePath, taskId);
+    expect(denyingSeen).toHaveLength(1);
+    expect(denying.consume).not.toHaveBeenCalled();
   });
 
   it('routes wslpath conversion through the policy-gated command runner', async () => {

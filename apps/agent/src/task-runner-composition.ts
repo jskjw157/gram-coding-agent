@@ -100,8 +100,8 @@ export interface CompositionLocks {
 
 /** Structural subset of GitService (fetch + status + HEAD resolution). */
 export interface CompositionGit {
-  fetch(repoPath: string): Promise<void>;
-  status(worktree: string): Promise<{ entries: readonly { path: string }[] }>;
+  fetch(repoPath: string, taskId: TaskId): Promise<void>;
+  status(worktree: string, taskId: TaskId): Promise<{ entries: readonly { path: string }[] }>;
   headSha?(worktree: string): Promise<string>;
 }
 
@@ -346,7 +346,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
           `resolved task ${task.taskId} has no local base path`,
         );
       }
-      await options.git.fetch(task.localBasePath);
+      await options.git.fetch(task.localBasePath, task.taskId);
     },
   };
 

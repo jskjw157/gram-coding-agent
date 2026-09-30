@@ -943,6 +943,136 @@ describe('task-runner composition', () => {
     expect(tasks.get(TASK_ID)?.status).toBe('COMPLETED');
   });
 
+  it('threads the resolved task id into git.fetch at call time', async () => {
+    const fetchCalls: Array<{ repoPath: string; taskId: TaskId }> = [];
+    let status: TaskStatus = 'QUEUED';
+    const tasks = {
+      get: (id: TaskId) =>
+        id === TASK_ID
+          ? {
+              id: TASK_ID,
+              seq: 201,
+              goal: 'Fix Excel download URL',
+              repoSelector: 'mamf-web',
+              status,
+              taskType: 'CODING',
+            }
+          : null,
+      transition: (id: TaskId, from: TaskStatus, to: TaskStatus) => {
+        if (id !== TASK_ID) throw new Error(`unknown task: ${id}`);
+        if (status !== from) {
+          throw new Error(`unexpected transition ${status} -> ${to}`);
+        }
+        status = to;
+      },
+    };
+    const audit = { append: () => undefined };
+    const profile = {
+      githubRepositoryId: REPO_ID,
+      owner: 'acme',
+      name: 'mamf-web',
+      defaultBranch: 'main',
+      localBasePath: '/base/mamf-web',
+    };
+    const repos = {
+      resolve: async () => profile,
+    };
+    const locks = {
+      acquire: async () => ({ release: async () => undefined }),
+    };
+    const git = {
+      fetch: async (repoPath: string, taskId: TaskId) => {
+        fetchCalls.push({ repoPath, taskId });
+      },
+      status: async () => ({ entries: [{ path: 'src/app.ts' }] }),
+      headSha: async () => SHA,
+    };
+    const worktrees = {
+      create: async (input: { taskId: TaskId; branch: string }) => ({
+        linuxPath: '/wt/mamf-web',
+        branch: input.branch,
+      }),
+    };
+    const capabilities = {
+      instructions: { load: async () => ({ content: '# instructions', source: 'AGENTS.md' }) },
+      analyze: { analyze: async () => ({ summary: 'fix excel url', files: ['src/app.ts'] }) },
+      modify: { modify: async () => ({ sha: SHA }) },
+      repairMutations: { repair: async () => undefined },
+    };
+    const verification = {
+      requiredChecksPassed: async () => true,
+      listApprovedPaths: async () => ['src/app.ts'],
+    };
+    const publishing = {
+      publish: async (context: {
+        taskId: TaskId;
+        branch: string;
+        remote: string;
+        lock: { release(): Promise<void> };
+      }) => {
+        await context.lock.release();
+        return { sha: SHA, branch: context.branch, remote: context.remote };
+      },
+    };
+    const pullRequests = {
+      ensureForTask: async () => ({ number: 7, url: 'https://example.com/pr/7' }),
+    };
+    const checks = {
+      client: { listRequiredChecks: async () => successSnapshots() },
+      persistence: { upsertCheck: () => undefined },
+      delay: { wait: async () => undefined },
+    };
+    const ciContext = {
+      resolve: async (taskId: TaskId) => ({
+        taskId,
+        pullRequestId: 1,
+        owner: 'acme',
+        name: 'mamf-web',
+        number: 7,
+        headSha: SHA,
+        baseBranch: 'main',
+      }),
+    };
+    const workspaces = {
+      getByTaskId: (taskId: TaskId) => {
+        if (taskId !== TASK_ID) return undefined;
+        return { linuxPath: '/wt/mamf-web', branch: 'fix/task-000201-fix-excel-download-url' };
+      },
+    };
+    const remote = { push: async () => SHA, confirmRemoteSha: async () => true };
+    const complete = {
+      complete: async (taskId: TaskId) => {
+        const current = tasks.get(taskId);
+        if (current === null) throw new Error(`unknown task: ${taskId}`);
+        if (current.status === 'COMPLETED') return;
+        tasks.transition(taskId, current.status, 'COMPLETED');
+      },
+    };
+    const runner = createTaskRunner({
+      audit,
+      tasks,
+      repos,
+      locks,
+      git,
+      worktrees,
+      verification,
+      publishing,
+      pullRequests,
+      checks,
+      ciContext,
+      capabilities,
+      workspaces,
+      remote,
+      complete,
+    } as never);
+
+    await runner.run(TASK_ID);
+
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]?.repoPath).toBe('/base/mamf-web');
+    expect(fetchCalls[0]?.taskId).toBe(TASK_ID);
+  });
+
   it('keeps every deferred capability typed and fail closed without claiming downstream success', async () => {
     const instructionsHarness = createHarness({ omitInstructions: true });
     const instructionsError = await instructionsHarness.runner

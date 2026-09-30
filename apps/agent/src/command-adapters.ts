@@ -25,7 +25,6 @@ function requireNonEmpty(name: string, value: string): void {
 
 export interface PolicyGitAdapterOptions {
   runner: CommandRunner;
-  taskId: TaskId;
 }
 
 export interface PolicyWorktreeAdapterOptions {
@@ -61,15 +60,15 @@ export interface WorktreeRecordStore {
 export class PolicyGitAdapter implements Omit<CompositionGit, 'headSha'> {
   constructor(private readonly options: PolicyGitAdapterOptions) {}
 
-  /** Runs `git -C <repoPath> fetch origin` through the policy gate. */
-  async fetch(repoPath: string): Promise<void> {
+  /** Runs `git fetch origin` (in `repoPath`) through the policy gate. */
+  async fetch(repoPath: string, taskId: TaskId): Promise<void> {
     requireNonEmpty('repoPath', repoPath);
     const result = await this.options.runner.run({
-      taskId: this.options.taskId,
+      taskId,
       cwd: repoPath,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', repoPath, 'fetch', 'origin'],
+      args: ['fetch', 'origin'],
     });
     if (result.exitCode !== 0) {
       throw new Error(`git fetch failed for ${repoPath} (exit ${result.exitCode}): ${result.stderr}`);
@@ -77,17 +76,17 @@ export class PolicyGitAdapter implements Omit<CompositionGit, 'headSha'> {
   }
 
   /**
-   * Runs `git -C <worktree> status --porcelain=v1 -z` through the policy
+   * Runs `git status --porcelain=v1 -z` (in `worktree`) through the policy
    * gate and returns one entry per reported path.
    */
-  async status(worktree: string): Promise<{ entries: readonly { path: string }[] }> {
+  async status(worktree: string, taskId: TaskId): Promise<{ entries: readonly { path: string }[] }> {
     requireNonEmpty('worktree', worktree);
     const result = await this.options.runner.run({
-      taskId: this.options.taskId,
+      taskId,
       cwd: worktree,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', worktree, 'status', '--porcelain=v1', '-z'],
+      args: ['status', '--porcelain=v1', '-z'],
     });
     if (result.exitCode !== 0) {
       throw new Error(`git status failed for ${worktree} (exit ${result.exitCode}): ${result.stderr}`);
@@ -106,10 +105,10 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
   constructor(private readonly options: PolicyWorktreeAdapterOptions) {}
 
   /**
-   * Runs `git -C <repo> worktree add -b <branch> <path> <baseRef>`
-   * followed by `git -C <worktree> rev-parse HEAD`. Returns the full
-   * worktree HEAD and records it only after git has succeeded; any git
-   * failure (or a non-SHA HEAD) rejects without persisting anything.
+   * Runs `git worktree add -b <branch> <path> <baseRef>` (in `repoPath`)
+   * followed by `git rev-parse HEAD` (in the new worktree). Returns the
+   * full worktree HEAD and records it only after git has succeeded; any
+   * git failure (or a non-SHA HEAD) rejects without persisting anything.
    */
   async createWorktree(input: {
     repoPath: string;
@@ -128,7 +127,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
       cwd: input.repoPath,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', input.repoPath, 'worktree', 'add', '-b', input.branch, input.worktreePath, input.baseRef],
+      args: ['worktree', 'add', '-b', input.branch, input.worktreePath, input.baseRef],
     });
     if (add.exitCode !== 0) {
       throw new Error(
@@ -141,7 +140,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
       cwd: input.worktreePath,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', input.worktreePath, 'rev-parse', 'HEAD'],
+      args: ['rev-parse', 'HEAD'],
     });
     if (head.exitCode !== 0) {
       throw new Error(
@@ -164,7 +163,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
     return { headSha };
   }
 
-  /** Runs `git -C <repo> worktree remove --force <path>` through the policy gate. */
+  /** Runs `git worktree remove --force <path>` (in `repoPath`) through the policy gate. */
   async removeWorktree(input: {
     repoPath: string;
     worktreePath: string;
@@ -177,7 +176,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
       cwd: input.repoPath,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', input.repoPath, 'worktree', 'remove', '--force', input.worktreePath],
+      args: ['worktree', 'remove', '--force', input.worktreePath],
     });
     if (result.exitCode !== 0) {
       throw new Error(
@@ -186,7 +185,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
     }
   }
 
-  /** Runs `git -C <repo> worktree prune` through the policy gate. */
+  /** Runs `git worktree prune` (in `repoPath`) through the policy gate. */
   async pruneWorktrees(input: { repoPath: string; taskId: TaskId }): Promise<void> {
     requireNonEmpty('repoPath', input.repoPath);
     const result = await this.options.runner.run({
@@ -194,7 +193,7 @@ export class PolicyWorktreeAdapter implements GitWorktreePort {
       cwd: input.repoPath,
       category: 'GIT',
       executable: 'git',
-      args: ['-C', input.repoPath, 'worktree', 'prune'],
+      args: ['worktree', 'prune'],
     });
     if (result.exitCode !== 0) {
       throw new Error(
