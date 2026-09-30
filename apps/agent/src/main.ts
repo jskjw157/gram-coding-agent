@@ -20,6 +20,7 @@ import {
   runMigrations,
   TaskRepository,
   VerificationRepository,
+  VerificationReviewRepository,
   WorkspaceRepository,
 } from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
@@ -28,20 +29,19 @@ import { RepoLockService, type RepoLockLease } from '@gram/repo-lock';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
 import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
-import { CompletionEvaluator } from '@gram/verification';
 import { PathMapper, WorktreeService } from '@gram/workspace';
 import { PolicyGitAdapter, PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
-import {
-  PersistentCiContextResolver,
-  PersistentVerificationCompletion,
-  RegisteredRepositoryProfiles,
-} from './persistence-adapters.js';
+import { PersistentCiContextResolver, RegisteredRepositoryProfiles } from './persistence-adapters.js';
 import { createTaskRunner, type CompositionLocks } from './task-runner-composition.js';
 import { createProductionGitHubServices } from './github-services.js';
 import { ExternalCodingCapability } from './external-coding-capability.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { TaskVerificationSnapshots } from './verification-snapshot.js';
 import { BoundPublishingVerification } from './verified-publishing.js';
+import { VerificationCoordinator } from './verification-coordinator.js';
+import { ExternalVerificationReview } from './external-verification-review.js';
+import { VerificationReviewSource } from './verification-review-source.js';
+import { createVerificationReviewCommandRunner } from './verification-review-command.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -121,8 +121,6 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
     }
     heldLeases.clear();
   };
-  const completionEvaluator = new CompletionEvaluator(verificationRepository);
-  const verification = new PersistentVerificationCompletion(completionEvaluator, verificationRepository);
   const ciContext = new PersistentCiContextResolver({
     tasks: taskRepository,
     repositories: repositoryRepository,
@@ -155,12 +153,40 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: commandRunner })),
       });
       const snapshots = new TaskVerificationSnapshots({ runner: commandRunner, workspaces: workspaceRepository });
+      const verificationReviews = new ExternalVerificationReview({
+        tasks: taskRepository,
+        workspaces: workspaceRepository,
+        locks: lockRepository,
+        reviews: new VerificationReviewRepository(database),
+        verification: verificationRepository,
+        ownsLease: (taskId, leaseToken) => heldLeases.get(taskId)?.leaseToken === leaseToken,
+        snapshots,
+        source: new VerificationReviewSource({
+          runner: createVerificationReviewCommandRunner({
+            policy: policyEngine,
+            approvals: { consume: async () => false },
+            commandRuns: commandRunRepository,
+            homeDir: homedir(),
+            redactor,
+          }),
+          workspaces: workspaceRepository,
+          redactor,
+        }),
+      });
+      const verification = new VerificationCoordinator({
+        tasks: taskRepository,
+        repositories: repositoryRepository,
+        verification: verificationRepository,
+        snapshots,
+        commands: commandRunner,
+        reviews: verificationReviews,
+      });
       const codingCapability = new ExternalCodingCapability({
         tasks: taskRepository,
         workspaces: workspaceRepository,
         locks: lockRepository,
         steps: new CodingStepRepository(database),
-        ownsLease: (taskId) => heldLeases.has(taskId),
+        ownsLease: (taskId, leaseToken) => heldLeases.get(taskId)?.leaseToken === leaseToken,
         redactor,
       });
       const githubServices = createProductionGitHubServices({
@@ -181,7 +207,8 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         verification,
         publishing: {
           publish: async (context) => {
-            if (context.verification === undefined) throw new Error("Publication requires sealed verification evidence");
+            if (context.verification === undefined)
+              throw new Error('Publication requires sealed verification evidence');
             // Per-call task attribution: CommitService and RemoteService
             // bind one task at construction, and the publish context carries
             // the running task id, so fresh instances are built per call.
@@ -195,11 +222,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
                 snapshots,
               }),
               commits: new CommitService(commandRunner, { taskId: context.taskId }),
-              remote: new RemoteService(
-                commandRunner,
-                { taskId: context.taskId },
-                context.worktree,
-              ),
+              remote: new RemoteService(commandRunner, { taskId: context.taskId }, context.worktree),
               persistence: gitCommitRepository,
               audit: auditRepository,
             });
@@ -236,6 +259,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         health: () => healthService.status(),
         taskCreate: taskService,
         codingCapability,
+        verificationReviews,
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
@@ -248,7 +272,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         await mcp.close();
         throw error;
       }
-      return { logger, mcp, scheduler, codingCapability };
+      return { logger, mcp, scheduler, codingCapability, verificationReviews };
     });
 
     const exit = options.exit ?? ((code: number) => process.exit(code));
@@ -274,6 +298,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       // not confirmed stays held for explicit recovery.
       const drained = composed.scheduler.stop();
       composed.codingCapability.close();
+      composed.verificationReviews.close();
       mcpReady = false;
       await composed.mcp.close();
       await drained;

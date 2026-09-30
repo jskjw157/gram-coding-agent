@@ -1,11 +1,8 @@
+import { registerVerificationReviewTools, type VerificationReviewPort } from './tools/verification-review-tools.js';
 import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import {
-  localhostHostValidation,
-  toNodeHandler,
-  type NodeIncomingMessageLike,
-} from '@modelcontextprotocol/node';
+import { localhostHostValidation, toNodeHandler, type NodeIncomingMessageLike } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
 import { registerAgentTools, type AgentToolsPort } from './tools/agent-tools.js';
@@ -24,10 +21,7 @@ import {
   type TaskCreatePort,
   type TaskReadPort,
 } from './tools/task-tools.js';
-import {
-  registerVerificationTools,
-  type VerificationToolsPort,
-} from './tools/verification-tools.js';
+import { registerVerificationTools, type VerificationToolsPort } from './tools/verification-tools.js';
 
 export interface CreateMcpHttpServerOptions {
   host: string;
@@ -36,6 +30,7 @@ export interface CreateMcpHttpServerOptions {
   health?: () => unknown | Promise<unknown>;
   taskCreate?: TaskCreatePort;
   codingCapability?: CodingCapabilityPort;
+  verificationReviews?: VerificationReviewPort;
   taskRead?: TaskReadPort;
   repos?: RepoToolsPort;
   codeTools?: CodeToolsPort;
@@ -79,17 +74,14 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
   const mcpHandler = createMcpHandler(() => {
     const server = new McpServer({ name: 'gram-coding-agent', version: '0.0.0' });
 
+    if (options.verificationReviews !== undefined) registerVerificationReviewTools(server, options.verificationReviews);
     if (options.agentTools !== undefined) {
       registerAgentTools(server, options.agentTools);
     } else {
-      server.registerTool(
-        'agent_health',
-        { description: 'Return the Gram coding agent health status.' },
-        async () => {
-          const health = options.health ? await options.health() : { status: 'healthy' };
-          return { content: [{ type: 'text' as const, text: JSON.stringify(health) }] };
-        },
-      );
+      server.registerTool('agent_health', { description: 'Return the Gram coding agent health status.' }, async () => {
+        const health = options.health ? await options.health() : { status: 'healthy' };
+        return { content: [{ type: 'text' as const, text: JSON.stringify(health) }] };
+      });
     }
 
     if (options.codingCapability !== undefined) registerCodingCapabilityTools(server, options.codingCapability);
