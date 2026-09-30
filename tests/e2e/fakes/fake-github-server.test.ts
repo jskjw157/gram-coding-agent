@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { GitHubChecksClient } from '../../../packages/github/src/checks-client.js';
 import {
   createFakeGitHubServer,
   type FakeGitHubServer,
@@ -96,6 +97,67 @@ describe('fake GitHub server', () => {
       }),
     ]);
     expect(server.checkPollCount).toBe(2);
+  });
+
+
+  it('drives the real GitHubChecksClient through required-check HTTP pending to success', async () => {
+    const server = await createFakeGitHubServer();
+    servers.push(server);
+    const sha = 'a'.repeat(40);
+
+    const client = new GitHubChecksClient({
+      secrets: {
+        getForUse: async () => ({
+          withValue: <T>(use: (value: string) => T) => use('fake-github-token'),
+          dispose: () => undefined,
+        }),
+      },
+      fetch: async (url, init) =>
+        fetch(url, {
+          method: init.method,
+          headers: init.headers,
+          ...(init.body === undefined ? {} : { body: init.body }),
+        }),
+      apiBaseUrl: server.apiBaseUrl,
+    });
+
+    const context = {
+      taskId: '018f0000-0000-7000-8000-000000000073',
+      pullRequestId: 1,
+      owner: 'acme',
+      name: 'demo',
+      number: 7,
+      headSha: sha,
+      baseBranch: 'main',
+    };
+
+    const first = await client.listRequiredChecks(context);
+    expect(first).toEqual([
+      expect.objectContaining({
+        providerCheckId: '2001',
+        checkName: 'verify',
+        status: 'in_progress',
+        conclusion: null,
+      }),
+    ]);
+
+    const second = await client.listRequiredChecks(context);
+    expect(second).toEqual([
+      expect.objectContaining({
+        providerCheckId: '2001',
+        checkName: 'verify',
+        status: 'completed',
+        conclusion: 'success',
+      }),
+    ]);
+
+    expect(server.checkPollCount).toBe(2);
+    expect(server.requests.map((request) => request.pathname)).toEqual([
+      '/repos/acme/demo/branches/main/protection/required_status_checks',
+      '/repos/acme/demo/commits/' + sha + '/check-runs',
+      '/repos/acme/demo/branches/main/protection/required_status_checks',
+      '/repos/acme/demo/commits/' + sha + '/check-runs',
+    ]);
   });
 
   it('records request order for lock-boundary assertions in the full E2E', async () => {
