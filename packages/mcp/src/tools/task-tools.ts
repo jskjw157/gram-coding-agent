@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { safeJsonResult } from './read-sanitizer.js';
 
 const TaskId = z.string().uuid();
 
@@ -68,7 +69,7 @@ export function registerTaskReadTools(server: McpServer, tasks: TaskReadPort): v
       description: 'Return persisted state for one task.',
       inputSchema: TaskReadInput,
     },
-    async ({ taskId }) => jsonResult(await tasks.get(taskId)),
+    async ({ taskId }) => safeJsonResult(await tasks.get(taskId)),
   );
   server.registerTool(
     'task_list',
@@ -76,7 +77,7 @@ export function registerTaskReadTools(server: McpServer, tasks: TaskReadPort): v
       description: 'List recent tasks without acquiring a repository mutation lock.',
       inputSchema: TaskListInput,
     },
-    async ({ limit }) => jsonResult(await tasks.list({ limit })),
+    async ({ limit }) => safeJsonResult(await tasks.list({ limit })),
   );
   server.registerTool(
     'task_logs',
@@ -84,7 +85,7 @@ export function registerTaskReadTools(server: McpServer, tasks: TaskReadPort): v
       description: 'Return secret-safe logs belonging only to the selected task.',
       inputSchema: TaskReadInput,
     },
-    async ({ taskId }) => jsonResult(await tasks.logs(taskId)),
+    async ({ taskId }) => safeJsonResult(await tasks.logs(taskId)),
   );
   server.registerTool(
     'task_result',
@@ -92,6 +93,6 @@ export function registerTaskReadTools(server: McpServer, tasks: TaskReadPort): v
       description: 'Return the durable result for the selected task.',
       inputSchema: TaskReadInput,
     },
-    async ({ taskId }) => jsonResult(await tasks.result(taskId)),
+    async ({ taskId }) => safeJsonResult(await tasks.result(taskId)),
   );
 }
