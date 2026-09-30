@@ -196,6 +196,7 @@ describe('M2 deterministic vertical slice', () => {
       const trackedLocks = {
         acquire: async (repoId: number, taskId: string) => {
           const lease = await lockService.acquire(repoId, taskId);
+          expect(locks.get(repoId)?.ownerTaskId).toBe(taskId);
           events.push('lock.acquire');
           return {
             release: async () => {
@@ -258,6 +259,7 @@ describe('M2 deterministic vertical slice', () => {
       const verification = {
         requiredChecksPassed: async (taskId: string, headSha?: string) => {
           if (!verifiedTasks.has(taskId)) {
+            expect(locks.get(REPO_ID)?.ownerTaskId).toBe(taskId);
             const workspace = workspaces.getByTaskId(taskId);
             if (workspace === undefined) throw new Error('missing E2E workspace');
             if (headSha === undefined) throw new Error('verification must be HEAD-bound');
@@ -334,12 +336,16 @@ describe('M2 deterministic vertical slice', () => {
             remote: {
               push: (worktree, branch) => remote.push(worktree, branch),
               confirmRemoteSha: async (remoteName, branch, expectedSha) => {
+                expect(locks.get(REPO_ID)?.ownerTaskId).toBe(context.taskId);
                 const confirmed = await remote.confirmRemoteSha(
                   remoteName,
                   branch,
                   expectedSha,
                 );
-                if (confirmed) events.push('remote.confirm');
+                if (confirmed) {
+                  expect(locks.get(REPO_ID)?.ownerTaskId).toBe(context.taskId);
+                  events.push('remote.confirm');
+                }
                 return confirmed;
               },
             },
@@ -418,7 +424,8 @@ describe('M2 deterministic vertical slice', () => {
             }),
           },
           modify: {
-            modify: async ({ workspace }) => {
+            modify: async ({ task, workspace }) => {
+              expect(locks.get(REPO_ID)?.ownerTaskId).toBe(task.taskId);
               writeFileSync(
                 join(workspace.linuxPath, 'src', 'counter.ts'),
                 [
