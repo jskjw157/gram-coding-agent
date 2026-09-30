@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TaskId } from '@gram/domain';
 import { CommitService, RemoteService } from '@gram/git';
 import { createMcpHttpServer } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
@@ -20,7 +21,7 @@ import {
 } from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
 import { PublishingService } from '@gram/publishing';
-import { RepoLockService } from '@gram/repo-lock';
+import { RepoLockService, type RepoLockLease } from '@gram/repo-lock';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
 import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
@@ -32,7 +33,7 @@ import {
   PersistentVerificationCompletion,
   RegisteredRepositoryProfiles,
 } from './persistence-adapters.js';
-import { createTaskRunner } from './task-runner-composition.js';
+import { createTaskRunner, type CompositionLocks } from './task-runner-composition.js';
 import { TaskScheduler } from './task-scheduler.js';
 
 export interface StartAgentOptions {
@@ -88,6 +89,31 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
     tasks: taskRepository,
     lockDirectory: join(options.stateDirectory, 'locks'),
   });
+  // Tracks every lease this process acquires so shutdown can stop the
+  // background heartbeat without releasing the lock. AGENTS.md forbids
+  // releasing the repository lock before a confirmed remote push, so a lease
+  // held by a failed run stays held on purpose: the lock file and the
+  // repo_locks row are left intact. Only the interval is stopped, so it can
+  // never touch SQLite after the database is closed.
+  const heldLeases = new Map<TaskId, RepoLockLease>();
+  const trackedLocks: CompositionLocks = {
+    acquire: async (repoId, taskId) => {
+      const lease = await lockService.acquire(repoId, taskId);
+      heldLeases.set(taskId, lease);
+      return {
+        release: async () => {
+          heldLeases.delete(taskId);
+          await lease.release();
+        },
+      };
+    },
+  };
+  const quiesceHeldLeases = async (): Promise<void> => {
+    for (const lease of heldLeases.values()) {
+      await lease.quiesce();
+    }
+    heldLeases.clear();
+  };
   const completionEvaluator = new CompletionEvaluator(verificationRepository);
   const verification = new PersistentVerificationCompletion(completionEvaluator);
   const ciContext = new PersistentCiContextResolver({
@@ -124,7 +150,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         audit: auditRepository,
         tasks: taskRepository,
         repos: repoProfiles,
-        locks: lockService,
+        locks: trackedLocks,
         worktrees: worktreeService,
         verification,
         publishing: {
@@ -212,12 +238,15 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       removeSignalHandlers();
       // Safety-critical order: stop() synchronously blocks any further
       // dispatch, then stop accepting submissions, then wait for
-      // already-registered runs (no cancellation, no deadline), and only
-      // then close SQLite.
+      // already-registered runs (no cancellation, no deadline), then stop the
+      // heartbeat of any lease those runs deliberately left held, and only
+      // then close SQLite. Quiescing never releases: a lease whose push was
+      // not confirmed stays held for explicit recovery.
       const drained = composed.scheduler.stop();
       mcpReady = false;
       await composed.mcp.close();
       await drained;
+      await quiesceHeldLeases();
       database.close();
       composed.logger.info('agent stopped');
     };
