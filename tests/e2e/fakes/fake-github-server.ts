@@ -58,6 +58,28 @@ function parsePullsPath(pathname: string): { owner: string; repo: string } | und
   return { owner: decodeURIComponent(owner), repo: decodeURIComponent(repo) };
 }
 
+
+function parseRequiredStatusChecksPath(
+  pathname: string,
+): { owner: string; repo: string; branch: string } | undefined {
+  const match =
+    /^\/repos\/([^/]+)\/([^/]+)\/branches\/([^/]+)\/protection\/required_status_checks$/.exec(
+      pathname,
+    );
+  if (match === null) return undefined;
+  const owner = match[1];
+  const repo = match[2];
+  const branch = match[3];
+  if (owner === undefined || repo === undefined || branch === undefined) {
+    return undefined;
+  }
+  return {
+    owner: decodeURIComponent(owner),
+    repo: decodeURIComponent(repo),
+    branch: decodeURIComponent(branch),
+  };
+}
+
 function parseCheckRunsPath(
   pathname: string,
 ): { owner: string; repo: string; sha: string } | undefined {
@@ -149,6 +171,18 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
         };
         pullRequests.push(pullRequest);
         sendJson(response, 201, pullRequest);
+        return;
+      }
+
+
+      const protectionRepo = parseRequiredStatusChecksPath(url.pathname);
+      if (protectionRepo !== undefined && method === 'GET') {
+        sendJson(response, 200, {
+          strict: true,
+          contexts: ['verify'],
+          checks: [],
+          branch: protectionRepo.branch,
+        });
         return;
       }
 
