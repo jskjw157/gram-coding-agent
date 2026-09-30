@@ -76,6 +76,14 @@ export class GitHubClient implements PullRequestClientPort {
     this.credentialName = options.credentialName ?? 'github.token';
   }
 
+  async getJson(path: string): Promise<unknown> {
+    if (!path.startsWith('/')) {
+      throw new Error('GitHub API path must start with /');
+    }
+    const response = await this.request(path, { method: 'GET' });
+    return response.json();
+  }
+
   async findOpenPullRequest(input: {
     owner: string;
     name: string;
