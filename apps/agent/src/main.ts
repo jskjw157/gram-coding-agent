@@ -82,12 +82,12 @@ export function createApprovalConsumptionPort(
 }
 
 function parseApprovalId(approvalId: string): number {
-  if (/^[0-9]+$/.test(approvalId) !== true) {
-    throw new Error(`Invalid approval id: ${approvalId}`);
+  if (/^(?:[1-9][0-9]*)$/.test(approvalId) !== true) {
+    throw new Error('Invalid approval id: expected a positive decimal integer string with no leading zeros');
   }
   const id = Number(approvalId);
   if (Number.isSafeInteger(id) !== true) {
-    throw new Error(`Invalid approval id: ${approvalId}`);
+    throw new Error('Invalid approval id: expected a positive decimal integer string with no leading zeros');
   }
   return id;
 }

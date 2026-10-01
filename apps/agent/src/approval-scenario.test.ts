@@ -220,4 +220,60 @@ describe('approval cross-boundary scenario gate', () => {
     expect(unauthenticated.status).toBe(401);
     await expect(createMcpHttpServer({ host: '0.0.0.0', port: 0, internalSecret: SECRET })).rejects.toThrow(/loopback/i);
   });
+
+  it('never reflects caller-supplied approvalId in MCP error responses', async () => {
+    const scenario = setupScenario();
+    const server = await startWireServer(scenario);
+    await expect(scenario.runner.run(attempt(scenario.taskId))).rejects.toThrow(ApprovalRequiredError);
+    const pending = onlyRow(scenario);
+    const operationHash = pending.operationHash;
+    let nextId = 100;
+
+    async function callRaw(tool: 'approval_approve' | 'approval_deny', approvalId: string): Promise<{ rawBody: string; result: { isError?: boolean; content?: Array<{ text?: string }> } }> {
+      nextId += 1;
+      const callId = nextId;
+      await rpc(server.url, { method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '0' } }, id: callId * 10 });
+      const res = await fetch(`${server.url}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'x-gram-agent-auth': SECRET,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: callId * 10 + 1, method: 'tools/call', params: { name: tool, arguments: { approvalId, operationHash } } }),
+      });
+      expect(res.status).toBe(200);
+      const rawBody = await res.text();
+      const frame = rawBody.split('\n').find((line) => line.startsWith('data: '));
+      if (frame === undefined) throw new Error(`tool ${tool} returned no SSE data frame`);
+      const result = (JSON.parse(frame.slice('data: '.length)) as { result: { isError?: boolean; content?: Array<{ text?: string }> } }).result;
+      return { rawBody, result };
+    }
+
+    const probes = [SECRET, 'sk-probe-secret-shaped-value-abc123'];
+    for (const probe of probes) {
+      for (const tool of ['approval_approve', 'approval_deny'] as const) {
+        const { rawBody, result } = await callRaw(tool, probe);
+        expect(rawBody).not.toContain(probe);
+        expect(result.isError).toBe(true);
+        const text = result.content?.[0]?.text ?? '';
+        expect(text).not.toContain(probe);
+        expect(text).toMatch(/positive decimal integer/i);
+      }
+    }
+
+    const aliased = String(pending.id).padStart(4, '0');
+    expect(aliased).not.toBe(String(pending.id));
+    for (const tool of ['approval_approve', 'approval_deny'] as const) {
+      const { rawBody, result } = await callRaw(tool, aliased);
+      expect(result.isError).toBe(true);
+      const text = result.content?.[0]?.text ?? '';
+      expect(text).toMatch(/positive decimal integer/i);
+      expect(rawBody).not.toContain(aliased);
+    }
+
+    const approved = (await callTool(server.url, { name: 'approval_approve', args: { approvalId: String(pending.id), operationHash }, id: 7 })) as StoredApproval;
+    expect(approved.status).toBe('APPROVED');
+    expect(scenario.approvals.get(pending.id)?.status).toBe('APPROVED');
+  });
 });
