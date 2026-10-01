@@ -156,14 +156,17 @@ describe('fake GitHub server', () => {
 
 
   it('drives the real GitHubChecksClient through required-check HTTP pending to success', async () => {
-    const server = await createFakeGitHubServer();
+    // The fake 401s any request whose Bearer token does not match, so it must
+    // be configured with the exact credential the client below leases.
+    const clientToken = 'fake-github-token';
+    const server = await createFakeGitHubServer({ token: clientToken });
     servers.push(server);
     const sha = 'a'.repeat(40);
 
     const client = new GitHubChecksClient({
       secrets: {
         getForUse: async () => ({
-          withValue: <T>(use: (value: string) => T) => use('fake-github-token'),
+          withValue: <T>(use: (value: string) => T) => use(clientToken),
           dispose: () => undefined,
         }),
       },

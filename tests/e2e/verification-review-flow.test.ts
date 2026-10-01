@@ -64,10 +64,15 @@ function git(cwd: string, args: readonly string[]): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim();
 }
 
+// The fake rejects any request whose Bearer token does not match, so the
+// credential it is configured with and the one the client leases must be the
+// same value. One constant keeps them from drifting apart.
+const E2E_GITHUB_TOKEN = 'e2e-github-token';
+
 function testSecrets(): SecretProvider {
   return {
     getForUse: async () => ({
-      withValue: <T>(use: (value: string) => T): T => use('e2e-github-token'),
+      withValue: <T>(use: (value: string) => T): T => use(E2E_GITHUB_TOKEN),
       dispose: () => undefined,
     }),
   };
@@ -189,7 +194,7 @@ describe('production verification with an authenticated fixture reviewer', () =>
 
     try {
       fixture = createTestRepository(NODE_ONLY_VERIFICATION_COMMANDS);
-      github = await createFakeGitHubServer();
+      github = await createFakeGitHubServer({ token: E2E_GITHUB_TOKEN });
 
       database = openDatabase(join(fixture.rootPath, 'agent.sqlite'));
       runMigrations(database);
