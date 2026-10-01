@@ -5,6 +5,29 @@ import { dirname, join } from 'node:path';
 
 const FIXED_GIT_DATE = '2026-01-01T00:00:00Z';
 
+// Per-process overrides that neutralize ambient machine/user git config for
+// every invocation routed through the `git()` helper — i.e. all the commit-
+// and content-relevant calls. `-c` is valid for any subcommand and takes
+// precedence over system/global/local config files.
+//
+// The two `git init` calls bypass this on purpose: an `init.templateDir` hook
+// can only ever run through hook lookup, which `core.hooksPath` already
+// suppresses, and `branch -M main` neutralizes `init.defaultBranch`.
+//
+// `core.hooksPath=/dev/null` is a POSIX path. Git for Windows is untested
+// here; an absent hooks directory also suppresses hooks, so this stays safe in
+// practice, but cross-platform determinism is not claimed.
+const DETERMINISTIC_GIT_CONFIG: readonly string[] = [
+  '-c',
+  'commit.gpgsign=false',
+  '-c',
+  'core.autocrlf=false',
+  '-c',
+  'core.hooksPath=/dev/null',
+  '-c',
+  'commit.template=/dev/null',
+];
+
 export interface TestRepositoryFixture {
   rootPath: string;
   remotePath: string;
@@ -14,7 +37,7 @@ export interface TestRepositoryFixture {
 }
 
 function git(cwd: string, args: readonly string[], fixedCommitDate = false): string {
-  return execFileSync('git', [...args], {
+  return execFileSync('git', [...DETERMINISTIC_GIT_CONFIG, ...args], {
     cwd,
     encoding: 'utf8',
     env: fixedCommitDate
