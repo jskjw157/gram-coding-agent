@@ -57,7 +57,7 @@ describe('T4 approval MCP tools', () => {
         status: 'PENDING',
       },
     ];
-    const list = vi.fn(async (_taskId: string) => approvals);
+    const list = vi.fn(async () => approvals);
     const handle = createApprovalListHandler({
       list,
       approve: vi.fn(),
@@ -75,9 +75,7 @@ describe('T4 approval MCP tools', () => {
 
   it('A2: approval_approve forwards approvalId and expected operationHash verbatim', async () => {
     const view = { id: APPROVAL_ID, status: 'APPROVED' };
-    const approve = vi.fn(
-      async (_approvalId: string, _operationHash: string) => view,
-    );
+    const approve = vi.fn(async () => view);
     const handle = createApprovalApproveHandler({
       list: vi.fn(),
       approve,
@@ -98,9 +96,7 @@ describe('T4 approval MCP tools', () => {
 
   it('A3: approval_deny forwards approvalId and expected operationHash verbatim', async () => {
     const view = { id: APPROVAL_ID, status: 'DENIED' };
-    const deny = vi.fn(
-      async (_approvalId: string, _operationHash: string) => view,
-    );
+    const deny = vi.fn(async () => view);
     const handle = createApprovalDenyHandler({
       list: vi.fn(),
       approve: vi.fn(),
@@ -189,7 +185,7 @@ describe('T4 approval MCP tools', () => {
   });
 
   it('A8: approval_list output keeps hex operationHash readable but redacts sensitive-looking keys', async () => {
-    const list = vi.fn(async (_taskId: string) => [
+    const list = vi.fn(async () => [
       {
         id: APPROVAL_ID,
         taskId: TASK_ID,
