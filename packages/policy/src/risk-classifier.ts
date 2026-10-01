@@ -1,10 +1,12 @@
-import type { PolicyDecisionKind } from '@gram/domain';
+import type { PolicyDecisionKind, PublishMode } from '@gram/domain';
 import type { NormalizedOperation } from './command-parser.js';
 
 export interface PolicyContext {
   taskId: string;
   protectedBranches?: readonly string[];
   directMainGranted?: boolean;
+  targetBranch?: string;
+  publishMode?: PublishMode;
 }
 
 export interface ClassifiedRisk {
@@ -117,7 +119,39 @@ function classifyGit(args: readonly string[], context: PolicyContext): Classifie
     return allow('POL-GIT-PUSH', 'normal explicit non-protected branch publishing is allowed');
   }
 
-  if (['status', 'diff', 'log', 'blame', 'fetch', 'pull', 'branch', 'show', 'rev-parse'].includes(subcommand)) {
+  if (subcommand === 'worktree' && context.taskId.trim().length > 0) {
+    if (
+      args.length === 6 &&
+      args[1] === 'add' &&
+      args[2] === '-b' &&
+      args[3] !== undefined &&
+      args[3].length > 0 &&
+      !args[3].startsWith('-') &&
+      args[4] !== undefined &&
+      args[4].length > 0 &&
+      !args[4].startsWith('-') &&
+      args[5] !== undefined &&
+      args[5].length > 0 &&
+      !args[5].startsWith('-')
+    ) {
+      return allow('POL-GIT-WORKTREE-TASK', 'task worktree lifecycle operation is allowed');
+    }
+    if (
+      args.length === 4 &&
+      args[1] === 'remove' &&
+      args[2] === '--force' &&
+      args[3] !== undefined &&
+      args[3].length > 0 &&
+      !args[3].startsWith('-')
+    ) {
+      return allow('POL-GIT-WORKTREE-TASK', 'task worktree lifecycle operation is allowed');
+    }
+    if (args.length === 2 && args[1] === 'prune') {
+      return allow('POL-GIT-WORKTREE-TASK', 'task worktree lifecycle operation is allowed');
+    }
+  }
+
+  if (['status', 'diff', 'log', 'blame', 'fetch', 'pull', 'branch', 'show', 'rev-parse', 'ls-remote'].includes(subcommand)) {
     return allow('POL-GIT-READ-NORMAL', 'normal Git inspection and synchronization is allowed');
   }
   if (['add', 'commit', 'checkout', 'switch'].includes(subcommand)) {
@@ -161,6 +195,12 @@ export function classifyRisk(operation: NormalizedOperation, context: PolicyCont
   }
   if (['echo', 'printf', 'cat', 'grep', 'rg', 'find', 'ls', 'pwd', 'which', 'node', 'npx', 'python', 'python3', 'pytest', 'java', 'gradle', 'mvn'].includes(executable)) {
     return allow('POL-DEV-NORMAL', 'ordinary development/read operation is allowed');
+  }
+  if (executable === 'wslpath') {
+    if (args.length === 2 && args[0] === '-w' && args[1] !== undefined && args[1].length > 0 && args[1].startsWith('/')) {
+      return allow('POL-WSLPATH-WINDOWS', 'Windows path conversion is allowed');
+    }
+    return approve('POL-WSLPATH-OTHER', 'unclassified wslpath invocation requires approval');
   }
 
   return approve('POL-UNKNOWN-COMMAND', 'unclassified executable requires approval');

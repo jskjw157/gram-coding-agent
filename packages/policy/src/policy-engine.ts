@@ -9,6 +9,10 @@ function operationHash(operation: NormalizedOperation, context: PolicyContext): 
   return createHash('sha256')
     .update(JSON.stringify({
       taskId: context.taskId,
+      protectedBranches: context.protectedBranches,
+      directMainGranted: context.directMainGranted,
+      targetBranch: context.targetBranch,
+      publishMode: context.publishMode,
       type: operation.type,
       executable: operation.executable,
       args: operation.args,

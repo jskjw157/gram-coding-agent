@@ -28,6 +28,7 @@ afterEach(() => {
 describe('Policy Engine v1 rule matrix', () => {
   it.each([
     ['git status', 'ALLOW'],
+    ['git ls-remote origin refs/heads/feature', 'ALLOW'],
     ['pnpm test', 'ALLOW'],
     ['sudo apt install jq', 'ALLOW'],
     ['powershell.exe -Command Get-ChildItem', 'NEEDS_APPROVAL'],
@@ -59,11 +60,27 @@ describe('Policy Engine v1 rule matrix', () => {
   it('requires the direct-main grant for protected destinations expressed as refspecs', () => {
     expect(decide('git push origin HEAD:main').kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:refs/heads/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin HEAD:refs/heads/main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: false,
+      targetBranch: 'main',
+      publishMode: 'PULL_REQUEST',
+    }).kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:main', {
       taskId: 'task-1',
       protectedBranches: ['main'],
       directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
     }).kind).toBe('ALLOW');
+    expect(decide('git push --force-with-lease origin HEAD:main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
+    }).kind).toBe('DENY');
   });
 
   it('uses the highest risk decision across composed commands', () => {
@@ -75,6 +92,52 @@ describe('Policy Engine v1 rule matrix', () => {
     const operations = normalizeShellCommand('git status && pnpm test | cat', process.cwd());
     expect(operations.map((operation) => operation.executable)).toEqual(['git', 'pnpm', 'cat']);
     expect(operations.map((operation) => operation.precededBy)).toEqual([null, '&&', '|']);
+  });
+
+  it('allows only the issued task worktree lifecycle argument shapes', () => {
+    expect(decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main').kind).toBe('ALLOW');
+    expect(decide('git worktree remove --force /tmp/wt-1').kind).toBe('ALLOW');
+    expect(decide('git worktree prune').kind).toBe('ALLOW');
+  });
+
+  it('keeps other worktree shapes and an absent task identity approval-required', () => {
+    expect(decide('git worktree').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree list').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree lock /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree move /tmp/wt-1 /tmp/wt-2').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree repair').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree unlock /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree add feat/task-1 /tmp/wt-1 origin/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree remove /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main --checkout').kind).toBe(
+      'NEEDS_APPROVAL',
+    );
+    expect(
+      decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main', {
+        taskId: '   ',
+        protectedBranches: ['main'],
+      }).kind,
+    ).toBe('NEEDS_APPROVAL');
+  });
+
+  it('preserves approval decisions for unresolved push and destructive or unknown git commands', () => {
+    expect(decide('git push origin').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin feature').kind).toBe('ALLOW');
+    expect(decide('git reset --hard HEAD~1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git clean -fdx').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree frobnicate').kind).toBe('NEEDS_APPROVAL');
+  });
+
+  it('allows only a single Windows path conversion with wslpath -w', () => {
+    expect(decide('wslpath -w /home/agent/.gram-agent/worktrees/7/task-1').kind).toBe('ALLOW');
+  });
+
+  it('requires approval for unsupported wslpath forms', () => {
+    expect(decide('wslpath').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -u /mnt/c/x').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w relative/path').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w /tmp/x --extra').kind).toBe('NEEDS_APPROVAL');
   });
 });
 
