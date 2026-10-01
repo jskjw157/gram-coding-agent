@@ -16,7 +16,7 @@ function config() {
     tunnel: { enabled: true, compatibilityDigest: compatibility.digest, credentialRef: 'test-tunnel-key' } });
 }
 function controlledTunnel() {
-  const exit = deferred<void>(); let launches = 0; let stops = 0; let current: ManagedChild | null = null;
+  const exit = deferred<undefined>(); let launches = 0; let stops = 0; let current: ManagedChild | null = null;
   const port: TunnelCustodyPort = {
     async spawn(_config, _compatibility, _core, generation) {
       launches++; current = { child: { role: 'tunnel', pid: 4343, uid: 501, startIdentity: '2.2', generation, releaseDigest },
@@ -55,7 +55,7 @@ describe('exclusive tunnel custody composition', () => {
   });
 
   it('does not release merely because stop returned before the exit event', async () => {
-    const f = await setup(); const entered = deferred<void>();
+    const f = await setup(); const entered = deferred<undefined>();
     f.inner.port.stop = async () => { entered.resolve(undefined); };
     const child = await f.port.spawn(config(), compatibility, core, 'tg1', signal());
     const stopping = f.port.stop(child, 20000, signal()); await entered.promise;
