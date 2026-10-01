@@ -1,4 +1,4 @@
--- 002: harden the approvals table.
+-- 004: harden the approvals table.
 --
 -- Adds a nullable expires_at instant (set at approval time as
 -- approved_at + APPROVAL_TTL_MS; NULL while PENDING), a CHECK limiting

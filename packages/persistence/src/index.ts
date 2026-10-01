@@ -14,3 +14,4 @@ export * from './repositories/ci-run-repository.js';
 export * from './repositories/coding-step-repository.js';
 
 export * from './repositories/verification-review-repository.js';
+export * from './repositories/approval-repository.js';
