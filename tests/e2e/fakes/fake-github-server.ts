@@ -4,6 +4,7 @@ import type { AddressInfo } from 'node:net';
 export interface FakeGitHubRequest {
   method: string;
   pathname: string;
+  authorized: boolean;
 }
 
 export interface FakeGitHubPullRequest {
@@ -25,6 +26,10 @@ export interface FakeGitHubServer {
   requests: readonly FakeGitHubRequest[];
   readonly checkPollCount: number;
   close(): Promise<void>;
+}
+
+export interface CreateFakeGitHubServerOptions {
+  token: string;
 }
 
 interface CreatePullRequestBody {
@@ -101,17 +106,47 @@ function parseCheckRunsPath(
   };
 }
 
-export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
+export async function createFakeGitHubServer(
+  options: CreateFakeGitHubServerOptions,
+): Promise<FakeGitHubServer> {
+  const expectedToken = options.token;
   const pullRequests: FakeGitHubPullRequest[] = [];
   const requests: FakeGitHubRequest[] = [];
   let checkPollCount = 0;
+  const checkPollsBySha = new Map<string, number>();
   let apiBaseUrl = '';
 
   const server = createServer(async (request, response) => {
     try {
       const method = request.method ?? 'GET';
-      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-      requests.push({ method, pathname: url.pathname });
+      // Plain string comparison is sufficient: loopback test double, never production. Do not lift this into real code.
+      const authorized = request.headers.authorization === `Bearer ${expectedToken}`;
+      let url: URL | undefined;
+      try {
+        url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      } catch {
+        url = undefined;
+      }
+      // Never log the raw request target: absolute-form targets can embed
+      // userinfo credentials, and secrets must not land in logs.
+      requests.push({
+        method,
+        pathname: url === undefined ? '<unparseable>' : url.pathname,
+        authorized,
+      });
+
+      if (!authorized) {
+        sendJson(response, 401, {
+          message: 'Bad credentials',
+          documentation_url: 'https://docs.github.com/rest',
+        });
+        return;
+      }
+
+      if (url === undefined) {
+        sendJson(response, 400, { message: 'malformed request target' });
+        return;
+      }
 
       const pullsRepo = parsePullsPath(url.pathname);
       if (pullsRepo !== undefined && method === 'GET') {
@@ -133,8 +168,17 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
       }
 
       if (pullsRepo !== undefined && method === 'POST') {
-        const body = (await readJson(request)) as CreatePullRequestBody;
+        let parsed: unknown;
+        try {
+          parsed = await readJson(request);
+        } catch {
+          sendJson(response, 400, { message: 'malformed JSON body' });
+          return;
+        }
+        const body = parsed as CreatePullRequestBody;
         if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
           typeof body.head !== 'string' ||
           typeof body.base !== 'string' ||
           typeof body.title !== 'string' ||
@@ -189,7 +233,9 @@ export async function createFakeGitHubServer(): Promise<FakeGitHubServer> {
       const checkRepo = parseCheckRunsPath(url.pathname);
       if (checkRepo !== undefined && method === 'GET') {
         checkPollCount += 1;
-        const complete = checkPollCount >= 2;
+        const pollsForSha = (checkPollsBySha.get(checkRepo.sha) ?? 0) + 1;
+        checkPollsBySha.set(checkRepo.sha, pollsForSha);
+        const complete = pollsForSha >= 2;
         sendJson(response, 200, {
           total_count: 1,
           check_runs: [
