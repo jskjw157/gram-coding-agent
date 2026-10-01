@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import { configDigest, parseConfig } from '../config.js';
 import { root, type AccountIdentity, type ServiceConfig } from '../contracts.js';
 import { attachChildOutput, type OutputDrain } from '../child-output.js';
+import { ExecutionLeaseStore } from '../execution-lease.js';
+import { withExclusiveTunnelCustody } from '../exclusive-tunnel.js';
 import type { CoreEvidence } from '../health-probe.js';
 import type { ManagedChild, TunnelCompatibility } from '../supervisor.js';
 import { sealMacOwnedProcess, type ExecutableIdentity, type MacProcessSeal,
@@ -41,6 +43,7 @@ export interface TunnelAuthority {
 }
 export interface TunnelCustodyOptions {
   authority?: TunnelAuthority;
+  execution?: ExecutionLeaseStore;
   /** Trusted fixture/bootstrap capability. It receives only the fixed nonsecret
    * plan. Production credential injection remains a separate reviewed gate. */
   launch?: (plan: Readonly<TunnelLaunchPlan>) => ChildProcess;
@@ -175,7 +178,7 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
   let attempted = false;
   let active: Custody | null = null;
   const records = new WeakMap<ManagedChild, Custody>();
-  return Object.freeze({
+  const custody = Object.freeze<TunnelCustodyPort>({
     async spawn(input: ServiceConfig, compatibility: TunnelCompatibility, core: CoreEvidence,
       nextGeneration: string, signal: AbortSignal) {
       if (attempted || signal.aborted || !authority || !launch || !generation(nextGeneration)) startFailed();
@@ -211,8 +214,12 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
         }
         return managed;
       } catch {
-        if (custody && !custody.noProcess && !custody.didExit && custody.seal !== null) {
-          try { await stopCustody(custody, 20000, new AbortController().signal); } catch { /* remains tracked */ }
+        if (custody && !custody.noProcess && !custody.didExit) {
+          if (custody.seal !== null) {
+            try { await stopCustody(custody, 20000, new AbortController().signal); }
+            catch { /* uncertain cleanup is not proof that no child exists */ }
+          }
+          if (!custody.didExit) await custody.exited;
         }
         return startFailed();
       }
@@ -224,4 +231,7 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
       await wait(custody.stopping, signal);
     },
   });
+  return options.execution instanceof ExecutionLeaseStore
+    ? withExclusiveTunnelCustody(custody, options.execution)
+    : custody;
 }
