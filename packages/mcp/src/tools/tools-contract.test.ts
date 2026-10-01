@@ -5,6 +5,9 @@ import {
   registerAgentTools,
 } from './agent-tools.js';
 import {
+  registerApprovalTools,
+} from './approval-tools.js';
+import {
   GitBlameInput,
   GitLogInput,
   GitStatusInput,
@@ -79,6 +82,11 @@ describe('M2 MCP tool contract', () => {
       health: vi.fn(),
       logs: vi.fn(),
     });
+    registerApprovalTools(server, {
+      list: vi.fn(),
+      approve: vi.fn(),
+      deny: vi.fn(),
+    });
 
     const required = [
       'task_get',
@@ -102,6 +110,9 @@ describe('M2 MCP tool contract', () => {
       'agent_status',
       'agent_health',
       'agent_logs',
+      'approval_list',
+      'approval_approve',
+      'approval_deny',
     ] as const;
 
     for (const name of required) {

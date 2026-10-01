@@ -6,6 +6,7 @@ import { localhostHostValidation, toNodeHandler, type NodeIncomingMessageLike } 
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
 import { registerAgentTools, type AgentToolsPort } from './tools/agent-tools.js';
+import { registerApprovalTools, type ApprovalToolsPort } from './tools/approval-tools.js';
 import { registerCodeTools, type CodeToolsPort } from './tools/code-tools.js';
 import { registerGitTools, type GitToolsPort } from './tools/git-tools.js';
 import {
@@ -39,6 +40,7 @@ export interface CreateMcpHttpServerOptions {
   githubPullRequests?: GitHubPullRequestToolsPort;
   githubRead?: GitHubReadToolsPort;
   agentTools?: AgentToolsPort;
+  approvals?: ApprovalToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -97,6 +99,9 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
       registerGitHubPullRequestTools(server, options.githubPullRequests);
     }
     if (options.githubRead !== undefined) registerGitHubReadTools(server, options.githubRead);
+    if (options.approvals !== undefined) {
+      registerApprovalTools(server, options.approvals);
+    }
 
     return server;
   });
