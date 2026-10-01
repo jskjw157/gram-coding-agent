@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { TaskId } from '@gram/domain';
 import { openDatabase } from '../database.js';
@@ -43,6 +45,130 @@ function createTask(db: ReturnType<typeof openDatabase>): TaskId {
     taskType: 'CODING',
     publishMode: 'PULL_REQUEST',
   }).id;
+}
+
+// Absolute entry path for better-sqlite3 and a file URL for the real
+// ApprovalRepository source, handed to racing workers so each one runs the
+// actual implementation (not a copy of its SQL) on its own connection.
+const workerRequire = createRequire(import.meta.url);
+const SQLITE_ENTRY_PATH = workerRequire.resolve('better-sqlite3');
+const REPO_SOURCE_URL = new URL('./approval-repository.ts', import.meta.url).href;
+
+// Runs verbatim inside each racing worker (CommonJS eval script): opens an
+// independent connection to the same file, imports the real
+// ApprovalRepository, signals ready, blocks on the shared start flag until
+// both racers are ready, and only then calls consume().
+const RACE_WORKER_SOURCE = [
+  "const { parentPort, workerData } = require('worker_threads');",
+  '(async () => {',
+  '  const Database = require(workerData.sqlitePath);',
+  '  const db = new Database(workerData.path, { timeout: 5000 });',
+  "  db.pragma('journal_mode = WAL');",
+  "  db.pragma('foreign_keys = ON');",
+  "  db.pragma('busy_timeout = 5000');",
+  '  const mod = await import(workerData.repoUrl);',
+  '  const repo = new mod.ApprovalRepository(db);',
+  "  parentPort.postMessage({ type: 'ready' });",
+  '  Atomics.wait(new Int32Array(workerData.startBuffer), 0, 0);',
+  '  try {',
+  '    const result = repo.consume(workerData.taskId, workerData.operationHash);',
+  '    db.close();',
+  "    parentPort.postMessage({ type: 'result', result });",
+  '  } catch (error) {',
+  '    try { db.close(); } catch { /* ignore close errors on the failure path */ }',
+  "    parentPort.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });",
+  '  }',
+  '})();',
+].join('\n');
+
+interface RaceMessage {
+  type: string;
+  result?: boolean;
+  message?: string;
+}
+
+// Runs consume() concurrently from two worker threads, each with its own
+// connection to the same file-backed database. Neither worker proceeds past
+// the shared start flag until both have signalled ready, so the two consumes
+// genuinely overlap instead of running one after the other.
+function raceConsumeOnTwoWorkers(
+  dbPath: string,
+  taskId: TaskId,
+  operationHash: string,
+): Promise<[boolean, boolean]> {
+  return new Promise((resolve, reject) => {
+    const startBuffer = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+    const startFlag = new Int32Array(startBuffer);
+    const workers = [0, 1].map(
+      () =>
+        new Worker(RACE_WORKER_SOURCE, {
+          eval: true,
+          execArgv: ['--experimental-transform-types'],
+          workerData: {
+            path: dbPath,
+            taskId,
+            operationHash,
+            sqlitePath: SQLITE_ENTRY_PATH,
+            repoUrl: REPO_SOURCE_URL,
+            startBuffer,
+          },
+        }),
+    );
+    let readyCount = 0;
+    const results: boolean[] = [];
+    let settled = false;
+    const cleanup = (): void => {
+      for (const worker of workers) {
+        void worker.terminate();
+      }
+    };
+    const fail = (message: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error(message));
+    };
+    const timer = setTimeout(() => fail('timed out waiting for the two racing workers'), 20000);
+    for (const worker of workers) {
+      worker.on('message', (message: RaceMessage) => {
+        if (settled) return;
+        if (message.type === 'ready') {
+          readyCount += 1;
+          if (readyCount === workers.length) {
+            Atomics.store(startFlag, 0, 1);
+            Atomics.notify(startFlag, 0, workers.length);
+          }
+          return;
+        }
+        if (message.type === 'error') {
+          fail(`racing worker failed: ${message.message ?? 'unknown error'}`);
+          return;
+        }
+        if (message.type === 'result') {
+          results.push(message.result === true);
+          if (results.length === workers.length) {
+            const first = results[0];
+            const second = results[1];
+            if (first === undefined || second === undefined) {
+              fail('racing workers returned an unexpected number of results');
+              return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            cleanup();
+            resolve([first, second]);
+          }
+        }
+      });
+      worker.on('error', (error) =>
+        fail(`racing worker errored: ${error instanceof Error ? error.message : String(error)}`),
+      );
+      worker.on('exit', (code) => {
+        if (!settled && code !== 0) fail(`racing worker exited with code ${code}`);
+      });
+    }
+  });
 }
 
 describe('ApprovalRepository', () => {
@@ -99,28 +225,50 @@ describe('ApprovalRepository', () => {
     const created = repo.request({ taskId, operationHash: 'op-r4' });
     repo.approve(created.id, 'op-r4');
     expect(repo.consume(taskId, 'op-r4')).toBe(true);
+    const afterFirst = repo.get(created.id);
     expect(repo.consume(taskId, 'op-r4')).toBe(false);
-    expect(repo.get(created.id)?.status).toBe('CONSUMED');
+    const stored = repo.get(created.id);
+    expect(stored?.status).toBe('CONSUMED');
+    // The losing consume must not advance anything: consumed_at is untouched.
+    expect(stored?.consumedAt).toBe(afterFirst?.consumedAt);
   });
 
-  it('R5 concurrent consume from two connections allows exactly one winner', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'approvals-r5-'));
-    tempDirs.push(dir);
-    const path = join(dir, 'r5.db');
-    const db1 = openDatabase(path);
-    const db2 = openDatabase(path);
-    databases.push(db1, db2);
-    runMigrations(db1);
-    const taskId = createTask(db1);
-    const repo1 = new ApprovalRepository(db1);
-    const repo2 = new ApprovalRepository(db2);
+  it(
+    'R5 two worker threads on separate file-backed connections racing consume() grant exactly one winner',
+    { timeout: 30000 },
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'approvals-r5-'));
+      tempDirs.push(dir);
+      const path = join(dir, 'r5.db');
+      const setupDb = openDatabase(path);
+      runMigrations(setupDb);
+      const taskId = createTask(setupDb);
+      const setupRepo = new ApprovalRepository(setupDb);
+      const created = setupRepo.request({ taskId, operationHash: 'op-r5' });
+      setupRepo.approve(created.id, 'op-r5');
+      expect(setupRepo.get(created.id)?.status).toBe('APPROVED');
+      // Close the setup handle so that during the race exactly two
+      // connections exist: one per worker, both to the same file.
+      setupDb.close();
 
-    const created = repo1.request({ taskId, operationHash: 'op-r5' });
-    repo1.approve(created.id, 'op-r5');
+      // Each worker runs the real ApprovalRepository.consume on its own
+      // connection and both are gated on a shared start flag, so the two
+      // conditional UPDATEs genuinely overlap. consume() returns true only
+      // when its own UPDATE changed the row, so exactly one true means only
+      // one caller observed the APPROVED -> CONSUMED transition.
+      const [first, second] = await raceConsumeOnTwoWorkers(path, taskId, 'op-r5');
+      expect([first, second].filter((won) => won)).toHaveLength(1);
+      expect([first, second].sort()).toEqual([false, true]);
 
-    const results = [repo1.consume(taskId, 'op-r5'), repo2.consume(taskId, 'op-r5')].sort();
-    expect(results).toEqual([false, true]);
-  });
+      const verifyDb = openDatabase(path);
+      databases.push(verifyDb);
+      const verifyRepo = new ApprovalRepository(verifyDb);
+      const stored = verifyRepo.get(created.id);
+      expect(stored?.status).toBe('CONSUMED');
+      expect(stored?.consumedAt).not.toBeNull();
+      expect(verifyRepo.listForTask(taskId)).toHaveLength(1);
+    },
+  );
 
   it('R6 same operationHash on a different taskId is rejected', () => {
     const { db } = setupMemory();
