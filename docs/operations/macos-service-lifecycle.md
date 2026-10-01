@@ -1,3 +1,43 @@
+# MAC-02 Service Lifecycle — Durable Tunnel Execution Lease Checkpoint
+
+**Updated:** 2026-10-02 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Durable tunnel execution ownership and ambiguous-start cleanup are now tested; provider credentials, runnable production entry and installed acceptance remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified code/test checkpoint:** `4bd20ca99960e6769a0c2963c0ac89e7da59fdb2`.  
+**RED checkpoint:** `7241caff04ae75dc33046604c48ad0efceec3a25`.
+
+## Current increment — durable tunnel execution ownership
+
+This increment adds `withExclusiveTunnelCustody` and integrates it as an optional `ExecutionLeaseStore` gate on the existing native tunnel custody adapter.
+
+- the `tunnel.execution.json` slot is acquired before native custody spawn;
+- a second cooperating supervisor cannot spawn while the slot is HELD;
+- successful stop does not release the slot until the actual child exit resolves;
+- spontaneous confirmed exit releases the lease;
+- copied/foreign handles, uncertain CAS, missing records and failed stops fail closed;
+- no TTL, PID-age, port ownership or elapsed-time reclaim is introduced;
+- an already-cancelled start writes no reservation;
+- the native tunnel rejection path now waits for confirmed child exit when an OS child exists and cleanup is uncertain, so an outer lease cannot mistake a live orphan for a definite no-child failure.
+
+The wrapper contains no provider credential, compatibility policy, health interpretation or public CLI surface. `TunnelCustodyOptions.execution` is optional for controlled fixtures, but production composition must later supply the same reviewed runtime execution store already used for Core.
+
+### Fresh exact-head verification
+
+Exact head `4bd20ca99960e6769a0c2963c0ac89e7da59fdb2`:
+
+- focused workflow `36919938564`: completed/success on Ubuntu and native Apple Silicon Mac;
+- root CI `36919938531`: completed/success;
+- native Mac job `110563172982`: **64 lifecycle files / 845 tests passed, zero failures/skips**;
+- same Mac root suite: **72 files / 893 tests passed, zero failures/skips**;
+- lint, typecheck, test, build, diff and production-output checks passed;
+- plist structure: 2 roles accepted / 12 altered cases rejected; native `plutil` accepted both generated plists.
+
+RED evidence at `7241caf`: **14 new failures, 809 prior tests passed, 22 Linux-native skips**. Thirteen failures came from the deliberate `NOT_IMPLEMENTED` tunnel-lease scaffold and one reproduced the existing ambiguous cleanup race (`rejected` vs required `pending`). The implementation was then added without weakening those expectations. A later test-only lint correction replaced invalid `deferred<void>()` generic uses with `deferred<undefined>()`.
+
+No real OpenAI tunnel credential/session, launchd install, administrator action, account mutation, Keychain/TCC/FileVault/security change, browser/store operation or merge was performed.
+
+---
+
 # MAC-02 Service Lifecycle — Reviewed Bootstrap and Tunnel Custody Checkpoint
 
 **Updated:** 2026-09-30 (Asia/Seoul)  
