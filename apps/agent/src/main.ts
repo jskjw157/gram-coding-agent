@@ -4,10 +4,11 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TaskId } from '@gram/domain';
 import { CommitService, RemoteService } from '@gram/git';
-import { createMcpHttpServer } from '@gram/mcp';
+import { createMcpHttpServer, type ApprovalToolsPort } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
 import {
   AuditRepository,
+  ApprovalRepository,
   CommandRunRepository,
   CodingStepRepository,
   CiRunRepository,
@@ -27,7 +28,7 @@ import { PolicyEngine } from '@gram/policy';
 import { PublishingService } from '@gram/publishing';
 import { RepoLockService, type RepoLockLease } from '@gram/repo-lock';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
-import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
+import { CommandRunner, NodeProcessSpawner, OutputCapture, type ApprovalConsumptionPort } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
 import { PathMapper, WorktreeService } from '@gram/workspace';
 import { PolicyGitAdapter, PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
@@ -60,6 +61,49 @@ export interface RunningAgent {
   close(): Promise<void>;
 }
 
+// Thin approval adapter: the CommandRunner has already decided
+// NEEDS_APPROVAL and already computed the exact operationHash, so this
+// layer never re-evaluates policy, never re-derives the hash, and never
+// re-classifies. It only forwards the (taskId, operationHash) it is
+// handed to the durable repository. On a miss it idempotently records a
+// PENDING request (so the attempt becomes visible to the MCP
+// list/approve/deny surface) and still returns false, keeping the first
+// blocked attempt fail-closed: CommandRunner throws ApprovalRequiredError.
+export function createApprovalConsumptionPort(
+  repository: ApprovalRepository,
+): ApprovalConsumptionPort {
+  return {
+    consume: async (taskId, operationHash) => {
+      if (repository.consume(taskId, operationHash) === true) return true;
+      repository.request({ taskId, operationHash });
+      return false;
+    },
+  };
+}
+
+function parseApprovalId(approvalId: string): number {
+  if (/^[0-9]+$/.test(approvalId) !== true) {
+    throw new Error(`Invalid approval id: ${approvalId}`);
+  }
+  const id = Number(approvalId);
+  if (Number.isSafeInteger(id) !== true) {
+    throw new Error(`Invalid approval id: ${approvalId}`);
+  }
+  return id;
+}
+
+// MCP control surface over the same durable rows: list surfaces pending
+// requests (including ones recorded by blocked consume attempts above),
+// approve/deny resolve them by id with the expected operation hash.
+export function createApprovalToolsPort(repository: ApprovalRepository): ApprovalToolsPort {
+  return {
+    list: (taskId) => repository.listForTask(taskId),
+    approve: (approvalId, operationHash) =>
+      repository.approve(parseApprovalId(approvalId), operationHash),
+    deny: (approvalId, operationHash) => repository.deny(parseApprovalId(approvalId), operationHash),
+  };
+}
+
 export async function startAgent(options: StartAgentOptions): Promise<RunningAgent> {
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 3847;
@@ -86,6 +130,12 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   const pullRequestRepository = new PullRequestRepository(database);
   const taskService = new TaskService(taskRepository, auditRepository);
   const policyEngine = new PolicyEngine();
+  // Durable approvals backing the consume port below and the MCP
+  // list/approve/deny surface. Built on the shared Database instance:
+  // no second connection is opened.
+  const approvalRepository = new ApprovalRepository(database);
+  const approvalConsume = createApprovalConsumptionPort(approvalRepository);
+  const approvalTools = createApprovalToolsPort(approvalRepository);
 
   const repoProfiles = new RegisteredRepositoryProfiles({
     repositories: repositoryRepository,
@@ -137,10 +187,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       const logger = new StructuredLogger({ redactor });
       const commandRunner = new CommandRunner({
         policy: policyEngine,
-        // No approval facility exists in this slice (there is an approvals
-        // table but no repository or UI backing it), so every
-        // NEEDS_APPROVAL command fails closed until approvals are wired.
-        approvals: { consume: async () => false },
+        approvals: approvalConsume,
         spawner: new NodeProcessSpawner(),
         commandRuns: commandRunRepository,
         outputCapture: new OutputCapture({ homeDir: homedir(), redactor }),
@@ -164,7 +211,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         source: new VerificationReviewSource({
           runner: createVerificationReviewCommandRunner({
             policy: policyEngine,
-            approvals: { consume: async () => false },
+            approvals: approvalConsume,
             commandRuns: commandRunRepository,
             homeDir: homedir(),
             redactor,
@@ -260,6 +307,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         taskCreate: taskService,
         codingCapability,
         verificationReviews,
+        approvals: approvalTools,
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
