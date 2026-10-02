@@ -107,6 +107,17 @@ export function withExclusiveTunnelCustody(
       }
     },
 
+    async current(child, signal) {
+      const record = active;
+      if (!record || record.ended || signal.aborted || !same(child, record.outward.child)
+        || !same(record.raw.child, record.outward.child)) return false;
+      try {
+        const owned = await custody.current(record.raw.child, signal);
+        return owned === true && !record.ended && !signal.aborted
+          && same(child, record.outward.child) && same(record.raw.child, record.outward.child);
+      } catch { return false; }
+    },
+
     async stop(managed, deadlineMs, signal) {
       const record = active;
       if (!record || record.outward !== managed || !same(record.raw.child, managed.child)

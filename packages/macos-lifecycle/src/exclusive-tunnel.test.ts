@@ -22,6 +22,15 @@ function controlledTunnel() {
       launches++; current = { child: { role: 'tunnel', pid: 4343, uid: 501, startIdentity: '2.2', generation, releaseDigest },
         exited: exit.promise }; return current;
     },
+    async current(child) {
+      return current !== null
+        && child.role === 'tunnel'
+        && child.pid === current.child.pid
+        && child.uid === current.child.uid
+        && child.startIdentity === current.child.startIdentity
+        && child.generation === current.child.generation
+        && child.releaseDigest === current.child.releaseDigest;
+    },
     async stop() { stops++; exit.resolve(undefined); await exit.promise; },
   };
   return { port, exit, launches: () => launches, stops: () => stops, current: () => current };

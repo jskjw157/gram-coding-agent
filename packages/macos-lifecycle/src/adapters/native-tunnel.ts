@@ -1,7 +1,7 @@
 import { ChildProcess } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import { configDigest, parseConfig } from '../config.js';
-import { root, type AccountIdentity, type ServiceConfig } from '../contracts.js';
+import { root, type AccountIdentity, type OwnedChild, type ServiceConfig } from '../contracts.js';
 import { attachChildOutput, type OutputDrain } from '../child-output.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
 import { withExclusiveTunnelCustody } from '../exclusive-tunnel.js';
@@ -51,6 +51,7 @@ export interface TunnelCustodyOptions {
 export interface TunnelCustodyPort {
   spawn(config: ServiceConfig, compatibility: TunnelCompatibility, core: CoreEvidence,
     generation: string, signal: AbortSignal): Promise<ManagedChild>;
+  current(child: OwnedChild, signal: AbortSignal): Promise<boolean>;
   stop(child: ManagedChild, deadlineMs: number, signal: AbortSignal): Promise<void>;
 }
 
@@ -80,6 +81,16 @@ function validCore(value: CoreEvidence, releaseDigest: string): boolean {
   return value !== null && typeof value === 'object' && value.state === 'LOCAL_CORE_HEALTHY' && value.code === 'OK'
     && generation(value.generation) && value.releaseDigest === releaseDigest
     && Number.isSafeInteger(value.observedAtMs) && value.observedAtMs >= 0;
+}
+function sameTunnelChild(a: OwnedChild, b: OwnedChild): boolean {
+  try {
+    return a.role === 'tunnel' && b.role === 'tunnel'
+      && Number.isSafeInteger(a.pid) && a.pid > 0 && a.pid === b.pid
+      && Number.isSafeInteger(a.uid) && a.uid > 0 && a.uid === b.uid
+      && typeof a.startIdentity === 'string' && a.startIdentity === b.startIdentity
+      && generation(a.generation) && a.generation === b.generation
+      && digest(a.releaseDigest) && a.releaseDigest === b.releaseDigest;
+  } catch { return false; }
 }
 function validGrant(value: TunnelLaunchGrant | null, config: ServiceConfig,
   compatibility: TunnelCompatibility): TunnelLaunchGrant {
@@ -223,6 +234,16 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
         }
         return startFailed();
       }
+    },
+    async current(child: OwnedChild, signal: AbortSignal) {
+      const custody = active;
+      if (!custody?.seal || !custody.managed || custody.didExit || signal.aborted
+        || !sameTunnelChild(child, custody.seal.child)) return false;
+      try {
+        const verdict = await wait(custody.proof.current(custody.seal.identity, signal), signal);
+        return verdict === 'OWNED' && !custody.didExit && !signal.aborted
+          && sameTunnelChild(child, custody.seal.child);
+      } catch { return false; }
     },
     async stop(managed: ManagedChild, deadlineMs: number, signal: AbortSignal) {
       const custody = records.get(managed);
