@@ -136,6 +136,75 @@ describe('CommandRunner policy gate', () => {
     expect(events).toEqual(['policy', 'spawn']);
   });
 
+
+  it('rejects unsupported shell syntax before approval, evidence, or spawn', async () => {
+    const homeDir = tempHome();
+    const taskId = '0191a2b3-c4d5-7000-8000-000000000024';
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      homeDir,
+      ...ports,
+    });
+
+    await expect(
+      runner.run({
+        taskId,
+        cwd: process.cwd(),
+        category: 'GIT',
+        shellText:
+          'git worktree add -b feat/x /home/agent/.gram-agent/worktrees/7/' +
+          taskId +
+          ' HEAD>/tmp/probe',
+      }),
+    ).rejects.toThrow(/unsupported shell syntax/i);
+
+    expect(consume).not.toHaveBeenCalled();
+    expect(ports.commandRuns.start).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('keeps executable-form redirect-looking arguments literal', async () => {
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: 'literal',
+      stderr: '',
+    }));
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume: async () => false },
+      spawner: { spawn },
+      ...ports,
+    });
+
+    await expect(
+      runner.run({
+        taskId: '0191a2b3-c4d5-7000-8000-000000000025',
+        cwd: process.cwd(),
+        category: 'DEVELOPMENT',
+        executable: 'echo',
+        args: ['a>b', '$(literal)'],
+      }),
+    ).resolves.toMatchObject({ exitCode: 0, stdout: 'literal' });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executable: 'echo',
+        args: ['a>b', '$(literal)'],
+      }),
+    );
+  });
+
   it('denies an ALLOW-shaped worktree add outside agent home before approval or spawn', async () => {
     const homeDir = tempHome();
     const taskId = '0191a2b3-c4d5-7000-8000-000000000021';
