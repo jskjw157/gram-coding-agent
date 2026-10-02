@@ -1,15 +1,33 @@
+import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { SupervisorBootstrap, SupervisorSignals } from './supervisor-entry.js';
+import { runSupervisorEntry, type SupervisorBootstrap, type SupervisorSignals } from './supervisor-entry.js';
 
-export function isDirectSupervisorCli(_moduleUrl: string, _argv1: string | undefined): boolean {
-  void pathToFileURL;
-  return false;
+/** Pure direct-entry test. Importing this module never starts a service. */
+export function isDirectSupervisorCli(moduleUrl: string, argv1: string | undefined): boolean {
+  try {
+    if (typeof argv1 !== 'string' || !isAbsolute(argv1)) return false;
+    const parsed = new URL(moduleUrl);
+    return parsed.protocol === 'file:' && pathToFileURL(argv1).href === parsed.href;
+  } catch {
+    return false;
+  }
 }
 
+/** Internal launchd entry only. No public lifecycle commands or provider data
+ * are accepted here. Without an independently supplied bootstrap it fails
+ * closed with EX_CONFIG (78) through the existing supervisor entry contract.
+ */
 export async function runSupervisorCli(
-  _argv: readonly string[],
-  _bootstrap?: SupervisorBootstrap,
-  _signals?: SupervisorSignals,
+  argv: readonly string[],
+  bootstrap?: SupervisorBootstrap,
+  signals: SupervisorSignals = process,
 ): Promise<number> {
-  throw new Error('NOT_IMPLEMENTED');
+  return runSupervisorEntry(argv, bootstrap, signals);
+}
+
+if (isDirectSupervisorCli(import.meta.url, process.argv[1])) {
+  void runSupervisorCli(process.argv.slice(2)).then(
+    code => { process.exitCode = code; },
+    () => { process.exitCode = 70; },
+  );
 }
