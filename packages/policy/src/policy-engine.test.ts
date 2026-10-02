@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApprovalService, type ApprovalRecord, type ApprovalStore } from './approval-service.js';
-import { normalizeShellCommand } from './command-parser.js';
+import { normalizeExecutableCommand, normalizeShellCommand } from './command-parser.js';
 import { PolicyEngine, type PolicyContext } from './policy-engine.js';
 
 const tempDirs: string[] = [];
@@ -138,6 +138,64 @@ describe('Policy Engine v1 rule matrix', () => {
     expect(decide('wslpath -w').kind).toBe('NEEDS_APPROVAL');
     expect(decide('wslpath -w relative/path').kind).toBe('NEEDS_APPROVAL');
     expect(decide('wslpath -w /tmp/x --extra').kind).toBe('NEEDS_APPROVAL');
+  });
+});
+
+
+describe('shell-text syntax fail-closed boundary', () => {
+  it.each([
+    ['stdout redirect', 'echo ok > /tmp/probe'],
+    ['stdout append', 'echo ok >> /tmp/probe'],
+    ['stderr redirect', 'echo ok 2>/tmp/probe'],
+    ['stderr append', 'echo ok 2>>/tmp/probe'],
+    ['combined redirect', 'echo ok &>/tmp/probe'],
+    ['heredoc', 'cat <<EOF\nhello\nEOF'],
+    [
+      'worktree suffix redirect',
+      'git worktree add -b feat/x /home/agent/.gram-agent/worktrees/7/task-1 HEAD>/tmp/probe',
+    ],
+    ['command substitution', 'echo $(touch /tmp/probe)'],
+    ['double-quoted command substitution', 'echo "$(touch /tmp/probe)"'],
+  ] as const)('rejects %s before classification', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['double-quoted redirect literal', 'echo "a>b"', ['a>b']],
+    ['single-quoted redirect literal', "echo 'a>b'", ['a>b']],
+    ['escaped redirect literal', 'echo a\\>b', ['a>b']],
+    [
+      'single-quoted command-substitution literal',
+      "echo '$(touch /tmp/probe)'",
+      ['$(touch /tmp/probe)'],
+    ],
+  ] as const)('keeps %s literal', (_label, command, expectedArgs) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.executable).toBe('echo');
+    expect(operation?.args).toEqual(expectedArgs);
+  });
+
+  it('does not apply shell syntax rejection to executable-form requests', () => {
+    const operation = normalizeExecutableCommand(
+      'echo',
+      ['a>b', '$(literal)'],
+      process.cwd(),
+    );
+    expect(operation.args).toEqual(['a>b', '$(literal)']);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe(
+      'ALLOW',
+    );
+  });
+
+  it.each([
+    ['rm', 'rm ./a', ['./a']],
+    ['cp', 'cp ./a ./b', ['./a', './b']],
+    ['mv', 'mv ./a ./b', ['./a', './b']],
+  ] as const)('preserves existing %s filesystem target extraction', (_label, command, targets) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.requestedTargets).toEqual(targets);
   });
 });
 
