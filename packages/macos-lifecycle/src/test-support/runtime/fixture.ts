@@ -10,7 +10,7 @@ import type { RuntimeReview, RuntimeEnvironment } from '../../adapters/runtime-a
 import type { RuntimeLayout } from '../../adapters/runtime-directories.js';
 import type { AclProbe } from '../../adapters/trusted-files.js';
 export const hash = (value: Buffer | string): string => createHash('sha256').update(value).digest('hex');
-export async function fixture() {
+export async function fixture(options: { tunnel?: boolean } = {}) {
   const uid = process.getuid?.() ?? 501; const gid = process.getgid?.() ?? 20;
   const anchor = await realpath(await mkdtemp(join(tmpdir(), 'gram runtime review ')));
   await chmod(anchor, 0o700);
@@ -22,6 +22,7 @@ export async function fixture() {
     'bin/node': 'reviewed-node-fixture', 'bin/file-acl': 'reviewed-acl-fixture', 'bin/peer-owner': 'reviewed-peer-fixture',
     'apps/agent/dist/main.js': 'export {};\n', 'packages/macos-lifecycle/dist/supervisor-cli.js': 'export {};\n',
     'pnpm-lock.yaml': 'lockfileVersion: 9.0\n',
+    ...(options.tunnel ? { 'bin/tunnel-client': 'reviewed-tunnel-fixture' } : {}),
   };
   const entries = [];
   for (const [path, bytes] of Object.entries(payloads)) {
@@ -32,11 +33,14 @@ export async function fixture() {
   }
   const manifest = { schemaVersion: 1, releaseId, sourceCommit: '1'.repeat(40),
     lockDigest: hash(payloads['pnpm-lock.yaml'] ?? ''), files: entries,
-    coreTools: ['agent_health'], schemaCompatibility: { minimum: 1, maximum: 1 } };
+    coreTools: ['agent_health'], schemaCompatibility: { minimum: 1, maximum: 1 },
+    ...(options.tunnel ? { tunnelCompatibilityDigest: 'b'.repeat(64) } : {}) };
   const bytes = JSON.stringify(manifest) + '\n';
   await writeFile(join(release, 'release.json'), bytes, { mode: 0o600 });
   const config: ServiceConfig = { schemaVersion: 1, mode: 'LAB_ONLY', releaseId, releaseDigest: hash(bytes),
-    runtimeUser: 'gram-agent', tunnel: { enabled: false } };
+    runtimeUser: 'gram-agent', tunnel: options.tunnel
+      ? { enabled: true, compatibilityDigest: 'b'.repeat(64), credentialRef: 'test-tunnel-key' }
+      : { enabled: false } };
   await writeFile(join(base, 'config/service.json'), JSON.stringify(config) + '\n', { mode: 0o600 });
   await writeFile(join(base, 'secrets/do-not-read'), 'SYNTHETIC_UNREAD_SECRET', { mode: 0o000 });
   const acl: AclProbe = async () => true;
@@ -52,6 +56,7 @@ export async function fixture() {
   const runPolicy = { anchor, relative: relative + '/run', ancestorUid: uid, stateUid: uid, acl };
   const execution = new ExecutionLeaseStore(createExecutionFilesAt(runPolicy));
   await execution.initializeNew('core');
+  if (options.tunnel) await execution.initializeNew('tunnel');
   return { uid, gid, anchor, base, release, layout, environment, review, acl, execution, runPolicy };
 }
 export async function snapshot(path: string): Promise<Record<string, string>> {
