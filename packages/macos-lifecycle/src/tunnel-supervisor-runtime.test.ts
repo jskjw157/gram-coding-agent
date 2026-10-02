@@ -18,7 +18,7 @@ const core: CoreEvidence = Object.freeze({
   state: 'LOCAL_CORE_HEALTHY', code: 'OK', generation: 'core-g1', releaseDigest, observedAtMs: 1,
 });
 
-async function fixture(input: { credential?: unknown; observation?: unknown } = {}) {
+async function fixture(input: { credential?: unknown; observation?: unknown; onProbe?: (set: (value: PeerVerdict) => void) => unknown } = {}) {
   const files = new MemoryExecutionFiles(); const execution = new ExecutionLeaseStore(files);
   await execution.initializeNew('tunnel');
   let verdict: PeerVerdict = 'OWNED'; let launches = 0; let credentialCalls = 0; let probes = 0;
@@ -50,7 +50,7 @@ async function fixture(input: { credential?: unknown; observation?: unknown } = 
         "process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),5));setInterval(()=>{},1000);"
       ], { stdio: ['ignore','pipe','pipe'] });
     },
-    async probe() { probes++; return (input.observation ?? 'READY') as 'READY'; },
+    async probe() { probes++; return (input.onProbe ? input.onProbe(value => { verdict = value; }) : (input.observation ?? 'READY')) as 'READY'; },
   };
   const port = createReviewedTunnelSupervisor({ configuration: config, execution, tunnelRuntime }, provider);
   return { execution, provider, port, setVerdict(v: PeerVerdict) { verdict = v; },
@@ -113,8 +113,8 @@ describe('reviewed tunnel supervisor composition', () => {
   });
 
   it('downgrades a provider observation when ownership changes during the probe', async () => {
-    const f = await fixture(); if (!f.port) throw new Error('missing port');
-    f.provider.probe = async () => { f.setVerdict('FOREIGN'); return 'READY'; };
+    const f = await fixture({ onProbe(set) { set('FOREIGN'); return 'READY'; } });
+    if (!f.port) throw new Error('missing port');
     await f.port.credentialAvailable('test-tunnel-key');
     const managed = await f.port.spawn(config, { digest: compatibilityDigest }, core, 'tg1', signal());
     expect(await f.port.probe(managed.child, core, signal())).toBe('UNKNOWN');
