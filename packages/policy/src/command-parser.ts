@@ -15,7 +15,6 @@ export interface NormalizedOperation {
   pathResolutionFailed: boolean;
 }
 
-
 const UNSUPPORTED_SHELL_SYNTAX_REASON =
   'Unsupported shell syntax: redirection and dynamic command substitution are not supported';
 
