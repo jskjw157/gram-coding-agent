@@ -1,3 +1,52 @@
+# MAC-02 Service Lifecycle — Fixed Supervisor Entry and Reviewed Tunnel Authority Checkpoint
+
+**Updated:** 2026-10-03 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. A fixed launchd-only supervisor executable entry and reviewed tunnel binary/compatibility authority are now tested components. Independent bootstrap trust provisioning, real tunnel credential/provider health, installed service acceptance and final lane integration remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified code/test checkpoint:** `ba707e3a724335164be604b47669d7337b4ec17d`.  
+**Supervisor CLI RED:** `58eba6519f2d61da0149b3f2c2a150a0b554b5b4`.  
+**Tunnel authority RED:** `0d5f7690beef9f8feb8d109b97db687cd4acb763`.
+
+## Current increment — fixed private executable entry
+
+`supervisor-cli.ts` is the private launchd entry referenced by the generated plist. It is deliberately separate from lane D's public diagnostic/operator CLI.
+
+- direct execution is recognized only when `process.argv[1]` is the exact absolute path represented by `import.meta.url`;
+- the only accepted runtime grammar remains the existing fixed `--role core|tunnel --config <fixed installed service.json>` contract;
+- public-style commands such as `status` or `start core` are rejected before bootstrap;
+- importing the module has no service start, signal hook, console output or process exit side effect;
+- direct execution uses `process.exitCode`, never a forced process exit;
+- without an independently trusted bootstrap capability the executable fails closed with exit 78. No production success stub was added.
+
+RED `58eba65` produced six new expected failures while 823 prior tests passed on the Ubuntu focused run. GREEN code `ec7a05fc73e5dcb1db0c4fafc99da74d49317ac2` passed focused workflow `37073174865` and root CI `37073174861`; native Mac job `111057097805` recorded **65 lifecycle files / 851 tests** and **73 root files / 899 tests**, zero failures/skips.
+
+## Current increment — reviewed tunnel runtime authority
+
+For a tunnel-enabled reviewed release, the existing runtime authority now additionally exposes a frozen `tunnelRuntime` containing:
+
+- compatibility digest copied from the strict reviewed configuration;
+- a `TunnelAuthority` that requires the exact configuration/compatibility and matching LOCAL_CORE_HEALTHY release evidence;
+- revalidation of the existing sealed release before every grant;
+- descriptor identity of the fixed `bin/tunnel-client` that remains root-owned, executable, single-link and non-writable by group/world;
+- an existing durable `tunnel.execution.json` HELD reservation matching the reviewed config/release before any grant.
+
+The tunnel executable is trusted through the already independently pinned `releaseDigest` plus full `inspectRelease` inventory/content verification. The runtime does not treat the tunnel binary's own metadata as a new trust anchor. Tunnel-enabled binding now also refuses a missing/corrupt tunnel execution record rather than initializing it.
+
+This component does **not** read a control-plane credential, contact a provider, start a tunnel, claim provider health, or solve the independently provisioned ACL/bootstrap trust anchor.
+
+RED `0d5f769` recorded five expected tunnel-authority failures with 830 prior tests passing. GREEN `ba707e3a724335164be604b47669d7337b4ec17d`:
+
+- focused workflow `37073884917`: completed/success on Ubuntu and native Apple Silicon Mac;
+- root CI `37073884924`: completed/success;
+- native Mac job `111059326371`: **66 lifecycle files / 857 tests passed**, zero failures/skips;
+- same Mac root suite: **74 files / 905 tests passed**, zero failures/skips;
+- lint, typecheck, root tests, build, diff/output exclusions all passed;
+- plist verifier accepted 2 roles, rejected 12 altered cases; native `plutil` accepted both plists.
+
+No real credential, OpenAI tunnel session, service installation, administrator action, account/security setting, browser/store operation or merge was performed.
+
+---
+
 # MAC-02 Service Lifecycle — Durable Tunnel Execution Lease Checkpoint
 
 **Updated:** 2026-10-02 (Asia/Seoul)  
