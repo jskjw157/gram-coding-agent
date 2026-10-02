@@ -1,8 +1,9 @@
 import type { ChildProcess } from 'node:child_process';
+import { parseConfig } from './config.js';
 import type { ServiceConfig } from './contracts.js';
-import type { ExecutionLeaseStore } from './execution-lease.js';
+import { ExecutionLeaseStore } from './execution-lease.js';
 import type { ReviewedTunnelRuntime } from './adapters/runtime-authority.js';
-import type { TunnelCustodyPort, TunnelLaunchPlan } from './adapters/native-tunnel.js';
+import { createNativeTunnelCustody, type TunnelCustodyPort, type TunnelLaunchPlan } from './adapters/native-tunnel.js';
 
 export interface ReviewedTunnelCustodyRuntime {
   configuration: Readonly<ServiceConfig>;
@@ -10,9 +11,28 @@ export interface ReviewedTunnelCustodyRuntime {
   tunnelRuntime: ReviewedTunnelRuntime | null;
 }
 
+/** Compose already-reviewed tunnel authority with the same durable execution
+ * store used by the runtime. Construction performs no launch, credential read,
+ * provider request or reservation acquisition.
+ */
 export function createReviewedTunnelCustody(
-  _runtime: ReviewedTunnelCustodyRuntime,
-  _launch: (plan: Readonly<TunnelLaunchPlan>) => ChildProcess,
+  runtime: ReviewedTunnelCustodyRuntime,
+  launch: (plan: Readonly<TunnelLaunchPlan>) => ChildProcess,
 ): TunnelCustodyPort | null {
-  throw new Error('NOT_IMPLEMENTED');
+  try {
+    if (typeof launch !== 'function' || !(runtime.execution instanceof ExecutionLeaseStore)) return null;
+    const config = parseConfig(runtime.configuration);
+    const reviewed = runtime.tunnelRuntime;
+    if (!config.tunnel.enabled) return null;
+    if (!reviewed || typeof reviewed.authority?.acquire !== 'function'
+      || reviewed.compatibility?.digest !== config.tunnel.compatibilityDigest) return null;
+    const authority = reviewed.authority;
+    return createNativeTunnelCustody({
+      authority,
+      execution: runtime.execution,
+      launch: plan => launch(plan),
+    });
+  } catch {
+    return null;
+  }
 }
