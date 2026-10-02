@@ -10,6 +10,8 @@ import { decodeStatus, type ServiceStatus } from '../telemetry.js';
 import { inspectRelease } from '../release-inspection.js';
 import type { RecordFiles } from '../telemetry-store.js';
 import type { CoreAuthority } from './native-core.js';
+import type { TunnelAuthority } from './native-tunnel.js';
+import type { TunnelCompatibility } from '../supervisor.js';
 import { createTrustedFiles, type AclProbe } from './trusted-files.js';
 import { inspectMacHost, inspectMacAccount, type LocalAccount } from './macos-inspection.js';
 import { copyRuntimeLayout, inspectRuntimeDirectories, type RuntimeLayout } from './runtime-directories.js';
@@ -40,9 +42,14 @@ export interface ReviewedCoreRuntime {
   registration: CoreRegistrationStore; readCoreStatus(): Promise<ServiceStatus | null>;
 }
 /** Additive return type; existing Core-only consumers retain their contract. */
+export interface ReviewedTunnelRuntime {
+  authority: TunnelAuthority;
+  compatibility: Readonly<TunnelCompatibility>;
+}
 export interface ReviewedServiceRuntime extends ReviewedCoreRuntime {
   configuration: Readonly<ServiceConfig>;
   stores: RuntimeStores;
+  tunnelRuntime: ReviewedTunnelRuntime | null;
 }
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
 function check(signal: AbortSignal): void { if (signal.aborted) refuse(); }
@@ -166,8 +173,21 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
         if (!before.equals(await configuration(abort))) refuse();
         await unchangedContext(abort); return node;
       }
-      // A factory does not provision, clear or acquire the execution record.
-      await validate(signal); await execution.read('core'); check(signal);
+      async function manifestExecutable(path: 'bin/tunnel-client', abort: AbortSignal): Promise<ExecutableIdentity> {
+        check(abort);
+        const absolute = join(releasePath, path);
+        const before = await lstat(absolute, { bigint: true });
+        if (!before.isFile() || before.uid !== BigInt(layout.ownerUid) || before.nlink !== 1n
+          || (before.mode & 0o6022n) !== 0n || (before.mode & 0o111n) === 0n) refuse();
+        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles);
+        if (!sameFile(before, await lstat(absolute, { bigint: true }))) refuse();
+        check(abort);
+        return Object.freeze({ dev: before.dev, ino: before.ino });
+      }
+      // A factory does not provision, clear or acquire execution records.
+      await validate(signal); await execution.read('core');
+      if (review.config.tunnel.enabled) await execution.read('tunnel');
+      check(signal);
       const nativeProof = createNativePeerProof(join(releasePath, 'bin/peer-owner'));
       async function proofUse<T>(abort: AbortSignal, fallback: T, use: (active: AbortSignal) => Promise<T>): Promise<T> {
         try {
@@ -207,7 +227,46 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           } catch { return null; }
         },
       });
-      return Object.freeze({ authority, execution, registration, readCoreStatus, configuration: review.config, stores });
+      let tunnelRuntime: ReviewedTunnelRuntime | null = null;
+      if (review.config.tunnel.enabled) {
+        const compatibility = Object.freeze<TunnelCompatibility>({ digest: review.config.tunnel.compatibilityDigest });
+        const tunnelAuthority: TunnelAuthority = Object.freeze<TunnelAuthority>({
+          async acquire(input, candidateCompatibility, core, abort) {
+            try {
+              const config = parseConfig(input);
+              if (!config.tunnel.enabled || configDigest(config) !== review.configDigest) return null;
+              const supplied = data(candidateCompatibility, ['digest']);
+              if (supplied.digest !== compatibility.digest) return null;
+              const evidence = data(core, ['state', 'code', 'generation', 'releaseDigest', 'observedAtMs']);
+              if (evidence.state !== 'LOCAL_CORE_HEALTHY' || evidence.code !== 'OK'
+                || typeof evidence.generation !== 'string' || evidence.generation.length === 0
+                || evidence.generation.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(evidence.generation)
+                || evidence.releaseDigest !== review.config.releaseDigest
+                || typeof evidence.observedAtMs !== 'number' || !Number.isSafeInteger(evidence.observedAtMs)
+                || evidence.observedAtMs < 0) return null;
+              return await bounded(10000, abort, async active => {
+                await validate(active);
+                const tunnel = await manifestExecutable('bin/tunnel-client', active);
+                const occupied = await execution.read('tunnel'); check(active);
+                if (occupied.state !== 'HELD' || occupied.configDigest !== review.configDigest
+                  || occupied.releaseDigest !== review.config.releaseDigest) return null;
+                return Object.freeze({
+                  configDigest: review.configDigest,
+                  compatibilityDigest: compatibility.digest,
+                  account: initialAccount,
+                  executable: tunnel,
+                  proof,
+                });
+              });
+            } catch { return null; }
+          },
+        });
+        tunnelRuntime = Object.freeze({ authority: tunnelAuthority, compatibility });
+      }
+      return Object.freeze({
+        authority, execution, registration, readCoreStatus,
+        configuration: review.config, stores, tunnelRuntime,
+      });
     });
   } catch { return null; }
 }
