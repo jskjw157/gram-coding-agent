@@ -1,3 +1,51 @@
+# MAC-02 Service Lifecycle — Exact Stopped Recovery and Session Wiring Checkpoint
+
+**Updated:** 2026-10-03 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Durable Core/Tunnel process registration and exact stopped-recovery are wired through reviewed service sessions. Production bootstrap trust/credentials, installer/packager integration and installed acceptance remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified code/test checkpoint:** `df6284197e5506936721ec544672b3e065a9ebfe`.
+
+## Current increment — crash/reboot-safe stopped recovery
+
+This increment closes the cooperative recovery path that previously left a HELD execution slot blocking later starts after a supervisor crash.
+
+- Core and tunnel process registrations bind the exact execution revision/token to PID, UID, kernel start identity, generation and release digest.
+- `tunnel.process.json` uses the same private run-directory protections as Core but a separate tunnel-only decoder/validator.
+- tunnel start is not exposed until the durable registration is published; failed publication must confirm actual child exit before reporting a failed start.
+- `ExecutionLeaseStore.recoverStopped` transitions HELD→FREE only with literal stopped proof and an exact compare-and-swap of the observed record.
+- stopped recovery treats `OWNED` and `UNKNOWN` as not stopped. Only native `FOREIGN` for the exact registered PID+UID+start-time+executable identity is accepted for a HELD slot.
+- stale stopped proof cannot overwrite a newer owner.
+- a FREE cooperative execution slot can confirm no currently owned child without probing native process state.
+- reviewed runtime binds the recovery verifier to the already reviewed release/helper/context and reviewed service-session dependencies pass that capability into the existing supervisor recovery hook.
+- no TTL, process age, guessed PID, port absence, launchd label presence, stale-file deletion or truthy non-boolean evidence authorizes recovery.
+
+### TDD / exact-head verification
+
+Key RED checkpoints:
+- `ee1ed4229cc76cf9cdfccab61b51b990fedb729c`: stopped-recovery behavior intentionally absent; 4 new failures / 882 previous passes on Ubuntu.
+- `1e145aee0bd6ec67ae03fedeef6fd2bb0992c9ce`: reviewed runtime lacked `confirmStopped`; 4 new failures / 886 previous passes.
+- `f63deda696a616f865569353cb0c1819bc6548b2`: reviewed session dependency glue absent; 2 new failures / 890 previous passes.
+
+Verified exact head `df6284197e5506936721ec544672b3e065a9ebfe`:
+- focused workflow `37097179807`: success on Ubuntu and native Apple Silicon Mac;
+- root CI `37097179859`: success;
+- native Mac lifecycle: **78 files / 914 tests passed**, zero failures/skips;
+- same Mac root suite: **86 files / 962 tests passed**, zero failures/skips;
+- lint, typecheck, root tests, build, diff and production-output checks passed;
+- plist structure: 2 valid roles / 12 altered cases rejected; native `plutil` accepted both generated plists.
+
+No actual launchd install, reboot/logout acceptance, administrator mutation, real credential, Keychain/TCC/FileVault change, network/tunnel session, HAAR business action or merge was performed.
+
+### Remaining deployment blockers
+
+- direct `supervisor-cli.js` remains fail-closed without an independently provisioned production bootstrap trust source;
+- bootstrap ACL helper provenance cannot be derived only from the candidate release it is meant to verify;
+- real Core/tunnel credential providers remain unprovisioned;
+- installer/rollback/packaging integration and sealed artifact provenance are still pending external lanes;
+- actual user-Mac launchd/reboot/logout acceptance and final privileged-boundary review remain NOT_RUN.
+
+---
+
 # MAC-02 Service Lifecycle — Fixed Supervisor Entry and Reviewed Tunnel Authority Checkpoint
 
 **Updated:** 2026-10-03 (Asia/Seoul)  
