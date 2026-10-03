@@ -1,7 +1,7 @@
 import type { RecordFiles } from '../telemetry-store.js';
 import { createPrivateRecordFiles, type StateDirectoryPolicy, type CircuitFileIo } from './private-record-files.js';
 
-/** RED scaffold: tunnel support must not weaken the existing core process family. */
+/** Fixed private tunnel discovery record; no initialization or deletion API. */
 export function createTunnelProcessFilesAt(policy: StateDirectoryPolicy, io?: CircuitFileIo): RecordFiles {
-  return createPrivateRecordFiles('process', policy, io);
+  return createPrivateRecordFiles('tunnel-process', policy, io);
 }
