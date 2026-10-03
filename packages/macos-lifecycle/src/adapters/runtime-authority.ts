@@ -6,6 +6,7 @@ import { configDigest, parseConfig } from '../config.js';
 import { copyRuntimeReview } from '../runtime-review.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
 import { CoreRegistrationStore } from '../core-registration.js';
+import { TunnelRegistrationStore } from '../tunnel-registration.js';
 import { decodeStatus, type ServiceStatus } from '../telemetry.js';
 import { inspectRelease } from '../release-inspection.js';
 import type { RecordFiles } from '../telemetry-store.js';
@@ -17,6 +18,7 @@ import { inspectMacHost, inspectMacAccount, type LocalAccount } from './macos-in
 import { copyRuntimeLayout, inspectRuntimeDirectories, type RuntimeLayout } from './runtime-directories.js';
 import { createExecutionFilesAt } from './execution-files.js';
 import { createCoreProcessFilesAt } from './core-process-files.js';
+import { createTunnelProcessFilesAt } from './tunnel-process-files.js';
 import { createPrivateRecordFiles } from './private-record-files.js';
 import { createRuntimeStores, type RuntimeStores } from './runtime-stores.js';
 import { createNativePeerProof, type ExecutableIdentity, type NativePeerProofPort } from './owned-process.js';
@@ -49,6 +51,7 @@ export interface ReviewedTunnelRuntime {
 export interface ReviewedServiceRuntime extends ReviewedCoreRuntime {
   configuration: Readonly<ServiceConfig>;
   stores: RuntimeStores;
+  tunnelRegistration: TunnelRegistrationStore | null;
   tunnelRuntime: ReviewedTunnelRuntime | null;
 }
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
@@ -137,6 +140,9 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       });
       const execution = new ExecutionLeaseStore(guardRecords(createExecutionFilesAt(directories.runPolicy)));
       const registration = new CoreRegistrationStore(guardRecords(createCoreProcessFilesAt(directories.runPolicy)), execution);
+      const tunnelRegistration = review.config.tunnel.enabled
+        ? new TunnelRegistrationStore(guardRecords(createTunnelProcessFilesAt(directories.runPolicy)), execution)
+        : null;
       const statusFiles = guardRecords(createPrivateRecordFiles('status', directories.runPolicy));
       const readCoreStatus = async (): Promise<ServiceStatus | null> => {
         const group = await statusFiles.read('core');
@@ -265,7 +271,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       }
       return Object.freeze({
         authority, execution, registration, readCoreStatus,
-        configuration: review.config, stores, tunnelRuntime,
+        configuration: review.config, stores, tunnelRegistration, tunnelRuntime,
       });
     });
   } catch { return null; }
