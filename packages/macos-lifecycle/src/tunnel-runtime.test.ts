@@ -4,6 +4,7 @@ import { configDigest, parseConfig } from './config.js';
 import { ExecutionLeaseStore } from './execution-lease.js';
 import type { CoreEvidence } from './health-probe.js';
 import { createReviewedTunnelCustody } from './tunnel-runtime.js';
+import { TunnelRegistrationStore } from './tunnel-registration.js';
 import type { ReviewedTunnelRuntime } from './adapters/runtime-authority.js';
 import type { TunnelLaunchPlan } from './adapters/native-tunnel.js';
 import type { NativePeerProofPort } from './adapters/owned-process.js';
@@ -28,6 +29,7 @@ async function fixture(enabled = true) {
   const files = new MemoryExecutionFiles();
   const execution = new ExecutionLeaseStore(files);
   if (enabled) await execution.initializeNew('tunnel');
+  const tunnelRegistration = new TunnelRegistrationStore(new MemoryExecutionFiles(), execution);
   let authorityCalls = 0;
   const tunnelRuntime: ReviewedTunnelRuntime = Object.freeze({
     compatibility: Object.freeze({ digest: compatibilityDigest }),
@@ -46,7 +48,7 @@ async function fixture(enabled = true) {
       },
     }),
   });
-  return { files, execution, tunnelRuntime, authorityCalls: () => authorityCalls };
+  return { files, execution, tunnelRegistration, tunnelRuntime, authorityCalls: () => authorityCalls };
 }
 
 function child(): ChildProcess {
@@ -61,7 +63,7 @@ describe('reviewed tunnel custody composition', () => {
     let launches = 0;
     const coreOnly = parseConfig({ ...config, tunnel: { enabled: false } });
     expect(createReviewedTunnelCustody({
-      configuration: coreOnly, execution: f.execution, tunnelRuntime: null,
+      configuration: coreOnly, execution: f.execution, tunnelRegistration: null, tunnelRuntime: null,
     }, () => { launches++; return child(); })).toBeNull();
     expect(launches).toBe(0);
   });
@@ -78,7 +80,7 @@ describe('reviewed tunnel custody composition', () => {
   it('constructs custody without acquiring a lease or launching a child', async () => {
     const f = await fixture(); let launches = 0;
     const port = createReviewedTunnelCustody({
-      configuration: config, execution: f.execution, tunnelRuntime: f.tunnelRuntime,
+      configuration: config, execution: f.execution, tunnelRegistration: f.tunnelRegistration, tunnelRuntime: f.tunnelRuntime,
     }, () => { launches++; return child(); });
     expect(port).not.toBeNull();
     expect(launches).toBe(0);
@@ -89,7 +91,7 @@ describe('reviewed tunnel custody composition', () => {
   it('uses the same durable execution store before reviewed authority and releases only after exit', async () => {
     const f = await fixture(); const plans: TunnelLaunchPlan[] = [];
     const port = createReviewedTunnelCustody({
-      configuration: config, execution: f.execution, tunnelRuntime: f.tunnelRuntime,
+      configuration: config, execution: f.execution, tunnelRegistration: f.tunnelRegistration, tunnelRuntime: f.tunnelRuntime,
     }, plan => { plans.push(plan); return child(); });
     if (!port) throw new Error('missing custody');
     const managed = await port.spawn(config, f.tunnelRuntime.compatibility, core, 'tg1', signal());
@@ -109,7 +111,7 @@ describe('reviewed tunnel custody composition', () => {
   it('fails before launch when the tunnel execution record is absent', async () => {
     const f = await fixture(false); let launches = 0;
     const port = createReviewedTunnelCustody({
-      configuration: config, execution: f.execution, tunnelRuntime: f.tunnelRuntime,
+      configuration: config, execution: f.execution, tunnelRegistration: f.tunnelRegistration, tunnelRuntime: f.tunnelRuntime,
     }, () => { launches++; return child(); });
     if (!port) throw new Error('missing custody');
     await expect(port.spawn(config, f.tunnelRuntime.compatibility, core, 'tg1', signal()))
@@ -120,7 +122,7 @@ describe('reviewed tunnel custody composition', () => {
   it('refuses caller compatibility different from the reviewed runtime and frees the reservation', async () => {
     const f = await fixture(); let launches = 0;
     const port = createReviewedTunnelCustody({
-      configuration: config, execution: f.execution, tunnelRuntime: f.tunnelRuntime,
+      configuration: config, execution: f.execution, tunnelRegistration: f.tunnelRegistration, tunnelRuntime: f.tunnelRuntime,
     }, () => { launches++; return child(); });
     if (!port) throw new Error('missing custody');
     await expect(port.spawn(config, { digest: 'c'.repeat(64) }, core, 'tg1', signal()))

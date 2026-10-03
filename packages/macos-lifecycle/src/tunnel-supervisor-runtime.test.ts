@@ -4,6 +4,7 @@ import { configDigest, parseConfig } from './config.js';
 import { ExecutionLeaseStore } from './execution-lease.js';
 import type { CoreEvidence } from './health-probe.js';
 import { createReviewedTunnelSupervisor, type ReviewedTunnelProvider } from './tunnel-supervisor-runtime.js';
+import { TunnelRegistrationStore } from './tunnel-registration.js';
 import type { ReviewedTunnelRuntime } from './adapters/runtime-authority.js';
 import type { NativePeerProofPort, PeerVerdict } from './adapters/owned-process.js';
 import { MemoryExecutionFiles, releaseDigest } from './test-support/execution-fixture.js';
@@ -21,6 +22,7 @@ const core: CoreEvidence = Object.freeze({
 async function fixture(input: { credential?: unknown; observation?: unknown; onProbe?: (set: (value: PeerVerdict) => void) => unknown } = {}) {
   const files = new MemoryExecutionFiles(); const execution = new ExecutionLeaseStore(files);
   await execution.initializeNew('tunnel');
+  const tunnelRegistration = new TunnelRegistrationStore(new MemoryExecutionFiles(), execution);
   let verdict: PeerVerdict = 'OWNED'; let launches = 0; let credentialCalls = 0; let probes = 0;
   const proof: NativePeerProofPort = Object.freeze({
     async capture() { return { sec: '1700000000', usec: '21' }; },
@@ -52,7 +54,7 @@ async function fixture(input: { credential?: unknown; observation?: unknown; onP
     },
     async probe() { probes++; return (input.onProbe ? input.onProbe(value => { verdict = value; }) : (input.observation ?? 'READY')) as 'READY'; },
   };
-  const port = createReviewedTunnelSupervisor({ configuration: config, execution, tunnelRuntime }, provider);
+  const port = createReviewedTunnelSupervisor({ configuration: config, execution, tunnelRegistration, tunnelRuntime }, provider);
   return { execution, provider, port, setVerdict(v: PeerVerdict) { verdict = v; },
     launches: () => launches, credentialCalls: () => credentialCalls, probes: () => probes };
 }
