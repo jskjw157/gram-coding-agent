@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { configDigest, parseConfig } from './config.js';
 import { ExecutionLeaseStore } from './execution-lease.js';
