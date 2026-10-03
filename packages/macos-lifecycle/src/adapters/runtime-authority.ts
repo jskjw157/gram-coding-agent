@@ -1,10 +1,11 @@
 import { lstat } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { join } from 'node:path';
-import { root, type ServiceConfig } from '../contracts.js';
+import { root, type Role, type ServiceConfig } from '../contracts.js';
 import { configDigest, parseConfig } from '../config.js';
 import { copyRuntimeReview } from '../runtime-review.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
+import { createStoppedRecovery } from '../stopped-recovery.js';
 import { CoreRegistrationStore } from '../core-registration.js';
 import { TunnelRegistrationStore } from '../tunnel-registration.js';
 import { decodeStatus, type ServiceStatus } from '../telemetry.js';
@@ -53,6 +54,7 @@ export interface ReviewedServiceRuntime extends ReviewedCoreRuntime {
   stores: RuntimeStores;
   tunnelRegistration: TunnelRegistrationStore | null;
   tunnelRuntime: ReviewedTunnelRuntime | null;
+  confirmStopped(role: Role, signal: AbortSignal): Promise<boolean>;
 }
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
 function check(signal: AbortSignal): void { if (signal.aborted) refuse(); }
@@ -219,6 +221,19 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           catch { return 'UNKNOWN'; }
         },
       });
+      const confirmStopped = createStoppedRecovery({
+        config: review.config,
+        execution,
+        coreRegistration: registration,
+        tunnelRegistration,
+        proof,
+        async executable(role, abort) {
+          if (role === 'core') return validate(abort);
+          if (role !== 'tunnel' || !review.config.tunnel.enabled) return null;
+          await validate(abort);
+          return manifestExecutable('bin/tunnel-client', abort);
+        },
+      });
       const authority: CoreAuthority = Object.freeze<CoreAuthority>({
         async acquire(input, abort) {
           try {
@@ -271,7 +286,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       }
       return Object.freeze({
         authority, execution, registration, readCoreStatus,
-        configuration: review.config, stores, tunnelRegistration, tunnelRuntime,
+        configuration: review.config, stores, tunnelRegistration, tunnelRuntime, confirmStopped,
       });
     });
   } catch { return null; }
