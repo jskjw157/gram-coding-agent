@@ -108,6 +108,19 @@ export class ExecutionLeaseStore {
       this.held.set(lease, { record, digest: sha(bytes), releasing: null }); return lease;
     } catch (error) { return safe(error); }
   }
+  async recoverStopped(role: Role,
+    verify: (record: Readonly<ExecutionRecord>) => Promise<boolean>): Promise<void> {
+    try {
+      roleOnly(role);
+      if (typeof verify !== 'function') invalid();
+      const previous = await this.snapshot(role);
+      if (previous.record.state !== 'HELD') throw new Error('BUSY');
+      const candidate = Object.freeze({ ...previous.record });
+      if ((await verify(candidate)) !== true) throw new Error('BUSY');
+      await this.files.compareAndSwap(role, [previous.digest], 0,
+        encodeExecution({ ...previous.record, revision: previous.record.revision + 1, state: 'FREE' }));
+    } catch (error) { safe(error); }
+  }
   async release(lease: ExecutionLease): Promise<void> {
     try {
       const held = this.held.get(lease); if (!held) invalid();
