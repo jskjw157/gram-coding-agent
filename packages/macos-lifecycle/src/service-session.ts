@@ -57,10 +57,22 @@ export function createServiceSession(role: Role, input: ServiceConfig, inputDeps
 
 /** Compose real native Core custody/discovery with verified store directories.
  * Trust and credential use must already be supplied by the fixed local bootstrap.
- * No unverified transport, old-process recovery or auto-init default is provided.
+ * Construction performs no process, credential or recovery action.
  */
+export function createReviewedServiceSessionDeps(runtime: ReviewedServiceRuntime,
+  credentials: CoreCredentials, tunnel?: SupervisorDeps['tunnel']): ServiceSessionDeps {
+  const ports = createReviewedCorePorts(runtime.configuration, runtime, credentials);
+  const confirmStopped = runtime.confirmStopped.bind(runtime);
+  return Object.freeze({
+    stores: runtime.stores,
+    ...ports,
+    confirmStopped,
+    ...(tunnel ? { tunnel } : {}),
+  });
+}
+
 export function createReviewedServiceSession(role: Role, runtime: ReviewedServiceRuntime,
   credentials: CoreCredentials, tunnel?: SupervisorDeps['tunnel']): ServiceSession {
-  const ports = createReviewedCorePorts(runtime.configuration, runtime, credentials);
-  return createServiceSession(role, runtime.configuration, { stores: runtime.stores, ...ports, ...(tunnel ? { tunnel } : {}) });
+  return createServiceSession(role, runtime.configuration,
+    createReviewedServiceSessionDeps(runtime, credentials, tunnel));
 }
