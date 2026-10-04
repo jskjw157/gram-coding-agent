@@ -34,8 +34,8 @@ function harness(options: {
   const endpoint = new FakeShopifyEndpoint({
     storeDomain: STORE,
     apiVersion: PINNED_SHOPIFY_API_VERSION,
-    inventory: options.inventory,
-    redirectPaths: options.redirectPaths,
+    ...(options.inventory === undefined ? {} : { inventory: options.inventory }),
+    ...(options.redirectPaths === undefined ? {} : { redirectPaths: options.redirectPaths }),
   });
   const broker = new FakeBroker({
     secret: SECRET,

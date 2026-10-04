@@ -11,7 +11,6 @@ import {
   ShopifyAdapter,
   createOperationIntent,
   SHOPIFY_PROVIDER_ID,
-  type PolicyVerdictLike,
   type ShopifyActionName,
   type ShopifySubmitContext,
 } from './adapter.js';
@@ -53,13 +52,14 @@ function harness() {
   const prepare = (
     action: ShopifyActionName,
     params: Record<string, unknown>,
-    ids: { operationId?: string; permitId?: string } = {},
+    ids: { operationId?: string; permitId?: string; storeId?: string } = {},
   ): { ctx: ShopifySubmitContext; operationHash: string } => {
     const operationId = ids.operationId ?? 'op-1';
     const permitId = ids.permitId ?? 'permit-1';
+    const storeId = ids.storeId ?? STORE;
     const intent = createOperationIntent(action, params, {
       taskId: TASK,
-      storeId: STORE,
+      storeId,
       accountId: ACCOUNT,
       operationId,
       recipeId: RECIPE_ID,
@@ -74,7 +74,7 @@ function harness() {
     };
     const ctx: ShopifySubmitContext = {
       taskId: TASK,
-      storeId: STORE,
+      storeId,
       accountId: ACCOUNT,
       operationId,
       permit: { permitId, requesterId: 'ops-exec', workerId: 'shopify-worker' },
@@ -120,35 +120,31 @@ describe('adapter canonical submission', () => {
 
 describe('adapter risk-downgrade refusal', () => {
   it('ignores caller-claimed READ on a high-risk refund without approval', async () => {
-    const { adapter } = harness();
-    const ctx: ShopifySubmitContext = {
-      taskId: TASK,
-      storeId: STORE,
-      accountId: ACCOUNT,
-      operationId: 'op-risk-1',
-      permit: { permitId: 'p', requesterId: 'ops-exec', workerId: 'shopify-worker' },
-      hint: { claimedRisk: 'READ' },
-      verdict: { kind: 'NEEDS_APPROVAL', ruleId: 'POL-OPS-HIGH-RISK', reason: 'approval', operationHash: 'x' },
-    };
+    const { adapter, prepare, endpoint } = harness();
+    const params = { orderId: '1', amount: '10.00' };
+    const { ctx } = prepare('shopify.refund.create', params, { operationId: 'op-risk-1', permitId: 'p-risk-1' });
     await expect(
-      adapter.submit('shopify.refund.create', { orderId: '1', amount: '10.00' }, ctx),
+      adapter.submit('shopify.refund.create', params, {
+        ...ctx,
+        hint: { claimedRisk: 'READ' },
+        verdict: { ...ctx.verdict, kind: 'NEEDS_APPROVAL', ruleId: 'POL-OPS-HIGH-RISK', reason: 'approval' },
+      }),
     ).rejects.toThrow(/approval/i);
+    expect(endpoint.externalEffectCount).toBe(0);
   });
 
   it('treats DENY as non-promotable even with a benign claimed risk', async () => {
-    const { adapter } = harness();
-    const ctx: ShopifySubmitContext = {
-      taskId: TASK,
-      storeId: STORE,
-      accountId: ACCOUNT,
-      operationId: 'op-risk-2',
-      permit: { permitId: 'p', requesterId: 'ops-exec', workerId: 'shopify-worker' },
-      hint: { claimedRisk: 'READ' },
-      verdict: { kind: 'DENY', ruleId: 'POL-OPS-UNKNOWN-ACTION', reason: 'denied', operationHash: 'y' },
-    };
+    const { adapter, prepare, endpoint } = harness();
+    const params = { orderId: '1' };
+    const { ctx } = prepare('shopify.order.cancel', params, { operationId: 'op-risk-2', permitId: 'p-risk-2' });
     await expect(
-      adapter.submit('shopify.order.cancel', { orderId: '1' }, ctx),
+      adapter.submit('shopify.order.cancel', params, {
+        ...ctx,
+        hint: { claimedRisk: 'READ' },
+        verdict: { ...ctx.verdict, kind: 'DENY', ruleId: 'POL-OPS-HIGH-RISK', reason: 'denied' },
+      }),
     ).rejects.toThrow(/deny|denied/i);
+    expect(endpoint.externalEffectCount).toBe(0);
   });
 
   it('rejects verdicts whose operation hash does not match the intent', async () => {
@@ -171,7 +167,7 @@ describe('adapter risk-downgrade refusal', () => {
 
 describe('adapter token-share refusal', () => {
   it('refuses credential-bearing params before the broker is touched', async () => {
-    const { adapter, allow, broker } = harness();
+    const { adapter, prepare, broker } = harness();
     const useSpy = vi.spyOn(broker, 'credentialUse');
     const { ctx } = prepare('shopify.product.read', { productId: '1' });
     await expect(
@@ -206,10 +202,11 @@ describe('adapter write replay + drift + ambiguity', () => {
 
   it('refuses store drift without an external effect', async () => {
     const { adapter, prepare, endpoint } = harness();
-    const { ctx } = prepare('shopify.product.read', { productId: '1' });
+    const { ctx } = prepare('shopify.product.read', { productId: '1' }, { storeId: 'other.myshopify.com' });
     await expect(
-      adapter.submit('shopify.product.read', { productId: '1' }, { ...ctx, storeId: 'other.myshopify.com' }),
-    ).rejects.toThrow(/store/i);
+      adapter.submit('shopify.product.read', { productId: '1' }, ctx),
+    ).rejects.toThrow(/store.*drift/i);
+    expect(endpoint.fetchCallCount).toBe(0);
     expect(endpoint.externalEffectCount).toBe(0);
   });
 
