@@ -11,6 +11,12 @@
 //   (resource -> epoch) next to the operations/effects tables.
 // - Durable blocks are indefinite: they ignore TTL entirely and clear only
 //   via unblock(). TTL expiry frees *leases*; it never frees *blocks*.
+// - Durable wiring (T4): every mutation emits a LeaseJournalEvent on the
+//   optional journal port, and snapshot()/rehydrate() move the full lease
+//   state (holds + epochs + blocks + nextEpoch) as plain JSON. The journal
+//   is the WP-07 persistence target hook: the persistence lane backs it
+//   with SQLite (M2 LockRepository row shape); this lane never touches the
+//   database directly and never forks the M2 state machine.
 import { randomUUID } from 'node:crypto';
 
 export const DEFAULT_TTL_MS = 30_000;
@@ -29,6 +35,35 @@ export interface LeaseManagerOptions {
   readonly ttlMs?: number;
   readonly heartbeatMs?: number;
   readonly now?: () => number;
+  readonly journal?: LeaseJournal;
+}
+
+export type LeaseJournalEventKind = 'acquired' | 'heartbeat' | 'released' | 'blocked' | 'unblocked';
+
+export interface LeaseJournalEvent {
+  readonly kind: LeaseJournalEventKind;
+  readonly resources: readonly string[];
+  readonly owner: string | null;
+  readonly fenceEpoch: number | null;
+  readonly reason: string | null;
+}
+
+export type LeaseJournal = (event: LeaseJournalEvent) => void;
+
+export interface PersistedLeaseHold {
+  readonly resource: string;
+  readonly owner: string;
+  readonly token: string;
+  readonly expiresAt: number;
+}
+
+export interface PersistedLeaseSnapshot {
+  readonly version: 1;
+  readonly ttlMs: number;
+  readonly nextEpoch: number;
+  readonly held: readonly PersistedLeaseHold[];
+  readonly epochs: Readonly<Record<string, number>>;
+  readonly blocks: Readonly<Record<string, string>>;
 }
 
 export class LeaseError extends Error {
@@ -54,6 +89,7 @@ const assertResource = (value: string): void => {
 export class LeaseManager {
   private readonly ttlMs: number;
   private readonly clock: () => number;
+  private readonly journal: LeaseJournal;
   private readonly held = new Map<string, HeldLease>();
   private readonly epochs = new Map<string, number>();
   private readonly blocks = new Map<string, string>();
@@ -66,6 +102,65 @@ export class LeaseManager {
     }
     this.ttlMs = ttlMs;
     this.clock = opts?.now ?? (() => Date.now());
+    this.journal = opts?.journal ?? ((): void => {});
+  }
+
+  /** Plain-JSON durable state for the WP-07 persistence target. */
+  snapshot(): PersistedLeaseSnapshot {
+    const held: PersistedLeaseHold[] = [];
+    for (const [resource, lease] of this.held) {
+      held.push({ resource, owner: lease.owner, token: lease.token, expiresAt: lease.expiresAt });
+    }
+    held.sort((a, b) => (a.resource < b.resource ? -1 : a.resource > b.resource ? 1 : 0));
+    const epochs: Record<string, number> = {};
+    for (const [resource, epoch] of this.epochs) epochs[resource] = epoch;
+    const blocks: Record<string, string> = {};
+    for (const [resource, reason] of this.blocks) blocks[resource] = reason;
+    return { version: 1, ttlMs: this.ttlMs, nextEpoch: this.nextEpoch, held, epochs, blocks };
+  }
+
+  /** Restore durable state after restart. Read-only: emits no journal events. */
+  rehydrate(snapshot: PersistedLeaseSnapshot): void {
+    if (snapshot.version !== 1) throw new LeaseError('unsupported lease snapshot version');
+    if (snapshot.ttlMs !== this.ttlMs) throw new LeaseError('lease snapshot ttlMs mismatch');
+    if (!Number.isSafeInteger(snapshot.nextEpoch) || snapshot.nextEpoch < 0) {
+      throw new LeaseError('lease snapshot nextEpoch is invalid');
+    }
+    const held = new Map<string, HeldLease>();
+    for (const entry of snapshot.held) {
+      assertResource(entry.resource);
+      if (typeof entry.owner !== 'string' || entry.owner.length === 0) {
+        throw new LeaseError('lease snapshot owner is invalid');
+      }
+      if (typeof entry.token !== 'string' || entry.token.length === 0) {
+        throw new LeaseError('lease snapshot token is invalid');
+      }
+      if (!Number.isFinite(entry.expiresAt)) throw new LeaseError('lease snapshot expiresAt is invalid');
+      held.set(entry.resource, { owner: entry.owner, token: entry.token, expiresAt: entry.expiresAt });
+    }
+    const epochs = new Map<string, number>();
+    for (const [resource, epoch] of Object.entries(snapshot.epochs)) {
+      assertResource(resource);
+      if (!Number.isSafeInteger(epoch) || epoch < 0) {
+        throw new LeaseError(`lease snapshot epoch is invalid: ${resource}`);
+      }
+      epochs.set(resource, epoch);
+    }
+    const blocks = new Map<string, string>();
+    for (const [resource, reason] of Object.entries(snapshot.blocks)) {
+      assertResource(resource);
+      if (typeof reason !== 'string' || reason.length === 0) {
+        throw new LeaseError(`lease snapshot block reason is invalid: ${resource}`);
+      }
+      blocks.set(resource, reason);
+    }
+    this.held.clear();
+    for (const [resource, lease] of held) this.held.set(resource, lease);
+    this.epochs.clear();
+    for (const [resource, epoch] of epochs) this.epochs.set(resource, epoch);
+    this.blocks.clear();
+    for (const [resource, reason] of blocks) this.blocks.set(resource, reason);
+    this.nextEpoch = snapshot.nextEpoch;
   }
 
   /** Acquire all resources atomically in sorted order, or hold none. */
@@ -100,6 +195,7 @@ export class LeaseManager {
       this.held.set(resource, { owner, token, expiresAt });
       this.epochs.set(resource, epoch);
     }
+    this.journal({ kind: 'acquired', resources: sorted, owner, fenceEpoch: epoch, reason: null });
     return { resources: sorted, owner, token, fenceEpoch: epoch, acquiredAt: now, expiresAt };
   }
 
@@ -118,6 +214,7 @@ export class LeaseManager {
       }
     }
     for (const resource of resources) this.held.delete(resource);
+    this.journal({ kind: 'released', resources: [...resources].sort(), owner, fenceEpoch: null, reason: null });
   }
 
   /** Renew expiry without bumping the fence epoch. */
@@ -139,6 +236,13 @@ export class LeaseManager {
     }
     const [first] = lease.resources;
     const fenceEpoch = first === undefined ? 0 : (this.epochs.get(first) ?? 0);
+    this.journal({
+      kind: 'heartbeat',
+      resources: [...lease.resources].sort(),
+      owner: lease.owner,
+      fenceEpoch,
+      reason: null,
+    });
     return {
       resources: [...lease.resources].sort(),
       owner: lease.owner,
@@ -154,15 +258,38 @@ export class LeaseManager {
     return fenceEpoch < (this.epochs.get(resource) ?? 0);
   }
 
-  /** Throw StaleFenceError for superseded holders; LeaseError for blocks. */
-  assertUsable(resource: string, fenceEpoch: number): void {
+  /**
+   * Full usability gate (T4). Without identity this is the legacy epoch-only
+   * check, which alone is insufficient: it stays silent on expired or
+   * released leases. With owner + token it additionally requires a live
+   * current lease held by that exact identity at the current fence epoch,
+   * plus the absence of a durable resource block.
+   */
+  assertUsable(resource: string, fenceEpoch: number, owner?: string, token?: string): void {
     if (this.blocks.has(resource)) {
       throw new LeaseError(`resource is durably blocked: ${resource}`);
     }
-    if (this.isStale(resource, fenceEpoch)) {
+    if (owner === undefined || token === undefined) {
+      if (this.isStale(resource, fenceEpoch)) {
+        throw new StaleFenceError(
+          `stale fence: resource=${resource} presented=${fenceEpoch} current=${this.epochs.get(resource) ?? 0}`,
+        );
+      }
+      return;
+    }
+    const currentEpoch = this.epochs.get(resource) ?? 0;
+    if (fenceEpoch !== currentEpoch) {
       throw new StaleFenceError(
-        `stale fence: resource=${resource} presented=${fenceEpoch} current=${this.epochs.get(resource) ?? 0}`,
+        `stale fence: resource=${resource} presented=${fenceEpoch} current=${currentEpoch}`,
       );
+    }
+    const now = this.clock();
+    const current = this.held.get(resource);
+    if (current === undefined || current.expiresAt <= now) {
+      throw new LeaseError(`no usable lease held: ${resource}`);
+    }
+    if (current.owner !== owner || current.token !== token) {
+      throw new LeaseError(`lease identity mismatch: ${resource}`);
     }
   }
 
@@ -173,10 +300,12 @@ export class LeaseManager {
       throw new LeaseError('block reason must be a non-empty string');
     }
     this.blocks.set(resource, reason);
+    this.journal({ kind: 'blocked', resources: [resource], owner: null, fenceEpoch: null, reason });
   }
 
   unblock(resource: string): void {
     this.blocks.delete(resource);
+    this.journal({ kind: 'unblocked', resources: [resource], owner: null, fenceEpoch: null, reason: null });
   }
 
   isBlocked(resource: string): boolean {
