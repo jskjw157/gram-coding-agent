@@ -5,12 +5,13 @@ import {
   RetryBudgetExhaustedError,
   StaleFenceDispatchError,
 } from './effect-ledger.js';
+import type { EffectRecord } from './effect-ledger.js';
 
 describe('EffectLedger (durable-before-effect, UNKNOWN, reconcile-before-retry)', () => {
   it('RED: DISPATCHING is durably committed BEFORE transmit', async () => {
     const order: string[] = [];
-    const ledger = new EffectLedger(() => {
-      order.push('commit');
+    const ledger = new EffectLedger((record: EffectRecord) => {
+      order.push(`commit:${record.state}`);
     });
     const rec = ledger.prepare('op-1', 'READ');
     await ledger.dispatch(rec.effectId, () => {
