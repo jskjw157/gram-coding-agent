@@ -4,6 +4,8 @@
 
 **상태: 구현 계획 제안 / 실행 전 검토 필요.** 아래 architecture decisions와 검증 계약은 USER APPROVED지만, 이 문서는 구현 완료나 설치·계정 생성·live 연결·병합 승인이 아니다. 이번 작성에서는 production code와 다른 lane을 변경하지 않는다.
 
+**Git 전달 상태:** 이 계획과 승인 decision ledger는 docs 전용 브랜치 `docs/haar-mac-approved-decisions-plan`에 commit/push하여 원격에 보존한다. 이는 문서 전달을 위한 Git mutation이며 production code, MAC-02 lane, issue 상태, 설치·계정·live 환경을 변경했다는 뜻이 아니다. 이 문서를 PR로 제안하더라도 자동 merge나 production acceptance를 의미하지 않는다.
+
 ## 1. Source of truth와 범위
 
 - 승인된 결정과 검증 계약: `docs/operations/decisions/2026-10-04-haar-live-provider-and-auth-decisions.md`, D1–D13. 후기 결정 D11/D12/D13이 앞선 설명을 구체화하거나 대체한다.
