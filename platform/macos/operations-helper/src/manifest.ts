@@ -15,6 +15,14 @@ export class ManifestError extends Error {
   override name = 'ManifestError';
 }
 
-/** RED STUB: accepts any operation. GREEN: allowlisted-operation-only. */
-export const approveOperation = (_operation: string, _manifest: HelperManifestShape): void =>
-  undefined;
+/** Allowlisted-operation-only acceptance: anything not in the manifest is refused. */
+export const approveOperation = (operation: string, manifest: HelperManifestShape): void => {
+  if (operation.length === 0) {
+    throw new ManifestError('operation refused: name must be bound (non-empty)');
+  }
+  if (!manifest.allowlistedOperations.includes(operation)) {
+    throw new ManifestError(
+      `operation refused: '${operation}' not in manifest allowlist (allowlisted-operation-only)`,
+    );
+  }
+};

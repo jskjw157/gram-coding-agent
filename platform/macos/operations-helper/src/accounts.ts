@@ -18,9 +18,12 @@ export class AccountMappingError extends Error {
   override name = 'AccountMappingError';
 }
 
-/** RED STUB: returns a placeholder that mismatches the contract. */
-export const domainAccountFor = (_domain: DomainName): DomainAccount => ({
-  user: 'mac_ops',
-  uid: 502,
-  domain: 'OPERATIONS',
-});
+/** Target-Mac account facts as config — never discovered at runtime. */
+export const domainAccountFor = (domain: DomainName): DomainAccount => {
+  switch (domain) {
+    case 'OPERATIONS':
+      return { user: 'mac_ops', uid: 502, domain: 'OPERATIONS' };
+    case 'CODING':
+      return { user: 'mac_code', uid: 503, domain: 'CODING' };
+  }
+};
