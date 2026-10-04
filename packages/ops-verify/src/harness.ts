@@ -345,11 +345,12 @@ export class CrashSafeExecutor {
   }
 
   private settleFromEvidence(effectId: string, observed: 'CONFIRMED' | 'NOT_APPLIED'): void {
-    try {
-      this.ledger.reconcile(effectId, { observedState: observed, policyDecision: 'ALLOW' });
-    } catch {
-      this.ledger.reconcile(effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
-    }
+    this.ledger.reconcile(effectId, {
+      observedState: observed,
+      policyDecision: 'ALLOW',
+      providerEvidence:
+        observed === 'CONFIRMED' ? 'provider-confirmed-applied' : 'provider-confirmed-not-applied',
+    });
   }
 
   private query(operationId: string, point: CrashPoint): TriState {
