@@ -1,5 +1,10 @@
 import type Database from 'better-sqlite3';
 import type { TaskId } from '@gram/domain';
+import {
+  sanitizeAuditPayload,
+  sanitizeAuditValue,
+  type SanitizedAuditValue,
+} from './audit-repository.js';
 
 export const REQUEST_CONFLICT = 'REQUEST_CONFLICT' as const;
 
@@ -18,9 +23,9 @@ export interface CreateOperationInput {
   requesterId: string;
   clientRequestId: string;
   status?: string;
-  metadata?: unknown;
+  metadata?: SanitizedAuditValue;
   digest?: string;
-  receipt?: unknown;
+  receipt?: SanitizedAuditValue;
 }
 
 export interface StoredOperation {
@@ -84,8 +89,8 @@ export class OperationRepository {
   createOperation(input: CreateOperationInput): StoredOperation {
     const now = new Date().toISOString();
     const status = input.status ?? 'PENDING';
-    const metadataJson = input.metadata === undefined ? null : JSON.stringify(input.metadata);
-    const receiptJson = input.receipt === undefined ? null : JSON.stringify(input.receipt);
+    const metadataJson = input.metadata === undefined ? null : JSON.stringify(sanitizeAuditValue(input.metadata));
+    const receiptJson = input.receipt === undefined ? null : JSON.stringify(sanitizeAuditValue(input.receipt));
     const digest = input.digest ?? null;
 
     const createTransaction = this.db.transaction((): StoredOperation => {
@@ -130,17 +135,20 @@ export class OperationRepository {
       }
 
       // D11 audit minimal evidence: canonical metadata/digest/sanitized receipt
-      // only. Raw bodies are never accepted by the input type and never written.
-      const canonical = JSON.stringify({
-        operationId,
-        taskId: input.taskId,
-        step: input.step,
-        revision: input.revision,
-        requesterId: input.requesterId,
-        metadata: input.metadata ?? null,
-        digest,
-        receipt: input.receipt ?? null,
-      });
+      // only. The payload passes through the allowlisted, secret-redacted audit
+      // schema, so raw bodies and secret values can never reach the audit table.
+      const canonical = JSON.stringify(
+        sanitizeAuditPayload({
+          operationId,
+          taskId: input.taskId,
+          step: input.step,
+          revision: input.revision,
+          requesterId: input.requesterId,
+          metadata: input.metadata ?? null,
+          digest,
+          receipt: input.receipt ?? null,
+        }),
+      );
       this.db
         .prepare('INSERT INTO audit_events(task_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)')
         .run(input.taskId, 'operation.created', canonical, now);

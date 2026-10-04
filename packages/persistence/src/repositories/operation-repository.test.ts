@@ -282,6 +282,29 @@ describe('Operations persistence (005_operations)', () => {
     expect(flat).not.toContain('raw-body');
   });
 
+  it('redacts secret values in operation metadata/receipt before the audit write', () => {
+    const db = openMigratedV5(tempDatabasePath());
+    const task = seedTask(db);
+    const ops = new OperationRepository(db);
+    ops.createOperation({
+      taskId: task.id,
+      step: 'audit-redact',
+      revision: 1,
+      requesterId: 'req-redact',
+      clientRequestId: 'idem-redact',
+      metadata: { lane: 'ops', apiKey: 'sk-live-secret-0123456789' },
+      digest: 'sha256:deadbeef',
+      receipt: { status: 'ok', password: 'hunter2-secret' },
+    });
+    const row = db
+      .prepare("SELECT payload_json AS payload FROM audit_events WHERE event_type = 'operation.created' ORDER BY id DESC LIMIT 1")
+      .get() as { payload: string };
+    const flat = JSON.stringify(JSON.parse(row.payload) as Record<string, unknown>);
+    expect(flat).not.toContain('sk-live-secret-0123456789');
+    expect(flat).not.toContain('hunter2-secret');
+    expect(flat).toContain('***REDACTED***');
+  });
+
   it('enforces domain NO NULL triggers on operations critical columns', () => {
     const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
