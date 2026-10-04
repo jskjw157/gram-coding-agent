@@ -7,6 +7,9 @@
 // - Reconcile-before-retry: only a reconciled NOT_APPLIED record can retry.
 // - Retry needs policy/approval recheck, not just a local idempotency key.
 // - Bounded READ retry budget (MAX_READ_RETRIES); WRITE/DELETE never retry.
+// - D12 query-to-tri-state: UNKNOWN settles only via provider-query evidence
+//   (provider-confirmed-applied / provider-confirmed-not-applied). Settlement
+//   without that evidence stays refused.
 //
 // This module holds no timers and no scheduler: leases + ledger only.
 import { randomUUID } from 'node:crypto';
@@ -17,6 +20,9 @@ export type LedgerEffectClass = 'READ' | 'WRITE' | 'DELETE';
 
 /** Bounded READ retry budget. WRITE/DELETE effects never auto-retry. */
 export const MAX_READ_RETRIES = 3;
+
+/** Provider-query outcome that settles an UNKNOWN effect. Nothing else does. */
+export type ProviderQueryEvidence = 'provider-confirmed-applied' | 'provider-confirmed-not-applied';
 
 export interface EffectRecord {
   readonly effectId: string;
@@ -32,6 +38,7 @@ export interface ReconcileEvidence {
   readonly policyDecision: 'ALLOW' | 'NEEDS_APPROVAL' | 'DENY';
   readonly approvalId?: string;
   readonly approvalResolved?: boolean;
+  readonly providerEvidence?: ProviderQueryEvidence;
 }
 
 export interface RetryRequest {
@@ -82,6 +89,21 @@ const copyOf = (stored: StoredEffect): EffectRecord => ({
 
 const retryBudgetFor = (effectClass: LedgerEffectClass): number =>
   effectClass === 'READ' ? MAX_READ_RETRIES : 0;
+
+/**
+ * D12 query-to-tri-state: an UNKNOWN effect settles only when the observed
+ * state matches provider-query evidence. Every other UNKNOWN transition
+ * (evidence-less, mismatched) stays refused.
+ */
+const settlesUnknownViaProvider = (
+  state: EffectState,
+  evidence: ReconcileEvidence,
+): boolean =>
+  state === 'UNKNOWN' &&
+  ((evidence.observedState === 'CONFIRMED' &&
+    evidence.providerEvidence === 'provider-confirmed-applied') ||
+    (evidence.observedState === 'NOT_APPLIED' &&
+      evidence.providerEvidence === 'provider-confirmed-not-applied'));
 
 export class EffectLedger {
   private readonly effects = new Map<string, StoredEffect>();
@@ -171,8 +193,13 @@ export class EffectLedger {
   reconcile(effectId: string, evidence: ReconcileEvidence): EffectRecord {
     const stored = this.effects.get(effectId);
     if (stored === undefined) throw new LedgerError(`unknown effect: ${effectId}`);
-    if (stored.state === 'PREPARED' || stored.state === 'DISPATCHING') {
-      // Reconcile observes ground truth for unsettled or interrupted effects.
+    if (
+      stored.state === 'PREPARED' ||
+      stored.state === 'DISPATCHING' ||
+      settlesUnknownViaProvider(stored.state, evidence)
+    ) {
+      // Reconcile observes ground truth for unsettled or interrupted effects,
+      // or settles UNKNOWN via matching provider-query evidence.
     } else if (stored.state !== evidence.observedState && evidence.observedState !== 'UNKNOWN') {
       throw new LedgerError(
         `reconcile conflicts with settled ${stored.state}: observed ${evidence.observedState}`,
