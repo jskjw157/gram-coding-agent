@@ -141,7 +141,8 @@ describe('rotation-crash recovery', () => {
     });
 
     // Full re-auth + reconcile is the only way back; the crashed grant is gone.
-    keeper.resolveWithReauth(KEY);
+    // The fresh lifetime arrives with the re-auth response, never hardcoded.
+    keeper.resolveWithReauth(KEY, { expiresInSeconds: 3_600 });
     await expect(keeper.access(KEY)).rejects.toMatchObject({
       code: 'RECONCILE_REQUIRED',
     });
@@ -193,7 +194,7 @@ describe('reconcile-before-resume (no blind resend)', () => {
     });
     keeper.seedExpired(KEY);
 
-    keeper.resolveWithReauth(KEY);
+    keeper.resolveWithReauth(KEY, { expiresInSeconds: 3_600 });
     expect(keeper.snapshot(KEY).needsReconcile).toBe(true);
     // Blind resend without reconcile is refused, even though auth is fresh.
     await expect(keeper.access(KEY)).rejects.toMatchObject({
