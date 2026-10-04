@@ -25,6 +25,74 @@ export interface RollbackFixtureOptions {
   acceptedSets?: readonly (readonly number[])[];
   authDenied?: boolean;
   lockHeld?: boolean;
+  /** Live release lane: 'current' (default, release B) or 'retained' (live already equals the reviewed target). */
+  liveRelease?: 'current' | 'retained';
+  /** When true the reviewed retained release is absent (nothing to roll back to). */
+  retainedAbsent?: boolean;
+  /** Accepted schema sets owned by the retained target release. */
+  retainedAccepted?: readonly (readonly number[])[];
+  /** When true the database is still open (confirmDatabaseClosed must fail). */
+  dbOpen?: boolean;
+  /** When true restore writes tampered bytes so reread/verify must fail. */
+  restoreCorrupt?: boolean;
+}
+
+/** Reviewed release lane: exact release.json bytes bound to their sha256
+ * digest. Key order mirrors the T7 sealed packager
+ * (platform/macos/package-release.mjs buildManifest: schemaVersion,
+ * releaseId, sourceCommit, lockDigest, files, coreTools,
+ * schemaCompatibility, tunnelCompatibilityDigest?, single trailing
+ * newline); digest is the sha256 of those exact bytes. This is a
+ * test-double lane only — never the real packager or inspector.
+ */
+export interface ReviewedRelease {
+  digest: string;
+  releaseJson: Buffer;
+  acceptedSchema: readonly (readonly number[])[];
+}
+
+export interface CurrentRelease {
+  digest: string | null;
+  releaseJson: Buffer | null;
+}
+
+/** Narrow rollback ports shape (structural twin of the rollback-contracts
+ * RollbackPorts; wired to the contract type in GREEN).
+ */
+export interface ReviewedRollbackPorts {
+  authorizeLocalAdmin(): Promise<boolean>;
+  lock(): Promise<{ acquired: boolean; release(): Promise<void> }>;
+  readCurrentRelease(): Promise<CurrentRelease>;
+  readRetainedRelease(targetReleaseDigest: string): Promise<ReviewedRelease | null>;
+  services(): {
+    stop(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' | 'FOREIGN_SERVICE' }>;
+    start(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' }>;
+    isStopped(role: string): Promise<boolean>;
+    ownedHealthy(role: string): Promise<boolean>;
+  };
+  confirmDatabaseClosed(): Promise<boolean>;
+  readClosedSchema(): Promise<ClosedSchemaReading>;
+  restoreRetained(target: ReviewedRelease): Promise<void>;
+  rereadLiveRelease(): Promise<CurrentRelease>;
+  readLiveManifest(): Promise<Buffer | null>;
+  journal(): { read(): Promise<Buffer | null>; writeStage(stage: never, body: Buffer): Promise<void> };
+}
+
+function buildReleaseJsonBytes(input: {
+  releaseId: string; sourceCommit: string; lockDigest: string;
+  schemaMinimum: number; schemaMaximum: number; tunnelDigest?: string;
+}): Buffer {
+  const manifest: Record<string, unknown> = {
+    schemaVersion: 1,
+    releaseId: input.releaseId,
+    sourceCommit: input.sourceCommit,
+    lockDigest: input.lockDigest,
+    files: [{ path: 'bin/node', sha256: input.lockDigest, executable: true }],
+    coreTools: ['agent_health'],
+    schemaCompatibility: { minimum: input.schemaMinimum, maximum: input.schemaMaximum },
+  };
+  if (input.tunnelDigest !== undefined) manifest.tunnelCompatibilityDigest = input.tunnelDigest;
+  return Buffer.from(`${JSON.stringify(manifest)}\n`, 'utf8');
 }
 
 function manifestDigestOf(live: Map<PublishKind, Buffer | null>): string | null {
@@ -62,7 +130,13 @@ function manifestDigestOf(live: Map<PublishKind, Buffer | null>): string | null 
 export interface RollbackFixture {
   config: ServiceConfig;
   ports: InstallPorts;
+  rollbackPorts: ReviewedRollbackPorts;
+  calls: string[];
   installedDigest(): Promise<string>;
+  currentDigest(): string;
+  retainedDigest(): string;
+  liveReleaseBytes(): Buffer | null;
+  retainedBytes(): Buffer | null;
   snapshotBytes(): Buffer;
   databaseBytes(): Buffer;
   serviceMutations: string[];
@@ -103,8 +177,27 @@ export function makeRollbackFixture(options: RollbackFixtureOptions = {}): Rollb
   }
 
   const serviceMutations: string[] = [];
+  const calls: string[] = [];
   const stopped = new Map<string, boolean>([['core', true], ['tunnel', true]]);
   let lockHeld = options.lockHeld ?? false;
+
+  const lockDigest = shaBytes(Buffer.from('lab-lock-bytes', 'utf8'));
+  const releaseA = buildReleaseJsonBytes({
+    releaseId: 'lab-001', sourceCommit: 'a'.repeat(40), lockDigest,
+    schemaMinimum: 1, schemaMaximum: 1,
+  });
+  const releaseB = buildReleaseJsonBytes({
+    releaseId: 'lab-002', sourceCommit: 'b'.repeat(40), lockDigest,
+    schemaMinimum: 1, schemaMaximum: 1,
+  });
+  let liveRelease: Buffer | null = !installed
+    ? null
+    : Buffer.from(options.liveRelease === 'retained' ? releaseA : releaseB);
+  const retainedRelease: Buffer | null = installed && !options.retainedAbsent
+    ? Buffer.from(releaseA)
+    : null;
+  const retainedAccepted: readonly (readonly number[])[] = options.retainedAccepted ?? [[1]];
+  const digestOfRelease = (bytes: Buffer): string => shaBytes(bytes);
 
   const dbPrimary = Buffer.from('lab-db-bytes-v1:' + 'a'.repeat(64), 'utf8');
   const dbWal = Buffer.from('lab-wal-bytes-v1:' + 'b'.repeat(32), 'utf8');
@@ -249,13 +342,124 @@ export function makeRollbackFixture(options: RollbackFixtureOptions = {}): Rollb
     },
   };
 
+  const sharedServices = {
+    async stop(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' | 'FOREIGN_SERVICE' }> {
+      serviceMutations.push(`stop:${role}`);
+      calls.push(`stop:${role}`);
+      stopped.set(role, true);
+      return { ok: true, code: 'OK' };
+    },
+    async start(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' }> {
+      serviceMutations.push(`start:${role}`);
+      stopped.set(role, false);
+      return { ok: true, code: 'OK' };
+    },
+    async isStopped(role: string): Promise<boolean> {
+      return stopped.get(role) ?? true;
+    },
+    async ownedHealthy(role: string): Promise<boolean> {
+      void role;
+      return stopped.get(role) === false;
+    },
+  };
+
+  const rollbackPorts: ReviewedRollbackPorts = {
+    async authorizeLocalAdmin(): Promise<boolean> {
+      calls.push('authorize');
+      return options.authDenied ? false : true;
+    },
+    async lock() {
+      calls.push('lock');
+      if (lockHeld) return { acquired: false, release: async () => undefined };
+      lockHeld = true;
+      return {
+        acquired: true,
+        release: async () => { lockHeld = false; },
+      };
+    },
+    async readCurrentRelease(): Promise<CurrentRelease> {
+      calls.push('readCurrent');
+      return {
+        digest: liveRelease === null ? null : digestOfRelease(liveRelease),
+        releaseJson: liveRelease === null ? null : Buffer.from(liveRelease),
+      };
+    },
+    async readRetainedRelease(targetReleaseDigest: string): Promise<ReviewedRelease | null> {
+      calls.push('readRetained');
+      if (retainedRelease === null || digestOfRelease(retainedRelease) !== targetReleaseDigest) return null;
+      return {
+        digest: digestOfRelease(retainedRelease),
+        releaseJson: Buffer.from(retainedRelease),
+        acceptedSchema: retainedAccepted,
+      };
+    },
+    services() {
+      return sharedServices;
+    },
+    async confirmDatabaseClosed(): Promise<boolean> {
+      calls.push('confirmDb');
+      return options.dbOpen === true ? false : true;
+    },
+    async readClosedSchema(): Promise<ClosedSchemaReading> {
+      calls.push('readSchema');
+      return ports.readClosedSchema();
+    },
+    async restoreRetained(target: ReviewedRelease): Promise<void> {
+      calls.push('restore');
+      if (options.restoreCorrupt === true) {
+        const tampered = Buffer.from(target.releaseJson);
+        tampered[20] = (tampered[20] as number) ^ 0xff;
+        liveRelease = tampered;
+        return;
+      }
+      liveRelease = Buffer.from(target.releaseJson);
+    },
+    async rereadLiveRelease(): Promise<CurrentRelease> {
+      calls.push('verify');
+      return {
+        digest: liveRelease === null ? null : digestOfRelease(liveRelease),
+        releaseJson: liveRelease === null ? null : Buffer.from(liveRelease),
+      };
+    },
+    async readLiveManifest(): Promise<Buffer | null> {
+      return ports.publish().readLive('manifest');
+    },
+    journal() {
+      return {
+        async read(): Promise<Buffer | null> {
+          return ports.journal().read();
+        },
+        async writeStage(stage: never, body: Buffer): Promise<void> {
+          calls.push('journal');
+          return ports.journal().writeStage(stage, body);
+        },
+      };
+    },
+  };
+
   return {
     config,
     ports,
+    rollbackPorts,
+    calls,
     async installedDigest(): Promise<string> {
       const prior = await readPrior();
       if (prior.digest === null) throw new Error('expected installed digest');
       return prior.digest;
+    },
+    currentDigest(): string {
+      if (liveRelease === null) throw new Error('expected live release');
+      return digestOfRelease(liveRelease);
+    },
+    retainedDigest(): string {
+      if (retainedRelease === null) throw new Error('expected retained release');
+      return digestOfRelease(retainedRelease);
+    },
+    liveReleaseBytes(): Buffer | null {
+      return liveRelease === null ? null : Buffer.from(liveRelease);
+    },
+    retainedBytes(): Buffer | null {
+      return retainedRelease === null ? null : Buffer.from(retainedRelease);
     },
     snapshotBytes(): Buffer {
       const entries: Array<[string, string | null]> = (['configuration', 'core', 'tunnel', 'manifest', 'journal'] as PublishKind[])
