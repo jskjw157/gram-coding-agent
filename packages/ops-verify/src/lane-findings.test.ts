@@ -6,14 +6,15 @@
 // matching evidence settles, evidence-less/mismatched stays refused.
 // F2 (open): ledger is memory-only; cross-restart recovery needs an
 // external durable journal.
-// F3 (open, Gate A regen): packages/observability/src/logger.test.ts fails
-// collection under the root runner (`vitest run` / `pnpm test`, the CI path):
-// it imports `@gram/secrets` by name, whose exports default targets
-// `./dist/index.js`, but no dist is built before `pnpm test` in CI and the
-// root vitest config carries no `@gram/secrets` src alias (only the
-// per-package config does). Untouched since bootstrap #131 and by all 10
-// regen merges; fixing needs a lane or root-config edit, both out of
-// ops-verify scope. Pinned here, never skipped.
+// F3 (open, Gate A regen): logger.test.ts collection is environment-
+// sensitive. Under the local root runner (Node 22) collection fails:
+// the test imports `@gram/secrets` by name, whose exports default targets
+// `./dist/index.js`, but no dist is built before `pnpm test` and the root
+// has no `@gram/secrets` src alias (only the per-package config does).
+// Hosted CI (Node 24, run 37236910021) collects and passes it, so this is
+// a local-runner gap, not a lane break. Untouched since bootstrap #131
+// and by all 10 regen merges; any fix needs a lane or root-config edit,
+// both out of ops-verify scope. Pinned here, never skipped.
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { EffectLedger } from '../../task-engine/src/effect-ledger.js';
@@ -86,7 +87,7 @@ describe('lane-boundary pins', () => {
     expect(ledger.get(rec.effectId)?.state).toBe('PREPARED');
   });
 
-  it('F3 open: logger.test.ts collection preconditions still unmet (dist-less secrets, no root alias)', async () => {
+  it('F3 open: local root-runner collection preconditions for logger.test.ts (dist-less secrets, no root alias)', async () => {
     const root = new URL('../../../', import.meta.url);
     const secretsPkg = JSON.parse(
       await readFile(new URL('packages/secrets/package.json', root), 'utf8'),
