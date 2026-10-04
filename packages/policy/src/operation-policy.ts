@@ -50,7 +50,7 @@ export interface ClassifiedOperation {
   readonly operationHash: string;
 }
 
-export type ApprovalStatus = 'PENDING' | 'APPROVED';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED' | 'CONSUMED';
 
 export interface OperationApprovalInput {
   readonly id: string;
@@ -211,39 +211,80 @@ function checkApprovalFields(
       operationHash,
     };
   }
-  if (approval.status !== 'PENDING' && approval.status !== 'APPROVED') {
-    const status: string = approval.status;
-    return { accepted: false, reason: `approval status ${status} cannot authorize execution`, operationHash };
+  if (approval.status !== 'APPROVED') {
+    return {
+      accepted: false,
+      reason: `approval status ${approval.status} cannot authorize execution; APPROVED status required`,
+      operationHash,
+    };
   }
   return { accepted: true, reason: 'approval verified against full operation identity', operationHash };
 }
 
 /**
+ * Persistent single-use consume ledger. Lane-local port of the M2
+ * ApprovalRepository consume-once semantics: conditional
+ * `UPDATE approvals SET status = 'CONSUMED' ... WHERE status = 'APPROVED'`
+ * with `result.changes === 1` deciding the winner
+ * (packages/persistence/src/repositories/approval-repository.ts:212-230),
+ * lazy TTL expiry of APPROVED rows (`expires_at <= now` sweep in the same
+ * `consume`, plus `APPROVAL_TTL_MS` set at `approve`:162-188), and the
+ * live-pair (`task_id`, `operation_hash`) uniqueness from `request` (:95-146).
+ * Reimplemented here because `@gram/policy` depends only on `@gram/domain`
+ * and cannot import the better-sqlite3-backed M2 repository in this lane;
+ * the task/taskId + operationHash + expiry checks in `checkApprovalFields`
+ * are the local form of that conditional UPDATE's WHERE clause.
+ */
+export interface ApprovalConsumeStore {
+  consumeApproved(approvalId: string): boolean;
+  isConsumed(approvalId: string): boolean;
+}
+
+export class InMemoryOperationApprovalStore implements ApprovalConsumeStore {
+  private readonly consumed: string[] = [];
+
+  consumeApproved(approvalId: string): boolean {
+    if (this.consumed.includes(approvalId)) {
+      return false;
+    }
+    this.consumed.push(approvalId);
+    return true;
+  }
+
+  isConsumed(approvalId: string): boolean {
+    return this.consumed.includes(approvalId);
+  }
+}
+
+/**
  * Single-use, expiring, task-bound approval gate. Fail-closed on every path:
- * consumed, expired, cross-task, or hash-tampered approvals are rejected.
+ * non-APPROVED, expired, cross-task, or hash-tampered approvals are rejected,
+ * and a verified approval is consumed atomically through the shared store so
+ * no second gate instance can replay it.
  */
 export class OperationPolicyGate {
-  private readonly consumedIds = new Set<string>();
+  private readonly store: ApprovalConsumeStore;
   private readonly clock: () => number;
 
-  constructor(options: { readonly clock?: () => number } = {}) {
+  constructor(options: { readonly clock?: () => number; readonly store?: ApprovalConsumeStore } = {}) {
     this.clock = options.clock ?? Date.now;
+    this.store = options.store ?? new InMemoryOperationApprovalStore();
   }
 
   verify(approval: OperationApprovalInput, intent: OperationIntentLike): ApprovalCheck {
     const operationHash = hashOperationIntent(intent);
-    if (this.consumedIds.has(approval.id)) {
+    const fields = checkApprovalFields(approval, intent, this.clock());
+    if (!fields.accepted) {
+      return fields;
+    }
+    if (this.store.isConsumed(approval.id) || !this.store.consumeApproved(approval.id)) {
       return {
         accepted: false,
         reason: `approval ${approval.id} already consumed; single-use replay rejected, re-approval required`,
         operationHash,
       };
     }
-    return checkApprovalFields(approval, intent, this.clock());
-  }
-
-  consume(approvalId: string): void {
-    this.consumedIds.add(approvalId);
+    return { accepted: true, reason: 'approval verified against full operation identity', operationHash };
   }
 }
 
@@ -255,7 +296,7 @@ export function decideOperation(
   intent: OperationIntentLike,
   metadata: OperationMetadata,
   approval?: OperationApprovalInput,
-  options: { readonly now?: number } = {},
+  options: { readonly now?: number; readonly store?: ApprovalConsumeStore } = {},
 ): OperationDecision {
   const classified = classifyOperation(intent, metadata);
   if (classified.verdict === 'DENY') {
@@ -290,6 +331,16 @@ export function decideOperation(
       reason: `${classified.reason}; ${check.reason}`,
       operationHash: classified.operationHash,
     };
+  }
+  if (options.store !== undefined) {
+    if (options.store.isConsumed(approval.id) || !options.store.consumeApproved(approval.id)) {
+      return {
+        kind: 'NEEDS_APPROVAL',
+        ruleId: classified.ruleId,
+        reason: `${classified.reason}; approval ${approval.id} already consumed; single-use replay rejected, re-approval required`,
+        operationHash: classified.operationHash,
+      };
+    }
   }
   return {
     kind: 'ALLOW',
