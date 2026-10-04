@@ -1,8 +1,7 @@
--- 002_operations.sql — MAC-03 WP-10 Operations persistence (durable-before-effect, D11/D12).
+-- 005_operations.sql — MAC-03 WP-10 Operations persistence (durable-before-effect, D11/D12).
 -- Additive only. Does not modify 001_initial.sql.
+-- Version 005 per WP-07 convergence next-migration rule: MAX(M2 001-004) + 1.
 -- Creates operations/effects/leases/blocks/approval_details/schedules.
--- NOTE: migrator.ts currently hardcodes INITIAL_VERSION=1 and is integrator-owned;
--- the integrator must bump the migrator to apply version 2 (see PR description).
 
 CREATE TABLE operations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
