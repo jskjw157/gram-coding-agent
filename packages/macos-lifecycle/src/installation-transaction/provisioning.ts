@@ -14,5 +14,7 @@ export function decideProvisioning(input: {
   if (input.isNewInstall) return { ok: false, code: 'PARTIAL_INSTALL' };
   // Existing installs must be stopped and reconciled before adding this family.
   if (input.execution === 'absent') return { ok: false, code: 'PARTIAL_INSTALL' };
+  // Unknown durability is never rewritten blindly: reconcile first.
+  if (input.execution === 'unknown') return { ok: false, code: 'PARTIAL_INSTALL' };
   return { ok: true, code: 'OK' };
 }

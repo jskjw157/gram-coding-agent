@@ -35,7 +35,8 @@ describe('B4 R4: closed runtime/domain validation (#149)', () => {
   it('rejects empty, malformed, and oversize releaseId', () => {
     expect(tamperedReleaseId('')).toBe(false);
     expect(tamperedReleaseId('!!bad!!')).toBe(false);
-    expect(tamperedReleaseId('a'.repeat(64))).toBe(false);
+    expect(tamperedReleaseId('a'.repeat(65))).toBe(false);
+    expect(tamperedReleaseId('a'.repeat(64))).toBe(true);
   });
 
   it('buildManifest refuses releaseId/releaseDigest that do not match config bytes', () => {

@@ -34,6 +34,14 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return own.length === keys.length && keys.every(k => Object.hasOwn(value, k));
 }
 
+/** Release ids use the same shape as parseConfig: anchored alphanumerics,
+ * dot/underscore/dash interior, at most 64 chars. An empty or malformed id
+ * can never equal a parsed config release, so the wire validator refuses it.
+ */
+function isReleaseId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+}
+
 export interface BuiltManifest {
   bytes: Buffer;
   sha: string;
@@ -51,7 +59,9 @@ export function expectedPlistBytes(config: ServiceConfig, role: Role): Buffer | 
 }
 
 /** Final manifest exact keys only. Runtime name is gram-agent; absent tunnel
- * hash is null; actual bytes hashes bind content.
+ * hash is null; actual bytes hashes bind content. The caller-supplied
+ * release/plist inputs are cross-checked against the parsed config bytes:
+ * a caller-mutated release id, digest, or plist never widens what builds.
  */
 export function buildManifest(input: {
   runtime: { name: 'gram-agent'; uid: number; gid: number };
@@ -66,11 +76,26 @@ export function buildManifest(input: {
   if (!Number.isSafeInteger(input.runtime.gid) || input.runtime.gid < 0 || input.runtime.gid >= 0xffff_ffff) throw new Error('FOREIGN_SERVICE');
   if (!Buffer.isBuffer(input.configBytes) || input.configBytes.length === 0
     || input.configBytes.length > INSTALL_LIMIT) throw new Error('INVALID_CONFIG');
-  if (!Buffer.isBuffer(input.corePlist) || input.corePlist.length === 0
-    || input.corePlist.length > INSTALL_LIMIT) throw new Error('INVALID_CONFIG');
-  if (input.tunnelPlist !== null
-    && (!Buffer.isBuffer(input.tunnelPlist) || input.tunnelPlist.length > INSTALL_LIMIT)) {
+  let parsed: ServiceConfig;
+  try {
+    parsed = parseConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(input.configBytes)));
+  } catch {
     throw new Error('INVALID_CONFIG');
+  }
+  if (input.releaseId !== parsed.releaseId || input.releaseDigest !== parsed.releaseDigest) {
+    throw new Error('FOREIGN_SERVICE');
+  }
+  const expectedCore = expectedPlistBytes(parsed, 'core');
+  if (expectedCore === null || !Buffer.isBuffer(input.corePlist) || input.corePlist.length === 0
+    || input.corePlist.length > INSTALL_LIMIT || !input.corePlist.equals(expectedCore)) {
+    throw new Error('FOREIGN_SERVICE');
+  }
+  const expectedTunnel = expectedPlistBytes(parsed, 'tunnel');
+  if (expectedTunnel === null) {
+    if (input.tunnelPlist !== null) throw new Error('FOREIGN_SERVICE');
+  } else if (!Buffer.isBuffer(input.tunnelPlist) || input.tunnelPlist.length === 0
+    || input.tunnelPlist.length > INSTALL_LIMIT || !input.tunnelPlist.equals(expectedTunnel)) {
+    throw new Error('FOREIGN_SERVICE');
   }
   const manifest = {
     schemaVersion: 1,
@@ -111,7 +136,7 @@ export function validateManifestBytes(bytes: Buffer): boolean {
     if (!isRecord(enabled) || !exactKeys(enabled, ['core', 'tunnel'])) return false;
     if (enabled.core !== false || enabled.tunnel !== false) return false;
     const hex = (v: unknown): boolean => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v);
-    if (!hex(parsed.configSha256) || typeof parsed.releaseId !== 'string' || !hex(parsed.releaseDigest)) return false;
+    if (!hex(parsed.configSha256) || !isReleaseId(parsed.releaseId) || !hex(parsed.releaseDigest)) return false;
     if (!hex(hashes.core)) return false;
     if (!(hashes.tunnel === null || hex(hashes.tunnel))) return false;
     return true;
@@ -152,8 +177,11 @@ export function buildIntermediateJournal(stage: 'PREPARED' | 'STOPPED' | 'FILES_
 }): Buffer {
   const hexOrNull = (v: string | null): boolean => v === null || /^[a-f0-9]{64}$/.test(v);
   if (!hexOrNull(input.previousDigest) || !/^[a-f0-9]{64}$/.test(input.nextDigest)) throw new Error('INVALID_CONFIG');
+  const seen = new Set<string>();
   for (const name of input.inventory) {
     if (typeof name !== 'string' || name.length === 0 || name.length > 256) throw new Error('INVALID_CONFIG');
+    if (seen.has(name)) throw new Error('INVALID_CONFIG');
+    seen.add(name);
     if (!Object.values(FIXED_FILES).includes(name as (typeof FIXED_FILES)[FixedKind])) {
       throw new Error('FOREIGN_SERVICE');
     }
