@@ -10,6 +10,7 @@ import { AuthSessionKeeper } from '../../auth-session/src/session-keeper.js';
 import { CredentialBroker } from '../../credentials/src/broker.js';
 import type { FixtureVault } from '../../credentials/src/broker.js';
 import { OperationPolicyGate, decideOperation } from '../../policy/src/operation-policy.js';
+import { InMemoryOperationApprovalStore } from '../../policy/src/operation-policy.js';
 import { EffectLedger } from '../../task-engine/src/effect-ledger.js';
 import { ShopifyAmbiguousError, ShopifyTransport } from '../../shopify-adapter/src/transport.js';
 import { FakeBroker } from '../../shopify-adapter/src/fixture-endpoint.js';
@@ -69,7 +70,8 @@ describe('auxiliary faults (OAuth, approval, worker, restart, tunnel)', () => {
   });
 
   it('post-approval crash: consumed approval cannot replay after rehydrate', () => {
-    const gate = new OperationPolicyGate({ clock: () => 1000 });
+    const store = new InMemoryOperationApprovalStore();
+    const gate = new OperationPolicyGate({ clock: () => 1000, store });
     const intent = {
       taskId: 'task-1',
       operationId: 'op-1',
@@ -94,11 +96,8 @@ describe('auxiliary faults (OAuth, approval, worker, restart, tunnel)', () => {
       expiresAt: 9999,
     };
     expect(gate.verify(approval, intent).accepted).toBe(true);
-    gate.consume('approval-1');
-    const rehydratedConsumed = new Set<string>(['approval-1']);
-    const replayed = rehydratedConsumed.has('approval-1');
-    expect(replayed).toBe(true);
-    expect(gate.verify(approval, intent).accepted).toBe(false);
+    const rehydrated = new OperationPolicyGate({ clock: () => 1000, store });
+    expect(rehydrated.verify(approval, intent).accepted).toBe(false);
   });
 
   it('worker crash: permit is single-use, replay refused, raw secret never leaves', async () => {
@@ -122,6 +121,18 @@ describe('auxiliary faults (OAuth, approval, worker, restart, tunnel)', () => {
           expiresAt: Date.now() + 60_000,
         },
       ],
+      capabilities: [
+        {
+          capabilityId: 'cap-1',
+          credentialRef: 'ref-1',
+          recipeId: 'recipe-1',
+          workerId: 'worker-1',
+          scope: 'shopify.v1',
+          execute: () => {
+            throw new Error('fixture worker crash');
+          },
+        },
+      ],
     });
     const input = {
       intentHash: 'hash-1',
@@ -132,12 +143,11 @@ describe('auxiliary faults (OAuth, approval, worker, restart, tunnel)', () => {
       workerId: 'worker-1',
       scope: 'shopify.v1',
     };
-    await expect(
-      broker.credentialUse(input, () => {
-        throw new Error('fixture worker crash');
-      }),
-    ).rejects.toThrow('fixture worker crash');
-    await expect(broker.credentialUse(input, () => 'sanitized')).rejects.toThrow(
+    const request = { capabilityId: 'cap-1', operation: { kind: 'test.op', fields: {} } };
+    await expect(broker.credentialUse(input, request)).rejects.toThrow(
+      /\[OPERATION_FAILED\]/,
+    );
+    await expect(broker.credentialUse(input, request)).rejects.toThrow(
       /already consumed/,
     );
   });

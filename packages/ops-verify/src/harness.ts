@@ -376,7 +376,8 @@ export class CrashSafeExecutor {
       intent,
     );
     if (!check.accepted) throw new Error(`governed retry refused: ${check.reason}`);
-    this.gate.consume(`approval-${operationId}`);
+    // verify() consumed the approval atomically through the persistent
+    // consume-once store; no separate consume step exists anymore.
   }
 
   private async governedDispatch(

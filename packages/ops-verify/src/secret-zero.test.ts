@@ -37,6 +37,16 @@ describe('synthetic secret-zero sweep', () => {
           expiresAt: Date.now() + 60_000,
         },
       ],
+      capabilities: [
+        {
+          capabilityId: 'cap-sweep',
+          credentialRef: 'ref-sweep',
+          recipeId: 'recipe-sweep',
+          workerId: 'worker-sweep',
+          scope: 'shopify.v1',
+          execute: () => ({ sanitized: true, rows: 1 }),
+        },
+      ],
     });
     const receipt = await broker.credentialUse(
       {
@@ -48,7 +58,7 @@ describe('synthetic secret-zero sweep', () => {
         workerId: 'worker-sweep',
         scope: 'shopify.v1',
       },
-      () => ({ sanitized: true, rows: 1 }),
+      { capabilityId: 'cap-sweep', operation: { kind: 'test.sweep', fields: {} } },
     );
     const sqliteRowDump = JSON.stringify({
       task_id: 'task-sweep',
@@ -70,7 +80,7 @@ describe('synthetic secret-zero sweep', () => {
           workerId: 'worker-sweep',
           scope: 'shopify.v1',
         },
-        () => ({ sanitized: true }),
+        { capabilityId: 'cap-sweep', operation: { kind: 'test.sweep', fields: {} } },
       );
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : String(error);
