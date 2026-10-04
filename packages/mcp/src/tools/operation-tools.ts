@@ -1,15 +1,18 @@
-// operation-tools.ts — strict-schemed MCP tools exposing fixture task ops
-// (MAC-03 WP-12, decision D11: MCP safe metadata).
+// operation-tools.ts — strict-schemed MCP tools delegating to the M2 engine
+// (T10 repair: the standalone FixtureRunnerPort is deleted; these tools are
+// thin adapters over OperationsDispatch, which composes M2 TaskService /
+// TaskRunner / state machine under T4 lease semantics).
 //
 // - Every tool carries a strict input schema (exact keys; additionalProperties
-//   is always false) and validates before touching the runner port.
+//   is always false) and validates before touching the dispatch port.
 // - Metadata is SAFE FIELDS ONLY (see SAFE_METADATA_FIELDS); anything else —
 //   including identity material such as api tokens, store/account ids, or a
 //   scope that does not match the caller context — is an UnsafeMetadataError.
-// - Receipts are redacted: the tools re-derive an identity-free operationHash
-//   and strip every internal field before returning.
-// - The runner is an injected structural port, so this module adds no workspace
-//   dependencies; composition wires the real runner under FIXTURE only.
+// - Receipts are redacted: the tools rebuild an identity-free receipt from
+//   the dispatch result and strip every internal field before returning.
+// - The dispatch is an injected structural port mirroring OperationsDispatch
+//   (packages/task-engine/src/operations-delegation.ts), so this module adds
+//   no workspace dependencies and no execution logic of its own.
 import { createHash } from 'node:crypto';
 
 export const SAFE_METADATA_FIELDS = [
@@ -71,27 +74,39 @@ export interface SafeReceipt {
   readonly artifacts: readonly SafeReceiptArtifact[];
 }
 
-/** Internal receipt shape the runner port may return (extra fields stripped). */
-export interface RunnerReceiptLike {
-  readonly operationId: string;
-  readonly operationHash: string;
-  readonly effectClass: string;
-  readonly policyDecision: string;
-  readonly appliedAt: string;
-  readonly artifacts: readonly { readonly artifactId: string; readonly digest: string }[];
-  readonly internal?: unknown;
+/** Delegated task view the dispatch port returns (M2 TaskService shape). */
+export interface DelegatedTaskViewLike {
+  readonly taskId: string;
+  readonly displayId: string;
+  readonly repo: string;
+  readonly goal: string;
+  readonly status: string;
 }
 
-export interface FixtureRunnerPort {
-  createTask(input: { recipeId: string; requester: string }): {
-    taskId: string;
-    recipeId: string;
-    checkpointDigest: string;
-  };
-  execute(taskId: string): RunnerReceiptLike;
-  resume(taskId: string, checkpointDigest?: string): { taskId: string; checkpointDigest: string };
-  inspect?(taskId: string): RunnerReceiptLike;
-  consumeScheduleEntry?(entry: { scheduleEntryId: string; taskId: string }): RunnerReceiptLike;
+/** Delegated receipt the dispatch port returns (M2 run + T4 lease shape). */
+export interface DispatchReceiptLike {
+  readonly operationId: string;
+  readonly operationHash: string;
+  readonly policyDecision: string;
+  readonly appliedAt: string;
+}
+
+/**
+ * Thin delegation port mirroring OperationsDispatch
+ * (packages/task-engine/src/operations-delegation.ts): create/run/resume
+ * delegate to M2 TaskService/TaskRunner/state machine, inspect reads M2
+ * task state without executing, and schedule consumption delegates to run.
+ * No standalone execution lives behind this port.
+ */
+export interface DelegatedOperationsPort {
+  create(input: { readonly repo: string; readonly goal: string }): Promise<DelegatedTaskViewLike>;
+  run(taskId: string, requester: string): Promise<DispatchReceiptLike>;
+  inspect(taskId: string): Promise<DelegatedTaskViewLike>;
+  resume(taskId: string, from: string, to: string): Promise<void>;
+  consumeScheduleEntry(
+    entry: { readonly scheduleEntryId: string; readonly taskId: string },
+    requester: string,
+  ): Promise<DispatchReceiptLike>;
 }
 
 export interface OperationToolInputSchema {
@@ -183,25 +198,22 @@ const assertContext = (context: ToolContext): void => {
 };
 
 /**
- * Redact a runner receipt: re-derive an identity-free operationHash and keep
- * SAFE receipt fields only. The runner's own hash (and any `internal` identity
- * material) never leaves this boundary.
+ * Redact a dispatch receipt: rebuild SAFE receipt fields only from the
+ * identity-free operationHash the M2-backed dispatch derived. Nothing the
+ * dispatch returns beyond these fields ever leaves this boundary.
  */
-export const toSafeReceipt = (receipt: RunnerReceiptLike): SafeReceipt => ({
+export const toSafeReceipt = (receipt: DispatchReceiptLike, effectClass: string): SafeReceipt => ({
   operationId: receipt.operationId,
-  operationHash: shaHex(`${receipt.operationId}|${receipt.effectClass}`),
-  effectClass: receipt.effectClass,
+  operationHash: receipt.operationHash,
+  effectClass,
   policyDecision: receipt.policyDecision,
   appliedAt: receipt.appliedAt,
-  artifacts: receipt.artifacts.map((artifact) => ({
-    artifactId: artifact.artifactId,
-    digest: artifact.digest,
-  })),
+  artifacts: [],
 });
 
 const attestedReceipt = (taskId: string, effectClass: string): SafeReceipt => ({
   operationId: taskId,
-  operationHash: shaHex(`${taskId}|${effectClass}`),
+  operationHash: shaHex(taskId),
   effectClass,
   policyDecision: 'ALLOW',
   appliedAt: new Date(0).toISOString(),
@@ -220,7 +232,7 @@ const defineTool = (
 };
 
 export const createFixtureOperationTools = (
-  runner: FixtureRunnerPort,
+  dispatch: DelegatedOperationsPort,
   only?: readonly string[],
 ): OperationTool[] => {
   const requested: readonly string[] = only ?? [...FIXTURE_TOOL_NAMES];
@@ -233,15 +245,16 @@ export const createFixtureOperationTools = (
   const tools: OperationTool[] = [
     defineTool(
       'fixture_task_create',
-      'Create a FIXTURE task from a fixture recipe.',
-      ['recipeId'],
+      'Create a FIXTURE task through the M2 task service.',
+      ['repo', 'goal'],
       async (input, context) => {
         assertContext(context);
         const record = assertRecord(input, 'fixture_task_create input');
-        assertExactKeys(record, ['recipeId', 'metadata'], 'fixture_task_create input');
-        const recipeId = assertNonEmptyString(record['recipeId'], 'recipeId');
+        assertExactKeys(record, ['repo', 'goal', 'metadata'], 'fixture_task_create input');
+        const repo = assertNonEmptyString(record['repo'], 'repo');
+        const goal = assertNonEmptyString(record['goal'], 'goal');
         const metadata = assertSafeMetadata(record['metadata'], context, 'metadata');
-        const task = runner.createTask({ recipeId, requester: context.requester });
+        const task = await dispatch.create({ repo, goal });
         return {
           task,
           receipt: attestedReceipt(task.taskId, metadata['effectClass'] ?? 'READ'),
@@ -250,50 +263,59 @@ export const createFixtureOperationTools = (
     ),
     defineTool(
       'fixture_task_execute',
-      'Execute an owned FIXTURE task and return a redacted receipt.',
+      'Execute a FIXTURE task through the M2 task runner and return a redacted receipt.',
       ['taskId'],
       async (input, context) => {
         assertContext(context);
         const record = assertRecord(input, 'fixture_task_execute input');
         assertExactKeys(record, ['taskId', 'metadata'], 'fixture_task_execute input');
         const taskId = assertNonEmptyString(record['taskId'], 'taskId');
-        assertSafeMetadata(record['metadata'], context, 'metadata');
-        return { receipt: toSafeReceipt(runner.execute(taskId)) };
+        const metadata = assertSafeMetadata(record['metadata'], context, 'metadata');
+        return {
+          receipt: toSafeReceipt(
+            await dispatch.run(taskId, context.requester),
+            metadata['effectClass'] ?? 'READ',
+          ),
+        };
       },
     ),
     defineTool(
       'fixture_task_receipt',
-      'Return the redacted receipt for a FIXTURE task without re-executing.',
+      'Return the redacted receipt for a FIXTURE task from M2 task state without re-executing.',
       ['taskId'],
       async (input, context) => {
         assertContext(context);
         const record = assertRecord(input, 'fixture_task_receipt input');
         assertExactKeys(record, ['taskId', 'metadata'], 'fixture_task_receipt input');
         const taskId = assertNonEmptyString(record['taskId'], 'taskId');
-        assertSafeMetadata(record['metadata'], context, 'metadata');
-        if (runner.inspect === undefined) {
-          throw new ToolSchemaError('fixture_task_receipt is unavailable on this runner port');
-        }
-        return { receipt: toSafeReceipt(runner.inspect(taskId)) };
+        const metadata = assertSafeMetadata(record['metadata'], context, 'metadata');
+        const view = await dispatch.inspect(taskId);
+        return { receipt: attestedReceipt(view.taskId, metadata['effectClass'] ?? 'READ') };
       },
     ),
     defineTool(
       'fixture_task_resume',
-      'Resume a FIXTURE task from a matching checkpoint digest.',
-      ['taskId', 'checkpointDigest'],
+      'Resume a FIXTURE task through the M2 state machine transition guard.',
+      ['taskId', 'from', 'to'],
       async (input, context) => {
         assertContext(context);
         const record = assertRecord(input, 'fixture_task_resume input');
-        assertExactKeys(record, ['taskId', 'checkpointDigest', 'metadata'], 'fixture_task_resume input');
+        assertExactKeys(
+          record,
+          ['taskId', 'from', 'to', 'metadata'],
+          'fixture_task_resume input',
+        );
         const taskId = assertNonEmptyString(record['taskId'], 'taskId');
-        const checkpointDigest = assertNonEmptyString(record['checkpointDigest'], 'checkpointDigest');
+        const from = assertNonEmptyString(record['from'], 'from');
+        const to = assertNonEmptyString(record['to'], 'to');
         assertSafeMetadata(record['metadata'], context, 'metadata');
-        return { task: runner.resume(taskId, checkpointDigest) };
+        await dispatch.resume(taskId, from, to);
+        return { task: { taskId, from, to } };
       },
     ),
     defineTool(
       'fixture_schedule_consume',
-      'Consume a schedule entry through the same fixture engine (no second scheduler).',
+      'Consume a schedule entry through the same M2-backed run (no second scheduler).',
       ['scheduleEntryId', 'taskId'],
       async (input, context) => {
         assertContext(context);
@@ -305,11 +327,13 @@ export const createFixtureOperationTools = (
         );
         const scheduleEntryId = assertNonEmptyString(record['scheduleEntryId'], 'scheduleEntryId');
         const taskId = assertNonEmptyString(record['taskId'], 'taskId');
-        assertSafeMetadata(record['metadata'], context, 'metadata');
-        if (runner.consumeScheduleEntry === undefined) {
-          throw new ToolSchemaError('fixture_schedule_consume is unavailable on this runner port');
-        }
-        return { receipt: toSafeReceipt(runner.consumeScheduleEntry({ scheduleEntryId, taskId })) };
+        const metadata = assertSafeMetadata(record['metadata'], context, 'metadata');
+        return {
+          receipt: toSafeReceipt(
+            await dispatch.consumeScheduleEntry({ scheduleEntryId, taskId }, context.requester),
+            metadata['effectClass'] ?? 'READ',
+          ),
+        };
       },
     ),
   ];
