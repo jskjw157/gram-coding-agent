@@ -201,10 +201,15 @@ function artifactIdFor(data: Record<string, unknown>, operationId: string): stri
       if (typeof id === 'string' && id.length > 0) return id;
     }
   }
-  const level = data['inventory_level'];
-  if (typeof level === 'object' && level !== null && !Array.isArray(level)) {
-    const item = (level as Record<string, unknown>)['inventory_item_id'];
+  const adjustment = data['inventory_adjustment'];
+  if (typeof adjustment === 'object' && adjustment !== null && !Array.isArray(adjustment)) {
+    const item = (adjustment as Record<string, unknown>)['inventory_item_id'];
     if (typeof item === 'string' && item.length > 0) return item;
+  }
+  const cancelJob = data['cancel_job'];
+  if (typeof cancelJob === 'object' && cancelJob !== null && !Array.isArray(cancelJob)) {
+    const id = (cancelJob as Record<string, unknown>)['id'];
+    if (typeof id === 'string' && id.length > 0) return id;
   }
   return operationId;
 }

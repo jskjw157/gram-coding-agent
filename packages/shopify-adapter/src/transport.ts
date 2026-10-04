@@ -1,17 +1,30 @@
 /**
- * Credential-aware Shopify transport (MAC-04/05 WP-18).
+ * Credential-aware Shopify GraphQL transport (MAC-04/05 WP-18, T6 repair).
+ *
+ * Evidence re-verified 2026-10-04 against shopify.dev (see GUARANTEES.md):
+ * 2026-10 is the latest stable line; REST is legacy and all new public apps
+ * must use the GraphQL Admin API; every request carries
+ * `X-Shopify-Access-Token` and POSTs to
+ * `https://<shop>.myshopify.com/admin/api/2026-10/graphql.json`.
  *
  * The broker holds the credential (contract mirrored structurally from
  * origin/feat/ops-broker — no dependency, no secret ever leaves the lease).
- * Only fixed official endpoint templates are reachable; strict params only
- * (no arbitrary URL, no GraphQL passthrough, no redirect following).
- * Only sanitized typed results leave — raw HTTP never travels upward.
- * Fixture fetch only; no live calls.
+ * Only the six pinned GraphQL operation templates below are reachable;
+ * strict params only (no arbitrary URL, no caller-supplied GraphQL text,
+ * no redirect following). Only sanitized typed results leave — raw HTTP
+ * never travels upward. Fixture fetch only; no live calls.
  */
 import type { FixtureFetch } from './fixture-endpoint.js';
 
 export const PINNED_SHOPIFY_API_VERSION = '2026-10';
-export const SHOPIFY_SINGLE_QUERY_CAP = 1000;
+export const SHOPIFY_GRAPHQL_URL_SUFFIX = '/graphql.json';
+/**
+ * Platform single-query cost ceiling (1000 cost points). Enforced by
+ * construction: pinned fixed-shape templates only, no caller-controlled
+ * cost knobs (no `first`/`last`/free-text query). There is deliberately no
+ * per-request limit param — callers cannot buy query cost.
+ */
+export const SHOPIFY_SINGLE_QUERY_COST_CAP = 1000;
 export const SHOPIFY_SCOPE = 'shopify.v1';
 
 const STORE_DOMAIN_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/u;
@@ -88,16 +101,35 @@ export class ShopifyAmbiguousError extends ShopifyTransportError {
   readonly outcome = 'UNKNOWN' as const;
 }
 
-type ValidParams = Record<string, string | number>;
+/** Pinned GraphQL operation templates. The query text is fixed here and
+ * never assembled from caller input — params travel as variables only. */
+const PRODUCT_READ_QUERY = `query ProductRead($id: ID!) { product(id: $id) { id title } }`;
+const PRODUCT_CREATE_MUTATION = `mutation ProductCreate($input: ProductCreateInput!) { productCreate(input: $input) { product { id title } userErrors { field message code } } }`;
+const INVENTORY_ADJUST_MUTATION = `mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) { inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) { inventoryAdjustmentGroup { changes { name delta } } userErrors { field message code } } }`;
+const ORDER_READ_QUERY = `query OrderRead($id: ID!) { order(id: $id) { id name cancelledAt } }`;
+const ORDER_CANCEL_MUTATION = `mutation OrderCancel($orderId: ID!, $reason: OrderCancelReason!, $restock: Boolean!, $notifyCustomer: Boolean) { orderCancel(orderId: $orderId, reason: $reason, restock: $restock, notifyCustomer: $notifyCustomer) { job { id done } orderCancelUserErrors { field message code } userErrors { field message } } }`;
+const REFUND_CREATE_MUTATION = `mutation RefundCreate($input: RefundInput!, $idempotencyKey: String!) { refundCreate(input: $input) @idempotent(key: $idempotencyKey) { refund { id totalRefundedSet { presentmentMoney { amount currencyCode } } } order { id } userErrors { field message code } } }`;
 
-interface RouteDef {
-  readonly method: 'GET' | 'POST';
+const ORDER_CANCEL_REASONS = ['CUSTOMER', 'DECLINED', 'FRAUD', 'INVENTORY', 'STAFF', 'OTHER'] as const;
+
+type ValidParams = Record<string, string | number | boolean | null>;
+
+interface UserErrorShape {
+  readonly field?: unknown;
+  readonly message?: unknown;
+  readonly code?: unknown;
+}
+
+interface OperationDef {
   readonly effect: 'read' | 'write';
+  /** True only for mutations in the official @idempotent list (17 as of
+   * 2026-02-02): inventoryAdjustQuantities and refundCreate in our set.
+   * productCreate and orderCancel are NOT in the list — they carry no key. */
   readonly idempotent: boolean;
-  path(params: ValidParams): string;
-  query(params: ValidParams): string;
-  body(params: ValidParams): Record<string, unknown> | undefined;
-  sanitize(body: unknown): Record<string, unknown>;
+  readonly query: string;
+  variables(params: ValidParams, idempotencyKey: string | undefined): Record<string, unknown>;
+  userErrors(data: Record<string, unknown>): UserErrorShape[];
+  sanitize(data: Record<string, unknown>, params: ValidParams): Record<string, unknown>;
 }
 
 const nonEmpty = (value: unknown, label: string): string => {
@@ -119,16 +151,23 @@ const integer = (value: unknown, label: string): number => {
   return value;
 };
 
-const limitParam = (value: unknown): number | undefined => {
+const optionalBoolean = (value: unknown, label: string): boolean | undefined => {
   if (value === undefined) return undefined;
-  const limit = integer(value, 'limit');
-  if (limit < 1 || limit > SHOPIFY_SINGLE_QUERY_CAP) {
-    throw new ShopifyTransportError(
-      `invalid param: limit must be within 1..${SHOPIFY_SINGLE_QUERY_CAP} (single-query cap)`,
-    );
+  if (typeof value !== 'boolean') {
+    throw new ShopifyTransportError(`invalid param: ${label} must be a boolean`);
   }
-  return limit;
+  return value;
 };
+
+const gidSuffix = (gid: string): string => {
+  const suffix = gid.split('/').pop();
+  return suffix === undefined || suffix.length === 0 ? gid : suffix;
+};
+
+const productGid = (id: string): string => `gid://shopify/Product/${id}`;
+const orderGid = (id: string): string => `gid://shopify/Order/${id}`;
+const inventoryItemGid = (id: string): string => `gid://shopify/InventoryItem/${id}`;
+const locationGid = (id: string): string => `gid://shopify/Location/${id}`;
 
 const asRecord = (value: unknown, label: string): Record<string, unknown> => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -145,98 +184,167 @@ const pickStringFields = (record: Record<string, unknown>, keys: readonly string
   return picked;
 };
 
-const ROUTES: Record<ShopifyActionName, RouteDef> = {
+const readUserErrors = (value: unknown): UserErrorShape[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is UserErrorShape => typeof entry === 'object' && entry !== null);
+};
+
+const OPERATIONS: Record<ShopifyActionName, OperationDef> = {
   'shopify.product.read': {
-    method: 'GET',
     effect: 'read',
     idempotent: false,
-    path: (params) => `/products/${params['productId']}.json`,
-    query: (params) => (params['limit'] === undefined ? '' : `?limit=${String(params['limit'])}`),
-    body: () => undefined,
-    sanitize: (response) => ({ product: pickStringFields(asRecord(asRecord(response, 'response')['product'], 'response.product'), ['id', 'title'], 'product') }),
+    query: PRODUCT_READ_QUERY,
+    variables: (params) => ({ id: productGid(params['productId'] as string) }),
+    userErrors: () => [],
+    sanitize: (data) => {
+      const product = asRecord(data['product'], 'data.product');
+      const picked = pickStringFields(product, ['title'], 'product');
+      return { product: { id: gidSuffix(nonEmpty(product['id'], 'product.id')), ...picked } };
+    },
   },
   'shopify.product.create': {
-    method: 'POST',
     effect: 'write',
     idempotent: false,
-    path: () => '/products.json',
-    query: () => '',
-    body: (params) => ({
-      product: {
+    query: PRODUCT_CREATE_MUTATION,
+    variables: (params) => ({
+      input: {
         title: params['title'],
-        ...(params['price'] === undefined ? {} : { price: params['price'] }),
-        ...(params['sku'] === undefined ? {} : { sku: params['sku'] }),
+        ...(params['vendor'] === undefined ? {} : { vendor: params['vendor'] }),
       },
     }),
-    sanitize: (response) => ({ product: pickStringFields(asRecord(asRecord(response, 'response')['product'], 'response.product'), ['id', 'title'], 'product') }),
+    userErrors: (data) => readUserErrors(asRecord(data['productCreate'], 'data.productCreate')['userErrors']),
+    sanitize: (data) => {
+      const payload = asRecord(data['productCreate'], 'data.productCreate');
+      const product = asRecord(payload['product'], 'data.productCreate.product');
+      const picked = pickStringFields(product, ['title'], 'product');
+      return { product: { id: gidSuffix(nonEmpty(product['id'], 'product.id')), ...picked } };
+    },
   },
   'shopify.inventory.adjust': {
-    method: 'POST',
     effect: 'write',
     idempotent: true,
-    path: () => '/inventory_levels/adjust.json',
-    query: () => '',
-    body: (params) => ({
-      inventory_item_id: params['inventoryItemId'],
-      available_adjustment: params['availableAdjustment'],
-      compare_quantity: params['compareQuantity'],
-      ...(params['locationId'] === undefined ? {} : { location_id: params['locationId'] }),
+    query: INVENTORY_ADJUST_MUTATION,
+    variables: (params, idempotencyKey) => ({
+      input: {
+        reason: 'correction',
+        name: 'available',
+        changes: [
+          {
+            delta: params['availableAdjustment'],
+            inventoryItemId: inventoryItemGid(params['inventoryItemId'] as string),
+            locationId: locationGid(params['locationId'] as string),
+            // changeFromQuantity is mandatory: an explicit number arms the
+            // compare-and-swap guard, explicit null skips it (source of truth).
+            changeFromQuantity: params['changeFromQuantity'],
+          },
+        ],
+      },
+      idempotencyKey,
     }),
-    sanitize: (response) => {
-      const level = asRecord(asRecord(response, 'response')['inventory_level'], 'response.inventory_level');
+    userErrors: (data) =>
+      readUserErrors(asRecord(data['inventoryAdjustQuantities'], 'data.inventoryAdjustQuantities')['userErrors']),
+    sanitize: (data, params) => {
+      const payload = asRecord(data['inventoryAdjustQuantities'], 'data.inventoryAdjustQuantities');
+      const group = asRecord(payload['inventoryAdjustmentGroup'], 'data.inventoryAdjustQuantities.inventoryAdjustmentGroup');
+      const changes = group['changes'];
+      if (!Array.isArray(changes) || changes.length === 0) {
+        throw new ShopifyTransportError('invalid response: inventoryAdjustmentGroup.changes must be non-empty');
+      }
+      const change = asRecord(changes[0], 'inventoryAdjustmentGroup.changes[0]');
       return {
-        inventory_level: {
-          inventory_item_id: nonEmpty(level['inventory_item_id'], 'inventory_level.inventory_item_id'),
-          available: integer(level['available'], 'inventory_level.available'),
+        inventory_adjustment: {
+          inventory_item_id: params['inventoryItemId'],
+          delta: integer(change['delta'], 'inventory change.delta'),
         },
       };
     },
   },
   'shopify.order.read': {
-    method: 'GET',
     effect: 'read',
     idempotent: false,
-    path: (params) => `/orders/${params['orderId']}.json`,
-    query: (params) => (params['limit'] === undefined ? '' : `?limit=${String(params['limit'])}`),
-    body: () => undefined,
-    sanitize: (response) => ({ order: pickStringFields(asRecord(asRecord(response, 'response')['order'], 'response.order'), ['id', 'status'], 'order') }),
+    query: ORDER_READ_QUERY,
+    variables: (params) => ({ id: orderGid(params['orderId'] as string) }),
+    userErrors: () => [],
+    sanitize: (data) => {
+      const order = asRecord(data['order'], 'data.order');
+      const id = gidSuffix(nonEmpty(order['id'], 'order.id'));
+      return { order: { id, status: order['cancelledAt'] == null ? 'open' : 'cancelled' } };
+    },
   },
   'shopify.order.cancel': {
-    method: 'POST',
     effect: 'write',
+    // orderCancel is NOT in the official @idempotent list and returns an
+    // async Job: no directive, no key. An ambiguous cancel must reconcile
+    // order state before any retry — a retry is never deduped by Shopify.
     idempotent: false,
-    path: (params) => `/orders/${params['orderId']}/cancel.json`,
-    query: () => '',
-    body: (params) => (params['reason'] === undefined ? {} : { reason: params['reason'] }),
-    sanitize: (response) => ({ order: pickStringFields(asRecord(asRecord(response, 'response')['order'], 'response.order'), ['id', 'status'], 'order') }),
+    query: ORDER_CANCEL_MUTATION,
+    variables: (params) => ({
+      orderId: orderGid(params['orderId'] as string),
+      reason: params['reason'],
+      restock: params['restock'],
+      notifyCustomer: params['notifyCustomer'],
+    }),
+    userErrors: (data) => {
+      const payload = asRecord(data['orderCancel'], 'data.orderCancel');
+      return [...readUserErrors(payload['orderCancelUserErrors']), ...readUserErrors(payload['userErrors'])];
+    },
+    sanitize: (data) => {
+      const payload = asRecord(data['orderCancel'], 'data.orderCancel');
+      const job = asRecord(payload['job'], 'data.orderCancel.job');
+      return {
+        cancel_job: {
+          id: nonEmpty(job['id'], 'cancel job.id'),
+          done: job['done'] === true,
+        },
+      };
+    },
   },
   'shopify.refund.create': {
-    method: 'POST',
     effect: 'write',
     idempotent: true,
-    path: () => '/refunds.json',
-    query: () => '',
-    body: (params) => ({
-      order_id: params['orderId'],
-      amount: params['amount'],
-      ...(params['currency'] === undefined ? {} : { currency: params['currency'] }),
-      ...(params['reason'] === undefined ? {} : { reason: params['reason'] }),
+    query: REFUND_CREATE_MUTATION,
+    variables: (params, idempotencyKey) => ({
+      input: {
+        orderId: orderGid(params['orderId'] as string),
+        ...(params['reason'] === undefined ? {} : { note: params['reason'] }),
+        transactions: [
+          {
+            orderId: orderGid(params['orderId'] as string),
+            kind: 'REFUND',
+            amount: params['amount'],
+          },
+        ],
+      },
+      idempotencyKey,
     }),
-    sanitize: (response) => ({ refund: pickStringFields(asRecord(asRecord(response, 'response')['refund'], 'response.refund'), ['id', 'order_id', 'amount'], 'refund') }),
+    userErrors: (data) => readUserErrors(asRecord(data['refundCreate'], 'data.refundCreate')['userErrors']),
+    sanitize: (data) => {
+      const payload = asRecord(data['refundCreate'], 'data.refundCreate');
+      const refund = asRecord(payload['refund'], 'data.refundCreate.refund');
+      const order = asRecord(payload['order'], 'data.refundCreate.order');
+      const total = asRecord(refund['totalRefundedSet'], 'refund.totalRefundedSet');
+      const money = asRecord(total['presentmentMoney'], 'refund.totalRefundedSet.presentmentMoney');
+      return {
+        refund: {
+          id: gidSuffix(nonEmpty(refund['id'], 'refund.id')),
+          order_id: gidSuffix(nonEmpty(order['id'], 'order.id')),
+          amount: nonEmpty(money['amount'], 'refund amount'),
+        },
+      };
+    },
   },
 };
 
 const AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/u;
-const CURRENCY_PATTERN = /^[A-Z]{3}$/u;
 
 function validateParams(action: ShopifyActionName, params: Record<string, unknown>): ValidParams {
   const allowed: Record<ShopifyActionName, readonly string[]> = {
-    'shopify.product.read': ['productId', 'limit'],
-    'shopify.product.create': ['title', 'price', 'sku'],
-    'shopify.inventory.adjust': ['inventoryItemId', 'availableAdjustment', 'compareQuantity', 'locationId'],
-    'shopify.order.read': ['orderId', 'limit'],
-    'shopify.order.cancel': ['orderId', 'reason'],
-    'shopify.refund.create': ['orderId', 'amount', 'currency', 'reason'],
+    'shopify.product.read': ['productId'],
+    'shopify.product.create': ['title', 'vendor'],
+    'shopify.inventory.adjust': ['inventoryItemId', 'locationId', 'availableAdjustment', 'changeFromQuantity'],
+    'shopify.order.read': ['orderId'],
+    'shopify.order.cancel': ['orderId', 'reason', 'restock', 'notifyCustomer'],
+    'shopify.refund.create': ['orderId', 'amount', 'reason'],
   };
   for (const key of Object.keys(params)) {
     if (CREDENTIAL_KEY_PATTERN.test(key)) {
@@ -248,42 +356,42 @@ function validateParams(action: ShopifyActionName, params: Record<string, unknow
   }
   switch (action) {
     case 'shopify.product.read':
-      return {
-        productId: nonEmpty(params['productId'], 'productId'),
-        ...(params['limit'] === undefined ? {} : { limit: limitParam(params['limit']) ?? 0 }),
-      };
+      return { productId: nonEmpty(params['productId'], 'productId') };
     case 'shopify.order.read':
-      return {
-        orderId: nonEmpty(params['orderId'], 'orderId'),
-        ...(params['limit'] === undefined ? {} : { limit: limitParam(params['limit']) ?? 0 }),
-      };
+      return { orderId: nonEmpty(params['orderId'], 'orderId') };
     case 'shopify.product.create': {
-      const title = nonEmpty(params['title'], 'title');
-      const out: ValidParams = { title };
-      const price = optionalString(params['price'], 'price');
-      if (price !== undefined) out['price'] = price;
-      const sku = optionalString(params['sku'], 'sku');
-      if (sku !== undefined) out['sku'] = sku;
+      const out: ValidParams = { title: nonEmpty(params['title'], 'title') };
+      const vendor = optionalString(params['vendor'], 'vendor');
+      if (vendor !== undefined) out['vendor'] = vendor;
       return out;
     }
     case 'shopify.inventory.adjust': {
-      if (params['compareQuantity'] === undefined) {
-        throw new ShopifyTransportError('invalid param: compareQuantity CAS is required for inventory adjust');
+      // changeFromQuantity is mandatory as a KEY: callers must pass an
+      // explicit number (CAS armed) or explicit null (CAS skipped as source
+      // of truth). A missing key is a caller bug, not a default.
+      if (!('changeFromQuantity' in params)) {
+        throw new ShopifyTransportError('invalid param: changeFromQuantity is required (explicit number or null) for inventory adjust');
       }
-      const out: ValidParams = {
+      const expected = params['changeFromQuantity'];
+      if (expected !== null) integer(expected, 'changeFromQuantity');
+      return {
         inventoryItemId: nonEmpty(params['inventoryItemId'], 'inventoryItemId'),
+        locationId: nonEmpty(params['locationId'], 'locationId'),
         availableAdjustment: integer(params['availableAdjustment'], 'availableAdjustment'),
-        compareQuantity: integer(params['compareQuantity'], 'compareQuantity'),
+        changeFromQuantity: expected as number | null,
       };
-      const locationId = optionalString(params['locationId'], 'locationId');
-      if (locationId !== undefined) out['locationId'] = locationId;
-      return out;
     }
     case 'shopify.order.cancel': {
-      const out: ValidParams = { orderId: nonEmpty(params['orderId'], 'orderId') };
-      const reason = optionalString(params['reason'], 'reason');
-      if (reason !== undefined) out['reason'] = reason;
-      return out;
+      const reason = params['reason'] === undefined ? 'CUSTOMER' : nonEmpty(params['reason'], 'reason');
+      if (!(ORDER_CANCEL_REASONS as readonly string[]).includes(reason)) {
+        throw new ShopifyTransportError(`invalid param: reason must be one of ${ORDER_CANCEL_REASONS.join(',')}`);
+      }
+      return {
+        orderId: nonEmpty(params['orderId'], 'orderId'),
+        reason,
+        restock: optionalBoolean(params['restock'], 'restock') ?? true,
+        notifyCustomer: optionalBoolean(params['notifyCustomer'], 'notifyCustomer') ?? false,
+      };
     }
     case 'shopify.refund.create': {
       const amount = nonEmpty(params['amount'], 'amount');
@@ -291,18 +399,23 @@ function validateParams(action: ShopifyActionName, params: Record<string, unknow
         throw new ShopifyTransportError('invalid param: amount must be a decimal string');
       }
       const out: ValidParams = { orderId: nonEmpty(params['orderId'], 'orderId'), amount };
-      const currency = optionalString(params['currency'], 'currency');
-      if (currency !== undefined) {
-        if (!CURRENCY_PATTERN.test(currency)) {
-          throw new ShopifyTransportError('invalid param: currency must be a 3-letter code');
-        }
-        out['currency'] = currency;
-      }
       const reason = optionalString(params['reason'], 'reason');
       if (reason !== undefined) out['reason'] = reason;
       return out;
     }
   }
+}
+
+function throwOnUserErrors(canonical: ShopifyActionName, errors: UserErrorShape[]): void {
+  if (errors.length === 0) return;
+  const stale = errors.find((entry) => entry['code'] === 'CHANGE_FROM_QUANTITY_STALE');
+  if (stale !== undefined) {
+    throw new ShopifyTransportError(
+      `compare-quantity-mismatch (CHANGE_FROM_QUANTITY_STALE) for ${canonical}: ${String(stale['message'] ?? 'stale inventory')}; no effect applied`,
+    );
+  }
+  const messages = errors.map((entry) => String(entry['message'] ?? entry['code'] ?? 'unknown'));
+  throw new ShopifyTransportError(`shopify refused ${canonical}: ${messages.join('; ')}`);
 }
 
 export class ShopifyTransport {
@@ -330,8 +443,8 @@ export class ShopifyTransport {
     params: Record<string, unknown>,
     ctx: TransportExecContext,
   ): Promise<ShopifySanitizedResult> {
-    const route = (ROUTES as Record<string, RouteDef | undefined>)[action];
-    if (route === undefined) {
+    const operation = (OPERATIONS as Record<string, OperationDef | undefined>)[action];
+    if (operation === undefined) {
       throw new ShopifyTransportError(`unknown canonical action ${action}, only fixed Shopify templates are reachable`);
     }
     const canonical = action as ShopifyActionName;
@@ -341,14 +454,14 @@ export class ShopifyTransport {
       );
     }
     const valid = validateParams(canonical, params);
-    if (route.effect === 'write' && this.provenWrites.has(ctx.operationId)) {
+    if (operation.effect === 'write' && this.provenWrites.has(ctx.operationId)) {
       throw new ShopifyTransportError(
         `unproven-write replay refused: operation ${ctx.operationId} already applied, re-approval required`,
       );
     }
 
-    const url = `https://${this.options.storeDomain}/admin/api/${PINNED_SHOPIFY_API_VERSION}${route.path(valid)}${route.query(valid)}`;
-    const idempotencyKey = route.idempotent ? `shopify-${ctx.operationId}` : undefined;
+    const url = `https://${this.options.storeDomain}/admin/api/${PINNED_SHOPIFY_API_VERSION}${SHOPIFY_GRAPHQL_URL_SUFFIX}`;
+    const idempotencyKey = operation.idempotent ? `shopify-${ctx.operationId}` : undefined;
 
     // The broker digests the worker return and yields only a receipt, so the
     // sanitized result leaves via this caller-owned outbox. Only allowlisted
@@ -363,17 +476,16 @@ export class ShopifyTransport {
     });
     const worker = async (secret: string): Promise<ShopifySanitizedResult> => {
       const headers: Record<string, string> = {
-        authorization: `Bearer ${secret}`,
         'content-type': 'application/json',
+        'X-Shopify-Access-Token': secret,
       };
-      if (idempotencyKey !== undefined) headers['idempotency-key'] = idempotencyKey;
       let response;
       try {
         response = await this.options.fetch({
-          method: route.method,
+          method: 'POST',
           url,
           headers,
-          body: route.body(valid),
+          body: { query: operation.query, variables: operation.variables(valid, idempotencyKey) },
         });
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -384,6 +496,11 @@ export class ShopifyTransport {
       if (response.status >= 300 && response.status < 400) {
         throw new ShopifyTransportError(
           `redirect refused for ${canonical}: status ${response.status}, redirects are never followed`,
+        );
+      }
+      if (response.status === 429) {
+        throw new ShopifyTransportError(
+          `throttled for ${canonical}: status 429, back off and retry; effect UNKNOWN, safe retry keeps the same idempotency key`,
         );
       }
       if (response.status >= 500) {
@@ -397,12 +514,27 @@ export class ShopifyTransport {
           `shopify refused ${canonical}: ${typeof code === 'string' ? code : `status ${response.status}`}`,
         );
       }
-      const data = route.sanitize(response.body);
-      const replayed = (asRecord(response.body, 'response')['replayed'] as unknown) === true;
+      const body = asRecord(response.body, 'response');
+      const topErrors = readUserErrors((body['errors'] as unknown) ?? []);
+      if (topErrors.length > 0) {
+        const codes = topErrors.map((entry) => String(entry['code'] ?? entry['message'] ?? ''));
+        if (codes.some((code) => /THROTTLED|MAX_COST_EXCEEDED/u.test(code))) {
+          throw new ShopifyTransportError(
+            `throttled for ${canonical}: ${codes.join('; ')}, back off and retry; effect UNKNOWN, safe retry keeps the same idempotency key`,
+          );
+        }
+        throw new ShopifyTransportError(
+          `shopify GraphQL error for ${canonical}: ${topErrors.map((entry) => String(entry['message'] ?? entry['code'] ?? 'unknown')).join('; ')}`,
+        );
+      }
+      const data = asRecord(body['data'], 'response.data');
+      throwOnUserErrors(canonical, operation.userErrors(data));
+      const sanitizedData = operation.sanitize(data, valid);
+      const replayed = body['replayed'] === true;
       const sanitized: ShopifySanitizedResult = {
         action: canonical,
-        outcome: route.method === 'GET' ? 'READ_OK' : replayed ? 'REPLAYED' : 'APPLIED',
-        data,
+        outcome: operation.effect === 'read' ? 'READ_OK' : replayed ? 'REPLAYED' : 'APPLIED',
+        data: sanitizedData,
         ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
         ...(replayed ? { replayed: true } : {}),
       };
@@ -429,7 +561,7 @@ export class ShopifyTransport {
     const outbox = await outboxReady;
     // Only proven writes are fenced: ambiguous attempts stay retryable and
     // keep their idempotency key so a safe retry cannot double-apply.
-    if (route.effect === 'write' && outbox.outcome !== 'READ_OK') {
+    if (operation.effect === 'write' && outbox.outcome !== 'READ_OK') {
       this.provenWrites.add(ctx.operationId);
     }
     return outbox;

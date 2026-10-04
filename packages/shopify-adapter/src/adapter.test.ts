@@ -102,7 +102,7 @@ describe('adapter canonical submission', () => {
     expect(receipt.operationId).toBe('op-1');
     expect(receipt.operationHash).toBe(ctx.verdict.operationHash);
     expect(receipt.artifacts.length).toBeGreaterThan(0);
-    expect(endpoint.lastAuthorization).toBe(`Bearer ${SECRET}`);
+    expect(endpoint.lastAccessToken).toBe(SECRET);
     expect(JSON.stringify(receipt)).not.toContain(SECRET);
   });
 
