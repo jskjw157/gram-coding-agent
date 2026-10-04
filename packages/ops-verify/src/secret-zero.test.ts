@@ -17,7 +17,7 @@ describe('synthetic secret-zero sweep', () => {
   it('canary secret leaves zero matches across all observable surfaces', async () => {
     const canary = CANARIES[0] ?? 'SX_CANARY_FALLBACK';
     const vault = {
-      getForUse: (_name: string) =>
+      getForUse: () =>
         Promise.resolve({
           withValue: <T>(use: (value: string) => T): T => use(canary),
           dispose: () => {},

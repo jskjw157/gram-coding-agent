@@ -28,6 +28,11 @@
 import { randomUUID } from 'node:crypto';
 import { EffectLedger } from '../../task-engine/src/effect-ledger.js';
 import type { EffectRecord } from '../../task-engine/src/effect-ledger.js';
+import {
+  OperationPolicyGate,
+  decideOperation,
+  hashOperationIntent,
+} from '../../policy/src/operation-policy.js';
 
 export type CrashPoint =
   | 'before-ledger'
@@ -178,8 +183,8 @@ export class NaiveExecutor {
     const crash = (at: CrashPoint): void => {
       if (hooks.crashAt === at) throw new Error(`fixture crash injected at ${at}`);
     };
-    const { row } = hooks.freshIntent === true
-      ? { row: this.journal.mintFresh(clientRequestId), created: true as boolean }
+    const { row }: { row: IntentRow } = hooks.freshIntent === true
+      ? { row: this.journal.mintFresh(clientRequestId) }
       : this.journal.getOrCreate(clientRequestId);
     // CP1 crashes after the intent row is durable but before ledger.prepare:
     // naive recovery mints a fresh operationId instead of reusing the row.
@@ -224,7 +229,195 @@ export class NaiveExecutor {
 }
 
 // ---------------------------------------------------------------------------
-// Coding-dependency allowlist (new harness surface, no lane equivalent yet).
+// CrashSafeExecutor (GREEN). Confined to this new file: lane packages are
+// never edited. Wiring per D12:
+// - CP1: reuse the durable intent row (getOrCreate returns created=false).
+// - CP2: dispatch the SAME prepared effect (no orphan, no duplicate).
+// - CP3-CP8: crashRecover maps interrupted DISPATCHING to UNKNOWN, a
+//   ground-truth query resolves the tri-state, reconcile runs before any
+//   retry, zero blind retransmits. WRITE reconciled NOT_APPLIED surfaces for
+//   re-approval (never auto-retries); only a pre-send loss (nothing ever
+//   left the host) completes via one governed, query-first dispatch after a
+//   real policy/approval recheck.
+// ---------------------------------------------------------------------------
+
+export class AmbiguousEffectError extends Error {
+  override name = 'AmbiguousEffectError';
+}
+
+const policyIntentFor = (operationId: string) => ({
+  taskId: `task-${operationId}`,
+  operationId,
+  canonicalAction: 'shopify.product.create',
+  storeId: 'shop.myshopify.com',
+  accountId: 'acct-verify',
+  targetResource: 'product',
+  parameterDigest: 'digest-verify',
+  effectClass: 'WRITE' as const,
+  expectedState: 'draft',
+  expectedVersion: 'v1',
+  providerId: 'shopify',
+  recipeId: 'recipe-verify',
+});
+
+export class CrashSafeExecutor {
+  readonly ledger = new EffectLedger();
+  readonly journal = new IntentJournal();
+  readonly world = new ScriptedWorld();
+  private readonly gate = new OperationPolicyGate({ clock: () => 1000 });
+  private readonly receipted = new Set<string>();
+  private readonly tasksDone = new Set<string>();
+
+  async run(point: CrashPoint): Promise<ExecutorOutcome> {
+    const clientRequestId = `safe-${point}-${randomUUID()}`;
+    const { row } = this.journal.getOrCreate(clientRequestId);
+    if (point === 'before-ledger') {
+      return this.executeIntent(row.operationId, 'never');
+    }
+    const prepared = this.ledger.prepare(row.operationId, 'WRITE');
+    if (point === 'after-prepared') {
+      return this.executeEffect(row.operationId, prepared.effectId, 'never');
+    }
+    try {
+      return await this.executeEffect(row.operationId, prepared.effectId, point);
+    } catch {
+      return this.recover(row.operationId, prepared.effectId, point);
+    }
+  }
+  private async executeIntent(
+    operationId: string,
+    crashAt: CrashPoint | 'never',
+  ): Promise<ExecutorOutcome> {
+    const prepared = this.ledger.prepare(operationId, 'WRITE');
+    return this.executeEffect(operationId, prepared.effectId, crashAt);
+  }
+
+  private async executeEffect(
+    operationId: string,
+    effectId: string,
+    crashAt: CrashPoint | 'never',
+  ): Promise<ExecutorOutcome> {
+    const settled = await this.ledger.dispatch(effectId, () => {
+      if (crashAt === 'dispatching-pre-send') throw new Error('fixture crash before send');
+      if (crashAt === 'send-connection-loss') return this.world.transmit(operationId, 'throw');
+      if (crashAt === 'applied-response-lost' || crashAt === 'during-reconcile') {
+        this.world.applyBeforeThrow = true;
+        return this.world.transmit(operationId, 'throw');
+      }
+      return this.world.transmit(operationId, 'ok');
+    });
+    if (settled.state !== 'CONFIRMED') throw new Error('fixture transmit must confirm');
+    if (crashAt === 'response-before-receipt') throw new Error('fixture crash at response-before-receipt');
+    this.persistReceipt(operationId);
+    if (crashAt === 'receipt-before-task-update') throw new Error('fixture crash at receipt-before-task-update');
+    this.completeTask(operationId);
+    return this.outcome('CONFIRMED', false);
+  }
+
+  private async recover(
+    operationId: string,
+    effectId: string,
+    point: CrashPoint,
+  ): Promise<ExecutorOutcome> {
+    const recovered = this.ledger.crashRecover();
+    const unknownObserved = recovered.some((record) => record.operationId === operationId);
+    let observed: TriState;
+    try {
+      observed = this.query(operationId, point);
+    } catch {
+      return this.outcome('UNKNOWN', unknownObserved);
+    }
+    if (observed === 'UNKNOWN') {
+      return this.outcome('UNKNOWN', unknownObserved);
+    }
+    this.settleFromEvidence(effectId, observed);
+    if (observed === 'CONFIRMED') {
+      this.persistReceipt(operationId);
+      this.completeTask(operationId);
+      return this.outcome('CONFIRMED', unknownObserved);
+    }
+    if (point === 'dispatching-pre-send') {
+      this.recheckApproval(operationId);
+      const retry = this.ledger.prepare(operationId, 'WRITE');
+      return this.governedDispatch(operationId, retry.effectId, unknownObserved);
+    }
+    return this.outcome('NOT_APPLIED:REAPPROVAL_REQUIRED', unknownObserved);
+  }
+
+  private settleFromEvidence(effectId: string, observed: 'CONFIRMED' | 'NOT_APPLIED'): void {
+    try {
+      this.ledger.reconcile(effectId, { observedState: observed, policyDecision: 'ALLOW' });
+    } catch {
+      this.ledger.reconcile(effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    }
+  }
+
+  private query(operationId: string, point: CrashPoint): TriState {
+    if (point === 'during-reconcile') {
+      this.world.queries += 1;
+      throw new AmbiguousEffectError('reconcile query crashed; effect stays UNKNOWN');
+    }
+    return this.world.query(operationId);
+  }
+
+  private recheckApproval(operationId: string): void {
+    const intent = policyIntentFor(operationId);
+    const decision = decideOperation(intent, { scope: 'STORE' });
+    if (decision.kind !== 'NEEDS_APPROVAL') throw new Error('fixture write must need approval');
+    const check = this.gate.verify(
+      {
+        id: `approval-${operationId}`,
+        taskId: intent.taskId,
+        operationHash: hashOperationIntent(intent),
+        status: 'APPROVED',
+        expiresAt: 9999,
+      },
+      intent,
+    );
+    if (!check.accepted) throw new Error(`governed retry refused: ${check.reason}`);
+    this.gate.consume(`approval-${operationId}`);
+  }
+
+  private async governedDispatch(
+    operationId: string,
+    effectId: string,
+    unknownObserved: boolean,
+  ): Promise<ExecutorOutcome> {
+    const stored = this.ledger.get(effectId);
+    if (stored === null || stored.state !== 'PREPARED') throw new Error('governed retry needs PREPARED');
+    const settled = await this.ledger.dispatch(effectId, () => this.world.transmit(operationId, 'ok'));
+    if (settled.state !== 'CONFIRMED') throw new Error('governed retry must confirm');
+    this.persistReceipt(operationId);
+    this.completeTask(operationId);
+    return this.outcome('CONFIRMED', unknownObserved);
+  }
+
+  private persistReceipt(operationId: string): void {
+    if (!this.receipted.has(operationId)) {
+      this.receipted.add(operationId);
+      this.world.receiptsPersisted += 1;
+    }
+  }
+
+  private completeTask(operationId: string): void {
+    if (!this.tasksDone.has(operationId)) {
+      this.tasksDone.add(operationId);
+      this.world.taskUpdates += 1;
+    }
+  }
+
+  private outcome(finalState: string, unknownObserved: boolean): ExecutorOutcome {
+    return {
+      finalState,
+      sends: this.world.sends,
+      queries: this.world.queries,
+      unknownObserved,
+      intentCount: this.journal.intentCount(),
+      receipts: this.world.receiptsPersisted,
+      taskUpdates: this.world.taskUpdates,
+    };
+  }
+}
 // An operation blocked on an external Coding agent must surface exactly one
 // of these codes — never a claimed CONFIRMED, never a blind retry.
 // ---------------------------------------------------------------------------
