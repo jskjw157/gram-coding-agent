@@ -1,15 +1,17 @@
 /**
  * CredentialBroker — use-only credential boundary (MAC-04 WP-15, D3/D10/D11).
  *
- * The broker exposes a single operation: bound credential USE. There is no
- * secret_get/list/search API by design (D3). The broker owns no business
- * semantics (D10/D11): the caller supplies an approved worker callback that
- * runs inside the secret lease, and only a sanitized receipt leaves — the
- * raw secret never leaves the boundary.
+ * There is no secret_get/list/search API by design (D3). The broker owns no
+ * business semantics (D10/D11): the caller names a pre-registered
+ * credential-owning capability plus a typed provider operation, and only a
+ * sanitized receipt leaves — raw credential material never crosses to caller
+ * code. No caller-supplied callback ever receives credential material.
  *
  * Fail-closed rejections: unknown/arbitrary ref, wrong peer, changed permit
- * identity (intent/recipe/scope), replay (single-use permits), expiry, and
- * locked vault. A worker that returns the raw secret is rejected.
+ * identity (intent/recipe/scope), replay (single-use permits), expiry,
+ * unregistered capability, capability binding mismatch, exfil outcome, and
+ * locked vault. Failures carry fixed typed codes; upstream messages are
+ * mapped to codes with redacted detail only.
  */
 
 import { createHash } from 'node:crypto';
@@ -35,8 +37,66 @@ export interface CredentialReceipt {
   readonly resultDigest: string;
 }
 
+/** Typed provider operation. Carries business parameters only — never credential material. */
+export interface ProviderOperation {
+  readonly kind: string;
+  readonly fields: Readonly<Record<string, string>>;
+}
+
+/** Bound invocation handed to a registered capability. Contains identity + operation only. */
+export interface CapabilityInvocation {
+  readonly permitId: string;
+  readonly credentialRef: string;
+  readonly recipeId: string;
+  readonly workerId: string;
+  readonly scope: string;
+  readonly operation: ProviderOperation;
+}
+
+/**
+ * Pre-registered credential-owning capability. Registered with the broker
+ * ahead of use and bound to one credential ref / recipe / worker / scope.
+ * Its execute handler receives bound identity plus the typed operation —
+ * never raw credential material.
+ */
+export interface CredentialCapability {
+  readonly capabilityId: string;
+  readonly credentialRef: string;
+  readonly recipeId: string;
+  readonly workerId: string;
+  readonly scope: string;
+  execute(invocation: CapabilityInvocation): unknown | Promise<unknown>;
+}
+
+export interface CredentialUseRequest {
+  readonly capabilityId: string;
+  readonly operation: ProviderOperation;
+}
+
+export type CredentialBrokerErrorCode =
+  | 'UNKNOWN_PERMIT'
+  | 'PERMIT_REPLAY'
+  | 'PERMIT_EXPIRED'
+  | 'CREDENTIAL_REF_MISMATCH'
+  | 'IDENTITY_CHANGED'
+  | 'RECIPE_MISMATCH'
+  | 'PEER_MISMATCH'
+  | 'SCOPE_MISMATCH'
+  | 'UNREGISTERED_CAPABILITY'
+  | 'CAPABILITY_BINDING_MISMATCH'
+  | 'VAULT_UNAVAILABLE'
+  | 'OPERATION_FAILED'
+  | 'EXFIL_BLOCKED'
+  | 'UNBOUND_INPUT';
+
 export class CredentialBrokerError extends Error {
   override name = 'CredentialBrokerError';
+  readonly code: CredentialBrokerErrorCode;
+
+  constructor(code: CredentialBrokerErrorCode, detail: string) {
+    super(`credential use rejected [${code}]: ${detail}`);
+    this.code = code;
+  }
 }
 
 /** Minimal lease shape mirroring @gram/secrets boundary conventions (read-only reference). */
@@ -63,24 +123,55 @@ export interface CredentialPermit {
 export interface CredentialBrokerOptions {
   readonly vault: FixtureVault;
   readonly permits: readonly CredentialPermit[];
+  readonly capabilities: readonly CredentialCapability[];
   readonly clock?: () => number;
 }
 
-/** Approved business logic. Runs inside the lease; its return value never leaves raw. */
-export type ApprovedWorker = (secret: string) => unknown | Promise<unknown>;
+const REDACTED = '***REDACTED***';
+
+/** Token-shape scrubs mirroring @gram/secrets redactor patterns (read-only reuse, no import). */
+function redactTokenShapes(text: string): string {
+  let output = text;
+  output = output.replace(/(Authorization\s*:\s*Bearer\s+)[^\s]+/gi, `$1${REDACTED}`);
+  output = output.replace(
+    /\b(?:sk-[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{10,}|gh[opusr]_[A-Za-z0-9]{10,})\b/g,
+    REDACTED,
+  );
+  output = output.replace(/Bearer\s+[A-Za-z0-9._~-]{8,}/g, `Bearer ${REDACTED}`);
+  return output;
+}
+
+/**
+ * Map an upstream failure to redacted detail. Only the failure *kind*
+ * survives; raw messages, host/backend identifiers, and token-shaped
+ * substrings are stripped so nothing sensitive leaks into broker errors.
+ */
+function toSafeDetail(kind: string, _raw: unknown): string {
+  void _raw;
+  return `${redactTokenShapes(kind)} (${REDACTED})`;
+}
 
 const sha256Hex = (value: string): string =>
   createHash('sha256').update(value, 'utf8').digest('hex');
 
 const assertBound = (value: string, label: string): void => {
   if (value.length === 0) {
-    throw new CredentialBrokerError(`credential use rejected: ${label} must be bound (non-empty)`);
+    throw new CredentialBrokerError('UNBOUND_INPUT', `${label} must be bound (non-empty)`);
+  }
+};
+
+const assertOperationBound = (operation: ProviderOperation): void => {
+  assertBound(operation.kind, 'operation.kind');
+  for (const [key, entry] of Object.entries(operation.fields)) {
+    assertBound(key, 'operation.fields key');
+    assertBound(entry, `operation.fields[${key}]`);
   }
 };
 
 export class CredentialBroker {
   private readonly vault: FixtureVault;
   private readonly permits: ReadonlyMap<string, CredentialPermit>;
+  private readonly capabilities: ReadonlyMap<string, CredentialCapability>;
   private readonly consumed = new Set<string>();
   private readonly clock: () => number;
 
@@ -89,10 +180,16 @@ export class CredentialBroker {
     const permits = new Map<string, CredentialPermit>();
     for (const permit of options.permits) permits.set(permit.id, permit);
     this.permits = permits;
+    const capabilities = new Map<string, CredentialCapability>();
+    for (const capability of options.capabilities) capabilities.set(capability.capabilityId, capability);
+    this.capabilities = capabilities;
     this.clock = options.clock ?? Date.now;
   }
 
-  async credentialUse(input: CredentialUseInput, worker: ApprovedWorker): Promise<CredentialReceipt> {
+  async credentialUse(
+    input: CredentialUseInput,
+    request: CredentialUseRequest,
+  ): Promise<CredentialReceipt> {
     assertBound(input.intentHash, 'intentHash');
     assertBound(input.permitId, 'permitId');
     assertBound(input.credentialRef, 'credentialRef');
@@ -100,46 +197,51 @@ export class CredentialBroker {
     assertBound(input.requesterId, 'requesterId');
     assertBound(input.workerId, 'workerId');
     assertBound(input.scope, 'scope');
+    assertBound(request.capabilityId, 'capabilityId');
+    assertOperationBound(request.operation);
 
     const permit = this.permits.get(input.permitId);
     if (permit === undefined) {
-      throw new CredentialBrokerError(
-        `credential use rejected: unknown permit ${input.permitId}, arbitrary credential use is forbidden`,
-      );
+      throw new CredentialBrokerError('UNKNOWN_PERMIT', 'arbitrary credential use is forbidden');
     }
     if (this.consumed.has(permit.id)) {
-      throw new CredentialBrokerError(
-        `credential use rejected: permit ${permit.id} already consumed, single-use replay is forbidden`,
-      );
+      throw new CredentialBrokerError('PERMIT_REPLAY', 'single-use permit already consumed');
     }
     if (this.clock() > permit.expiresAt) {
-      throw new CredentialBrokerError(
-        `credential use rejected: permit ${permit.id} expired, re-approval required`,
-      );
+      throw new CredentialBrokerError('PERMIT_EXPIRED', 're-approval required');
     }
     if (input.credentialRef !== permit.credentialRef) {
       throw new CredentialBrokerError(
-        `credential use rejected: credential ref ${input.credentialRef} is not bound to permit ${permit.id}`,
+        'CREDENTIAL_REF_MISMATCH',
+        'credential ref is not bound to the permit',
       );
     }
     if (input.intentHash !== permit.intentHash) {
-      throw new CredentialBrokerError(
-        `credential use rejected: operation identity changed for permit ${permit.id}, re-approval required`,
-      );
+      throw new CredentialBrokerError('IDENTITY_CHANGED', 'operation identity changed, re-approval required');
     }
     if (input.recipeId !== permit.recipeId) {
-      throw new CredentialBrokerError(
-        `credential use rejected: changed recipe ${input.recipeId} for permit ${permit.id}, re-approval required`,
-      );
+      throw new CredentialBrokerError('RECIPE_MISMATCH', 'changed recipe, re-approval required');
     }
     if (input.requesterId !== permit.requesterId || input.workerId !== permit.workerId) {
-      throw new CredentialBrokerError(
-        `credential use rejected: wrong peer for permit ${permit.id}, requester/worker binding mismatch`,
-      );
+      throw new CredentialBrokerError('PEER_MISMATCH', 'requester/bound-identity binding mismatch');
     }
     if (input.scope !== permit.scope) {
+      throw new CredentialBrokerError('SCOPE_MISMATCH', 'changed scope, re-approval required');
+    }
+
+    const capability = this.capabilities.get(request.capabilityId);
+    if (capability === undefined) {
+      throw new CredentialBrokerError('UNREGISTERED_CAPABILITY', 'capability is not registered');
+    }
+    if (
+      capability.credentialRef !== permit.credentialRef ||
+      capability.recipeId !== permit.recipeId ||
+      capability.workerId !== permit.workerId ||
+      capability.scope !== permit.scope
+    ) {
       throw new CredentialBrokerError(
-        `credential use rejected: changed scope for permit ${permit.id}, re-approval required`,
+        'CAPABILITY_BINDING_MISMATCH',
+        'capability binding does not match the permit',
       );
     }
 
@@ -149,23 +251,34 @@ export class CredentialBroker {
     let lease: FixtureLease;
     try {
       lease = await this.vault.getForUse(permit.credentialRef);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new CredentialBrokerError(
-        `credential use rejected: credential vault is locked/unavailable for permit ${permit.id}: ${detail}`,
-      );
+    } catch (failure) {
+      throw new CredentialBrokerError('VAULT_UNAVAILABLE', toSafeDetail('vault locked/unavailable', failure));
     }
 
     try {
       let observed = '';
-      const outcome = await lease.withValue((secret) => {
-        observed = secret;
-        return worker(secret);
-      });
+      let outcome: unknown;
+      try {
+        outcome = await lease.withValue((material: string) => {
+          observed = material;
+          return capability.execute({
+            permitId: permit.id,
+            credentialRef: permit.credentialRef,
+            recipeId: permit.recipeId,
+            workerId: permit.workerId,
+            scope: permit.scope,
+            operation: request.operation,
+          });
+        });
+      } catch (failure) {
+        if (failure instanceof CredentialBrokerError) throw failure;
+        throw new CredentialBrokerError('OPERATION_FAILED', toSafeDetail('provider operation failed', failure));
+      }
       const rendered = JSON.stringify(outcome) ?? String(outcome);
       if (observed.length > 0 && rendered.includes(observed)) {
         throw new CredentialBrokerError(
-          `credential use rejected: worker must not return the raw secret for permit ${permit.id}, only a sanitized receipt leaves the broker`,
+          'EXFIL_BLOCKED',
+          `capability outcome echoes credential material (${REDACTED})`,
         );
       }
       return {
@@ -184,11 +297,11 @@ export class CredentialBroker {
   }
 }
 
-/** Bound credential use. The worker runs inside the lease; only a receipt leaves. */
+/** Bound credential use. Runs the registered capability; only a receipt leaves. */
 export async function credential_use(
   input: CredentialUseInput,
   broker: CredentialBroker,
-  worker: ApprovedWorker,
+  request: CredentialUseRequest,
 ): Promise<CredentialReceipt> {
-  return broker.credentialUse(input, worker);
+  return broker.credentialUse(input, request);
 }
