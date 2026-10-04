@@ -13,7 +13,7 @@
 ## D2 — Login/auth UX: stay signed in, intervene only on human challenges
 
 - Core requirement: operating the store must NOT keep stopping for logins. Never design a flow that asks the user for ID/password or credentials per task.
-- Target behavior: one initial login/link, then long-lived unattended auth — OAuth/API providers auto-refresh (refresh token), web logins keep session/cookies via a HAAR-dedicated persistent browser profile, auto re-auth where recoverable.
+- Target behavior: one initial login/link, then long-lived unattended auth — OAuth/API providers use the provider's officially supported refresh, rotation, or session-renewal mechanism where available; web logins keep session/cookies via a HAAR-dedicated persistent browser profile and auto re-auth where recoverable. Do not assume every provider or Shopify action exposes a refresh-token flow.
 - Human intervention ONLY for: initial registration, MFA, CAPTCHA, passkey, new-device verification, password change, account lock, OAuth revocation — anything the service forces a human for. Those become `WAITING_USER` + user notification.
 - Goal: credentials stored safely while normal operation stays unattended — not frequent logins for security theater.
 
@@ -52,7 +52,7 @@
 ## D7 — Approval system: risk-tiered commerce operations
 
 - #151 approval persistence + MCP control surface exists but currently covers command-policy. Confirming Shopify as provider does NOT auto-approve commerce mutations.
-- The Shopify adapter defines typed operations with risk tiers (exact matrix at adapter design time), e.g. product/order read → READ; local draft → LOCAL/NO REMOTE EFFECT; product listing, inventory change → REMOTE_WRITE; price change → separate policy; order cancel, refund, payment/settlement → HIGH_RISK; customer messages → separate approval; account/store deletion → default DENY or strongest approval.
+- The Shopify adapter defines canonical typed operations and effect metadata only. It does not supply a trusted risk tier. The central Policy Engine exclusively maps canonical actions to READ / REMOTE_WRITE / HIGH_RISK / DENY and determines approval requirements. The exact action matrix is fixed during adapter/policy design; providers cannot downgrade their own risk.
 - Goal is automated operations, not unapproved risky actions.
 
 ## D8 — MAC-02 state discipline
