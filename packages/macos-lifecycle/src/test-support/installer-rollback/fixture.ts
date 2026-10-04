@@ -1,4 +1,9 @@
-import type { ServiceConfig } from '../../contracts.js';
+import type { Role, ServiceConfig } from '../../contracts.js';
+import type {
+  CurrentRelease,
+  ReviewedRelease,
+  RollbackPorts,
+} from '../../rollback-contracts.js';
 import {
   buildCommittedJournal,
   buildManifest,
@@ -13,6 +18,7 @@ import type {
   PriorInstall,
   PublishKind,
   Revalidation,
+  ServiceHandle,
 } from '../../installation-transaction/contracts.js';
 import { labConfig } from '../fixtures.js';
 
@@ -37,46 +43,8 @@ export interface RollbackFixtureOptions {
   restoreCorrupt?: boolean;
 }
 
-/** Reviewed release lane: exact release.json bytes bound to their sha256
- * digest. Key order mirrors the T7 sealed packager
- * (platform/macos/package-release.mjs buildManifest: schemaVersion,
- * releaseId, sourceCommit, lockDigest, files, coreTools,
- * schemaCompatibility, tunnelCompatibilityDigest?, single trailing
- * newline); digest is the sha256 of those exact bytes. This is a
- * test-double lane only — never the real packager or inspector.
- */
-export interface ReviewedRelease {
-  digest: string;
-  releaseJson: Buffer;
-  acceptedSchema: readonly (readonly number[])[];
-}
-
-export interface CurrentRelease {
-  digest: string | null;
-  releaseJson: Buffer | null;
-}
-
-/** Narrow rollback ports shape (structural twin of the rollback-contracts
- * RollbackPorts; wired to the contract type in GREEN).
- */
-export interface ReviewedRollbackPorts {
-  authorizeLocalAdmin(): Promise<boolean>;
-  lock(): Promise<{ acquired: boolean; release(): Promise<void> }>;
-  readCurrentRelease(): Promise<CurrentRelease>;
-  readRetainedRelease(targetReleaseDigest: string): Promise<ReviewedRelease | null>;
-  services(): {
-    stop(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' | 'FOREIGN_SERVICE' }>;
-    start(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' }>;
-    isStopped(role: string): Promise<boolean>;
-    ownedHealthy(role: string): Promise<boolean>;
-  };
-  confirmDatabaseClosed(): Promise<boolean>;
-  readClosedSchema(): Promise<ClosedSchemaReading>;
-  restoreRetained(target: ReviewedRelease): Promise<void>;
-  rereadLiveRelease(): Promise<CurrentRelease>;
-  readLiveManifest(): Promise<Buffer | null>;
-  journal(): { read(): Promise<Buffer | null>; writeStage(stage: never, body: Buffer): Promise<void> };
-}
+export type { CurrentRelease, ReviewedRelease, RollbackPorts };
+export type ReviewedRollbackPorts = RollbackPorts;
 
 function buildReleaseJsonBytes(input: {
   releaseId: string; sourceCommit: string; lockDigest: string;
@@ -342,28 +310,27 @@ export function makeRollbackFixture(options: RollbackFixtureOptions = {}): Rollb
     },
   };
 
-  const sharedServices = {
-    async stop(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' | 'FOREIGN_SERVICE' }> {
+  const sharedServices: ServiceHandle = {
+    async stop(role: Role) {
       serviceMutations.push(`stop:${role}`);
       calls.push(`stop:${role}`);
       stopped.set(role, true);
-      return { ok: true, code: 'OK' };
+      return { ok: true, code: 'OK' as const };
     },
-    async start(role: string): Promise<{ ok: boolean; code: 'OK' | 'PARTIAL_INSTALL' }> {
+    async start(role: Role) {
       serviceMutations.push(`start:${role}`);
       stopped.set(role, false);
-      return { ok: true, code: 'OK' };
+      return { ok: true, code: 'OK' as const };
     },
-    async isStopped(role: string): Promise<boolean> {
+    async isStopped(role: Role): Promise<boolean> {
       return stopped.get(role) ?? true;
     },
-    async ownedHealthy(role: string): Promise<boolean> {
-      void role;
+    async ownedHealthy(role: Role): Promise<boolean> {
       return stopped.get(role) === false;
     },
   };
 
-  const rollbackPorts: ReviewedRollbackPorts = {
+  const rollbackPorts: RollbackPorts = {
     async authorizeLocalAdmin(): Promise<boolean> {
       calls.push('authorize');
       return options.authDenied ? false : true;
