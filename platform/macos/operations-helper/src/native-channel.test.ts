@@ -14,13 +14,20 @@ import {
   type ChannelEnvelope,
   type PeerIdentity,
 } from './channel.js';
-import { domainAccountFor } from './accounts.js';
+import {
+  domainAccountFor,
+  EXAMPLE_CODING_UID,
+  EXAMPLE_CODING_USER,
+  EXAMPLE_OPS_UID,
+  EXAMPLE_OPS_USER,
+  SYNTHETIC_EXAMPLE,
+} from './accounts.js';
 import { approveProfilePath } from './profiles.js';
 import { approveOperation, type HelperManifestShape } from './manifest.js';
 import { verifyPeerFixture } from './peer-verifier.js';
 
 const opsPeer: PeerIdentity = {
-  uid: 502,
+  uid: EXAMPLE_OPS_UID,
   teamId: 'FIXTURE-TEAMID-OPS',
   bundleId: 'agent.gram.operations-helper',
   auditSessionId: 'fixture-audit-session-ops',
@@ -46,7 +53,7 @@ const fixtureManifest: HelperManifestShape = {
 describe('native channel refusals (fail closed)', () => {
   it('refuses a wrong peer (uid mismatch)', () => {
     expect(() =>
-      approvePeer({ ...opsPeer, uid: 503 }),
+      approvePeer({ ...opsPeer, uid: EXAMPLE_CODING_UID }),
     ).toThrow(/wrong peer|peer/i);
   });
 
@@ -62,7 +69,7 @@ describe('native channel refusals (fail closed)', () => {
 
   it('refuses a foreign profile path (outside domain home)', () => {
     expect(() =>
-      approveProfilePath('/Users/mac_code/Profiles/Default', '/Users/mac_ops'),
+      approveProfilePath('/Users/example_code/Profiles/Default', '/Users/example_ops'),
     ).toThrow(/foreign|profile/i);
   });
 
@@ -77,19 +84,37 @@ describe('native channel refusals (fail closed)', () => {
 });
 
 describe('domain runtime packaging contract', () => {
-  it('maps mac_code UID 503 to CODING (config, not discovery)', () => {
+  it('maps EXAMPLE_CODING_USER / EXAMPLE_CODING_UID to CODING (synthetic example, not discovery)', () => {
     expect(domainAccountFor('CODING')).toEqual({
-      user: 'mac_code',
-      uid: 503,
+      user: EXAMPLE_CODING_USER,
+      uid: EXAMPLE_CODING_UID,
       domain: 'CODING',
     });
   });
 
-  it('maps mac_ops UID 502 to OPERATIONS (config, not discovery)', () => {
+  it('maps EXAMPLE_OPS_USER / EXAMPLE_OPS_UID to OPERATIONS (synthetic example, not discovery)', () => {
     expect(domainAccountFor('OPERATIONS')).toEqual({
-      user: 'mac_ops',
-      uid: 502,
+      user: EXAMPLE_OPS_USER,
+      uid: EXAMPLE_OPS_UID,
       domain: 'OPERATIONS',
+    });
+  });
+
+  it('exposes UIDs as synthetic examples only, never production config sources', () => {
+    expect(SYNTHETIC_EXAMPLE).toBe(true);
+    expect(EXAMPLE_OPS_UID).toBe(502);
+    expect(EXAMPLE_CODING_UID).toBe(503);
+    expect(EXAMPLE_OPS_USER.startsWith('example_')).toBe(true);
+    expect(EXAMPLE_CODING_USER.startsWith('example_')).toBe(true);
+    expect(domainAccountFor('OPERATIONS')).toEqual({
+      user: EXAMPLE_OPS_USER,
+      uid: EXAMPLE_OPS_UID,
+      domain: 'OPERATIONS',
+    });
+    expect(domainAccountFor('CODING')).toEqual({
+      user: EXAMPLE_CODING_USER,
+      uid: EXAMPLE_CODING_UID,
+      domain: 'CODING',
     });
   });
 

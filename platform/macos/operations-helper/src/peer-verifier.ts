@@ -10,6 +10,7 @@
  */
 
 import type { PeerIdentity } from './channel.js';
+import { EXAMPLE_CODING_UID, EXAMPLE_OPS_UID } from './accounts.js';
 
 export interface FixtureSigner {
   readonly teamId: string;
@@ -51,8 +52,10 @@ export const verifyPeerFixture = (
       `peer refused: unknown signer teamId=${peer.teamId} bundleId=${peer.bundleId}`,
     );
   }
-  if (peer.uid !== 502 && peer.uid !== 503) {
-    throw new PeerVerifierError(`peer refused: unknown uid ${peer.uid}, want 502 or 503`);
+  if (peer.uid !== EXAMPLE_OPS_UID && peer.uid !== EXAMPLE_CODING_UID) {
+    throw new PeerVerifierError(
+      `peer refused: unknown uid ${peer.uid}, want synthetic EXAMPLE_OPS_UID or EXAMPLE_CODING_UID`,
+    );
   }
   if (peer.auditSessionId.length === 0) {
     throw new PeerVerifierError('peer refused: audit session must be bound');

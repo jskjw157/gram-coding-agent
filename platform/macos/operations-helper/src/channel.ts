@@ -8,7 +8,9 @@
  *
  * No real signing, no account mutation, no Keychain access, no live
  * credentials. This helper instance serves the OPERATIONS domain only
- * (mac_ops, UID 502); any other UID is a wrong peer.
+ * (synthetic EXAMPLE_OPS_USER / EXAMPLE_OPS_UID — never production
+ * config; real UID-role binding comes from target-Mac account discovery
+ * at WP-20); any other UID is a wrong peer.
  */
 
 import { domainAccountFor } from './accounts.js';

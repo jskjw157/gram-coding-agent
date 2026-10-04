@@ -5,8 +5,10 @@
 // build step, and MUST NOT be added to one without an approved production
 // Team ID (currently NOT SUPPLIED — production signing stays BLOCKED).
 //
-// Mirrors src/peer-verifier.ts: TeamID + bundle allowlist, uid
-// (502 OPERATIONS / 503 CODING), audit-session binding. FAILS CLOSED on
+// Mirrors src/peer-verifier.ts: TeamID + bundle allowlist, synthetic example
+// uid (exampleOpsUID OPERATIONS / exampleCodingUID CODING — SYNTHETIC ONLY,
+// never production config; real UID-role binding comes from target-Mac
+// account discovery at WP-20), audit-session binding. FAILS CLOSED on
 // adhoc ("adhoc", "-", empty) and unknown signers.
 //
 // NOTE: No SecCodeCopySigningInformation / real codesign is performed here.
@@ -31,6 +33,10 @@ struct FixtureSigner: Equatable {
     let bundleID: String
 }
 
+/// Synthetic example UIDs — fixture only, never production config.
+let exampleOpsUID = 502
+let exampleCodingUID = 503
+
 struct FixturePeer {
     let uid: Int
     let teamID: String
@@ -47,7 +53,7 @@ func verifyPeerFixture(_ peer: FixturePeer, fixtureSigners: [FixtureSigner]) thr
     if !known {
         throw FixturePeerVerifierError.unknownSigner(teamID: peer.teamID, bundleID: peer.bundleID)
     }
-    if peer.uid != 502 && peer.uid != 503 {
+    if peer.uid != exampleOpsUID && peer.uid != exampleCodingUID {
         throw FixturePeerVerifierError.unknownUID(peer.uid)
     }
     if peer.auditSessionID.isEmpty {
