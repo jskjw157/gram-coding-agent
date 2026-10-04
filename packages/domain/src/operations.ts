@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { v7 as uuidv7 } from 'uuid';
 import type { PolicyDecisionKind } from './policy.js';
-import type { TaskId } from './task.js';
+import { canTransitionTaskStatus, type TaskId, type TaskStatus } from './task.js';
 
 export type TaskKind = 'QUERY' | 'COMMAND' | 'WORKFLOW';
 
@@ -264,3 +264,35 @@ export const operationHash = (intent: OperationIntent): string => {
   }
   return createHash('sha256').update(JSON.stringify(ordered)).digest('hex');
 };
+
+// M2 refs: task.ts:3 TaskId; task.ts:6-18 TaskStatus; task.ts:28-41 taskTransitions;
+// task.ts:47 canTransitionTaskStatus (sole transition owner); policy.ts:1 PolicyDecisionKind;
+// persistence task_type TEXT (001_initial.sql tasks.task_type; task-repository.ts:6,21).
+// TaskStatus/TaskId/PolicyDecisionKind are reused, never redefined: no second model.
+export const taskTypeFromTaskKind = (kind: TaskKind): string => kind;
+
+export const taskKindFromTaskType = (taskType: string): TaskKind | null => {
+  const normalized = taskType.trim().toUpperCase();
+  return taskKinds.includes(normalized as TaskKind) ? (normalized as TaskKind) : null;
+};
+
+const effectsForExecutionMode: Record<ExecutionMode, readonly EffectClass[]> = {
+  FIXTURE: ['READ'],
+  READ_ONLY: ['READ'],
+  WRITE_APPROVED: ['READ', 'WRITE', 'DELETE'],
+};
+
+export const allowedEffectsForExecutionMode = (mode: ExecutionMode): readonly EffectClass[] =>
+  effectsForExecutionMode[mode];
+
+export const isEffectAllowedForExecutionMode = (
+  mode: ExecutionMode,
+  effect: EffectClass,
+): boolean => allowedEffectsForExecutionMode(mode).includes(effect);
+
+export const isOperationPermitted = (
+  mode: ExecutionMode,
+  from: TaskStatus,
+  to: TaskStatus,
+  effect: EffectClass,
+): boolean => canTransitionTaskStatus(from, to) && isEffectAllowedForExecutionMode(mode, effect);
