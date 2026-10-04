@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowedEffectsForExecutionMode,
   createOperationIntent,
+  isEffectAllowedForExecutionMode,
+  isOperationPermitted,
   operationHash,
   parseCreateOperationInput,
   parseEffectReceipt,
   parseOperationIntent,
+  taskKindFromTaskType,
+  taskTypeFromTaskKind,
   type CreateOperationInput,
   type EffectClass,
   type ExecutionMode,
@@ -176,5 +181,48 @@ describe('Operations domain contract', () => {
     expect(seenAction).toBe('shopify.product.create');
     expect(seenMode).toBe('WRITE_APPROVED');
     expect(receipt.operationHash).toBe(operationHash(intent));
+  });
+
+  // Additive M2 mapping — cites origin/feat/m2-vertical-slice read-only refs:
+  // - task.ts:3 (TaskId), task.ts:6-18 (TaskStatus), task.ts:28-41 (taskTransitions),
+  //   task.ts:47 (canTransitionTaskStatus — single owner of transition validity)
+  // - policy.ts:1 (PolicyDecisionKind — reused, not redefined)
+  // - persistence task_type TEXT (migrations/001_initial.sql tasks.task_type;
+  //   task-repository.ts:6,21 taskType: string — free-form, e.g. 'CODING'/'FIX').
+  // No second domain model: TaskStatus/TaskId/PolicyDecisionKind are NOT redefined here.
+  it('maps free-form M2 task_type strings to the additive TaskKind', () => {
+    expect(taskKindFromTaskType('QUERY')).toBe('QUERY');
+    expect(taskKindFromTaskType('COMMAND')).toBe('COMMAND');
+    expect(taskKindFromTaskType('WORKFLOW')).toBe('WORKFLOW');
+    expect(taskKindFromTaskType('  command ')).toBe('COMMAND');
+    // M2 legacy free-form values stay valid upstream; mapping claims none of them.
+    expect(taskKindFromTaskType('CODING')).toBeNull();
+    expect(taskKindFromTaskType('FIX')).toBeNull();
+    expect(taskKindFromTaskType('')).toBeNull();
+  });
+
+  it('round-trips TaskKind through its canonical task_type string', () => {
+    const kinds: TaskKind[] = ['QUERY', 'COMMAND', 'WORKFLOW'];
+    for (const kind of kinds) {
+      expect(taskKindFromTaskType(taskTypeFromTaskKind(kind))).toBe(kind);
+    }
+  });
+
+  it('maps ExecutionMode to allowed effects without owning TaskStatus transitions', () => {
+    expect(allowedEffectsForExecutionMode('READ_ONLY')).toEqual(['READ']);
+    expect(allowedEffectsForExecutionMode('FIXTURE')).toEqual(['READ']);
+    expect(allowedEffectsForExecutionMode('WRITE_APPROVED')).toEqual(['READ', 'WRITE', 'DELETE']);
+    expect(isEffectAllowedForExecutionMode('READ_ONLY', 'WRITE')).toBe(false);
+    expect(isEffectAllowedForExecutionMode('WRITE_APPROVED', 'DELETE')).toBe(true);
+  });
+
+  it('gates operations on M2 transition validity AND ExecutionMode effect permission', () => {
+    // M2-legal transition + mode-permitted effect => permitted.
+    expect(isOperationPermitted('WRITE_APPROVED', 'RUNNING', 'VERIFYING', 'WRITE')).toBe(true);
+    // M2-illegal transition stays denied even in WRITE_APPROVED (task.ts:28-41).
+    expect(isOperationPermitted('WRITE_APPROVED', 'QUEUED', 'COMPLETED', 'READ')).toBe(false);
+    // M2-legal transition but mode-forbidden effect => denied.
+    expect(isOperationPermitted('READ_ONLY', 'RUNNING', 'VERIFYING', 'WRITE')).toBe(false);
+    expect(isOperationPermitted('READ_ONLY', 'RUNNING', 'VERIFYING', 'READ')).toBe(true);
   });
 });
