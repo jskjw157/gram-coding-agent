@@ -12,6 +12,12 @@
 //   without that evidence stays refused.
 //
 // This module holds no timers and no scheduler: leases + ledger only.
+//
+// Durable wiring (T4, Gate A F2): every mutation commits the full record
+// on the journal port, and snapshot()/rehydrate() move ledger state as
+// plain JSON. The journal is the WP-07 persistence target hook: the
+// persistence lane backs it with SQLite; this lane never touches the
+// database directly and never forks the M2 state machine.
 import { randomUUID } from 'node:crypto';
 
 export type EffectState = 'PREPARED' | 'DISPATCHING' | 'CONFIRMED' | 'NOT_APPLIED' | 'UNKNOWN';
@@ -24,6 +30,11 @@ export const MAX_READ_RETRIES = 3;
 /** Provider-query outcome that settles an UNKNOWN effect. Nothing else does. */
 export type ProviderQueryEvidence = 'provider-confirmed-applied' | 'provider-confirmed-not-applied';
 
+/** Lane provider-query: answers what the provider actually did for an operation. */
+export type ProviderQueryResult = 'applied' | 'not-applied' | 'unknown';
+
+export type ProviderQuery = (operationId: string) => Promise<ProviderQueryResult>;
+
 export interface EffectRecord {
   readonly effectId: string;
   readonly operationId: string;
@@ -31,6 +42,7 @@ export interface EffectRecord {
   readonly state: EffectState;
   readonly attempts: number;
   readonly reconciled: boolean;
+  readonly reconciledObserved: 'CONFIRMED' | 'NOT_APPLIED' | 'UNKNOWN' | null;
 }
 
 export interface ReconcileEvidence {
@@ -85,10 +97,14 @@ const copyOf = (stored: StoredEffect): EffectRecord => ({
   state: stored.state,
   attempts: stored.attempts,
   reconciled: stored.reconciled,
+  reconciledObserved: stored.reconciledObserved,
 });
 
 const retryBudgetFor = (effectClass: LedgerEffectClass): number =>
   effectClass === 'READ' ? MAX_READ_RETRIES : 0;
+
+/** Durable journal port: the WP-07 persistence target subscribes here. */
+export type LedgerJournal = (record: EffectRecord) => void;
 
 /**
  * D12 query-to-tri-state: an UNKNOWN effect settles only when the observed
@@ -107,10 +123,63 @@ const settlesUnknownViaProvider = (
 
 export class EffectLedger {
   private readonly effects = new Map<string, StoredEffect>();
-  private readonly commit: (record: EffectRecord) => void;
+  private readonly commit: LedgerJournal;
 
-  constructor(onCommit?: (record: EffectRecord) => void) {
+  constructor(onCommit?: LedgerJournal) {
     this.commit = onCommit ?? ((): void => {});
+  }
+
+  /** Plain-JSON durable state for the WP-07 persistence target, in commit order. */
+  snapshot(): EffectRecord[] {
+    return [...this.effects.values()].map(copyOf);
+  }
+
+  /**
+   * Restore durable state after restart from journal records.
+   * Last-write-wins per effectId; read-only, emits no journal events.
+   */
+  rehydrate(records: readonly EffectRecord[]): void {
+    for (const record of records) {
+      if (typeof record.effectId !== 'string' || record.effectId.length === 0) {
+        throw new LedgerError('rehydrate needs a non-empty effectId');
+      }
+      if (typeof record.operationId !== 'string' || record.operationId.length === 0) {
+        throw new LedgerError('rehydrate needs a non-empty operationId');
+      }
+      if (record.effectClass !== 'READ' && record.effectClass !== 'WRITE' && record.effectClass !== 'DELETE') {
+        throw new LedgerError(`rehydrate found invalid effectClass: ${String(record.effectClass)}`);
+      }
+      if (
+        record.state !== 'PREPARED' &&
+        record.state !== 'DISPATCHING' &&
+        record.state !== 'CONFIRMED' &&
+        record.state !== 'NOT_APPLIED' &&
+        record.state !== 'UNKNOWN'
+      ) {
+        throw new LedgerError(`rehydrate found invalid state: ${String(record.state)}`);
+      }
+      if (!Number.isSafeInteger(record.attempts) || record.attempts < 0) {
+        throw new LedgerError('rehydrate found invalid attempts');
+      }
+      if (typeof record.reconciled !== 'boolean') throw new LedgerError('rehydrate found invalid reconciled flag');
+      if (
+        record.reconciledObserved !== null &&
+        record.reconciledObserved !== 'CONFIRMED' &&
+        record.reconciledObserved !== 'NOT_APPLIED' &&
+        record.reconciledObserved !== 'UNKNOWN'
+      ) {
+        throw new LedgerError('rehydrate found invalid reconciledObserved');
+      }
+      this.effects.set(record.effectId, {
+        effectId: record.effectId,
+        operationId: record.operationId,
+        effectClass: record.effectClass,
+        state: record.state,
+        attempts: record.attempts,
+        reconciled: record.reconciled,
+        reconciledObserved: record.reconciledObserved,
+      });
+    }
   }
 
   prepare(operationId: string, effectClass: LedgerEffectClass): EffectRecord {
@@ -211,6 +280,40 @@ export class EffectLedger {
     const record = copyOf(stored);
     this.commit(record);
     return record;
+  }
+
+  /**
+   * D12 query-to-tri-state over the actual lane API: run the provider query
+   * for an UNKNOWN effect and settle from its answer. Extends the F1
+   * evidence-based settlement: applied/not-applied answers reconcile with
+   * matching provider evidence, an unknown answer leaves UNKNOWN stuck
+   * until real evidence arrives. Non-UNKNOWN effects stay refused.
+   */
+  async queryAndSettleUnknown(effectId: string, query: ProviderQuery): Promise<EffectRecord> {
+    const stored = this.effects.get(effectId);
+    if (stored === undefined) throw new LedgerError(`unknown effect: ${effectId}`);
+    if (stored.state !== 'UNKNOWN') {
+      throw new LedgerError(`settle requires UNKNOWN, found ${stored.state}`);
+    }
+    const answer = await query(stored.operationId);
+    if (answer === 'applied') {
+      return this.reconcile(effectId, {
+        observedState: 'CONFIRMED',
+        policyDecision: 'ALLOW',
+        providerEvidence: 'provider-confirmed-applied',
+      });
+    }
+    if (answer === 'not-applied') {
+      return this.reconcile(effectId, {
+        observedState: 'NOT_APPLIED',
+        policyDecision: 'ALLOW',
+        providerEvidence: 'provider-confirmed-not-applied',
+      });
+    }
+    if (answer === 'unknown') {
+      return this.reconcile(effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    }
+    throw new LedgerError(`provider query returned invalid answer: ${String(answer)}`);
   }
 
   requestRetry(effectId: string, request: RetryRequest): EffectRecord {

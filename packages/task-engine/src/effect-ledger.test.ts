@@ -199,3 +199,110 @@ describe('EffectLedger Gate A F1: UNKNOWN settles only via provider-query eviden
     expect(ledger.get(rec.effectId)?.state).toBe('UNKNOWN');
   });
 });
+
+describe('EffectLedger durable wiring T4/D12 RED (rehydrate + provider-query lane API)', () => {
+  it('RED T4i: restart loses ledger state (fresh ledger sees nothing)', () => {
+    const journal: EffectRecord[] = [];
+    const ledger1 = new EffectLedger((record: EffectRecord) => {
+      journal.push(record);
+    });
+    const rec = ledger1.prepare('op-1', 'WRITE');
+    expect(journal).toHaveLength(1);
+    const fresh = new EffectLedger();
+    expect(fresh.get(rec.effectId)).toBeNull();
+    // Rehydrate from the durable journal restores the record; crash recovery
+    // then maps the interrupted DISPATCHING to UNKNOWN instead of losing it.
+    const restored = new EffectLedger();
+    restored.rehydrate(journal);
+    expect(restored.get(rec.effectId)?.state).toBe('PREPARED');
+  });
+
+  it('RED T4j: DISPATCHING committed to the journal survives restart as UNKNOWN after recovery', async () => {
+    const journal: EffectRecord[] = [];
+    const ledger1 = new EffectLedger((record: EffectRecord) => {
+      journal.push(record);
+    });
+    const rec = ledger1.prepare('op-1', 'WRITE');
+    await expect(
+      ledger1.dispatch(rec.effectId, () => Promise.reject(new Error('crash: power loss'))),
+    ).rejects.toThrow();
+    const lastCommitted = journal[journal.length - 1];
+    expect(lastCommitted?.state).toBe('DISPATCHING');
+    const restored = new EffectLedger();
+    restored.rehydrate(journal);
+    expect(restored.get(rec.effectId)?.state).toBe('DISPATCHING');
+    const recovered = restored.crashRecover();
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.state).toBe('UNKNOWN');
+    expect(restored.get(rec.effectId)?.state).toBe('UNKNOWN');
+  });
+
+  it('RED T4k: UNKNOWN settles via the provider-query lane API (applied)', async () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const seen: string[] = [];
+    const settled = await ledger.queryAndSettleUnknown(rec.effectId, (operationId) => {
+      seen.push(operationId);
+      return Promise.resolve('applied');
+    });
+    expect(seen).toEqual(['op-1']);
+    expect(settled.state).toBe('CONFIRMED');
+    expect(ledger.get(rec.effectId)?.state).toBe('CONFIRMED');
+  });
+
+  it('RED T4l: UNKNOWN settles via the provider-query lane API (not-applied, then governed retry)', async () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'READ');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const settled = await ledger.queryAndSettleUnknown(rec.effectId, () =>
+      Promise.resolve('not-applied'),
+    );
+    expect(settled.state).toBe('NOT_APPLIED');
+    const retried = ledger.requestRetry(rec.effectId, {
+      evidence: { observedState: 'NOT_APPLIED', policyDecision: 'ALLOW' },
+    });
+    expect(retried.state).toBe('PREPARED');
+  });
+
+  it('RED T4m: provider-query answering unknown leaves UNKNOWN stuck (still needs evidence)', async () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const settled = await ledger.queryAndSettleUnknown(rec.effectId, () =>
+      Promise.resolve('unknown'),
+    );
+    expect(settled.state).toBe('UNKNOWN');
+    expect(ledger.get(rec.effectId)?.state).toBe('UNKNOWN');
+  });
+
+  it('RED T4n: provider-query settlement refuses non-UNKNOWN effects', async () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    await expect(
+      ledger.queryAndSettleUnknown(rec.effectId, () => Promise.resolve('applied')),
+    ).rejects.toThrow(LedgerError);
+    expect(ledger.get(rec.effectId)?.state).toBe('PREPARED');
+  });
+
+  it('RED F2: journal hook carries the full record for the WP-07 persistence target', () => {
+    const journal: EffectRecord[] = [];
+    const ledger = new EffectLedger((record: EffectRecord) => {
+      journal.push(record);
+    });
+    const rec = ledger.prepare('op-1', 'READ');
+    ledger.reconcile(rec.effectId, { observedState: 'NOT_APPLIED', policyDecision: 'ALLOW' });
+    const last = journal[journal.length - 1];
+    // The persistence lane must be able to rebuild retry eligibility from the
+    // journal alone: reconciledObserved has to travel on the record.
+    expect(last?.reconciled).toBe(true);
+    expect(last?.reconciledObserved).toBe('NOT_APPLIED');
+    // And a restart replayed from the journal keeps the governed retry path.
+    const restored = new EffectLedger();
+    restored.rehydrate(journal);
+    const retried = restored.requestRetry(rec.effectId, {
+      evidence: { observedState: 'NOT_APPLIED', policyDecision: 'ALLOW' },
+    });
+    expect(retried.state).toBe('PREPARED');
+  });
+});
