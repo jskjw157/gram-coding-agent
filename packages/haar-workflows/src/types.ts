@@ -97,7 +97,8 @@ export type HaarWorkflowErrorCode =
   | 'SCRIPT_HTML_REFUSED'
   | 'WRITE_APPROVED_REFUSED'
   | 'STALE_INPUT'
-  | 'NEEDS_INPUT';
+  | 'NEEDS_INPUT'
+  | 'WAITING_USER';
 
 export class HaarWorkflowError extends Error {
   readonly code: HaarWorkflowErrorCode;
