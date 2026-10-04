@@ -1,0 +1,23 @@
+{
+  "schema": "agent.gram.operations-helper/manifest@1",
+  "helper": "operations-helper",
+  "domain": "OPERATIONS",
+  "entryPoints": {
+    "helperBinary": "/Library/PrivilegedHelperTools/agent.gram.operations-helper",
+    "xpcServiceId": "agent.gram.operations-helper.xpc",
+    "launchdLabel": "agent.gram.operations-helper"
+  },
+  "release": {
+    "buildMode": "FIXTURE",
+    "version": "0.0.0-fixture",
+    "provenance": "fixture-only packaging contract; no real codesign performed",
+    "productionSigning": "BLOCKED — Team ID NOT SUPPLIED"
+  },
+  "allowlistedOperations": [
+    "helper.ping",
+    "helper.profile.open",
+    "helper.profile.close",
+    "helper.operation.submit",
+    "helper.receipt.fetch"
+  ]
+}
