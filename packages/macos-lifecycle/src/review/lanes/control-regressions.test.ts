@@ -8,6 +8,7 @@ import {
   withMalformedConfig,
   withMismatchedJournal,
   withResetExecutionSpy,
+  withStoppedFailureCapability,
   withoutStoppedFailureCapability,
   withTruthyAuthorize,
 } from '../../test-support/installer-control/index.js';
@@ -91,8 +92,7 @@ describe('control regressions (#148)', () => {
     expect(await f.ports.publish().readLive('core')).not.toBeNull();
   });
 
-  it('(h) every non-success result is exactly {ok:false,code} with no extra keys', async () => {
-    const malformed = makeInstallFixture({ existingInstall: true });
+  it('(h) every non-success result is exactly {ok:false,code} with no extra keys', async () => {    const malformed = makeInstallFixture({ existingInstall: true });
     withMalformedConfig(malformed);
     const r1 = await control('start', malformed.ports);
     expect(r1.ok).toBe(false);
@@ -112,5 +112,116 @@ describe('control regressions (#148)', () => {
     expect(r3.ok).toBe(false);
     expect(Object.keys(r3).sort()).toEqual(['code', 'ok']);
     expect(serviceMutationsOf(truthy)).toEqual([]);
+  });
+
+  it('(i) service failure with extra/raw fields is sanitized to exact {ok,code}', async () => {
+    const f = makeInstallFixture({ existingInstall: true });
+    const svc = f.ports.services.bind(f.ports);
+    f.ports.services = () => {
+      const base = svc();
+      return {
+        ...base,
+        stop: (async () => ({
+          ok: false, code: 'PARTIAL_INSTALL', stage: 'STARTED', raw: 'leak',
+        })) as unknown as typeof base.stop,
+      };
+    };
+    const res = await control('stop', f.ports);
+    expect(res.ok).toBe(false);
+    expect(Object.keys(res).sort()).toEqual(['code', 'ok']);
+    expect(res).toEqual({ ok: false, code: 'PARTIAL_INSTALL' });
+  });
+
+  it('(j) tunnel unhealthy after own start stops tunnel AND core (owned-process proof)', async () => {
+    const f = makeInstallFixture({ existingInstall: true, tunnelEnabled: true });
+    const svc = f.ports.services.bind(f.ports);
+    f.ports.services = () => {
+      const base = svc();
+      return {
+        ...base,
+        ownedHealthy: async (role: 'core' | 'tunnel'): Promise<boolean> =>
+          role === 'tunnel' ? false : base.ownedHealthy(role),
+      };
+    };
+    const res = await control('start', f.ports);
+    expect(res).toEqual({ ok: false, code: 'HEALTH_UNKNOWN' });
+    const mutations = serviceMutationsOf(f);
+    expect(mutations).toContain('start:core');
+    expect(mutations).toContain('start:tunnel');
+    // Tunnel was started by us: compensation must stop it (owned proof),
+    // then core. Current code stops core only (RED).
+    expect(mutations).toContain('stop:tunnel');
+    expect(mutations).toContain('stop:core');
+    expect(await f.ports.services().isStopped('tunnel')).toBe(true);
+    expect(await f.ports.services().isStopped('core')).toBe(true);
+  });
+
+  it('(k) throw after own start still compensates (exception-path cleanup)', async () => {
+    const f = makeInstallFixture({ existingInstall: true, tunnelEnabled: true });
+    const svc = f.ports.services.bind(f.ports);
+    f.ports.services = () => {
+      const base = svc();
+      return {
+        ...base,
+        start: (async (role: 'core' | 'tunnel') => {
+          if (role === 'tunnel') throw new Error('BOOT_FAIL');
+          return base.start(role);
+        }) as unknown as typeof base.start,
+      };
+    };
+    const res = await control('start', f.ports);
+    expect(res).toEqual({ ok: false, code: 'PARTIAL_INSTALL' });
+    const mutations = serviceMutationsOf(f);
+    expect(mutations).toContain('start:core');
+    // Core was started by us before the throw: must be compensated.
+    expect(mutations).toContain('stop:core');
+    expect(await f.ports.services().isStopped('core')).toBe(true);
+  });
+
+  it('(l) foreign/residual start has zero service mutations', async () => {
+    const f = makeInstallFixture({ foreignPrior: true });
+    const res = await control('start', f.ports);
+    expect(res).toEqual({ ok: false, code: 'FOREIGN_SERVICE' });
+    expect(serviceMutationsOf(f)).toEqual([]);
+  });
+
+  it('(m) truthy non-true reset ok is failure (strict boolean)', async () => {
+    const f = makeInstallFixture({ existingInstall: true });
+    const restore = f.ports.restore.bind(f.ports);
+    f.ports.restore = () => {
+      const base = restore();
+      return {
+        ...base,
+        resetStoppedFailure: (async () => ({
+          ok: 'yes', code: 'OK',
+        })) as unknown as NonNullable<typeof base.resetStoppedFailure>,
+      };
+    };
+    const res = await control('reset-failure', f.ports);
+    expect(res.ok).toBe(false);
+    expect(Object.keys(res).sort()).toEqual(['code', 'ok']);
+  });
+
+  it('(n) stopped-failure reset preserves HELD/revision/DB/history (not wiped)', async () => {
+    const f = makeInstallFixture({ existingInstall: true, execution: 'held' });
+    const spy = withStoppedFailureCapability(f);
+    const beforeDb = f.databaseBytes();
+    const beforeSnap = f.snapshotBytes();
+    const priorBefore = await f.ports.readPrior();
+    const journalBefore = await f.ports.journal().read();
+    const res = await control('reset-failure', f.ports);
+    expect(res).toEqual({ ok: true, code: 'OK' });
+    expect(resetExecutionCalls(spy)).toBe(1);
+    // Recovery evidence, not a wipe: DB/history bytes, manifest/config/
+    // journal lives, and the install revision (digest) are preserved.
+    expect(f.databaseBytes().equals(beforeDb)).toBe(true);
+    expect(f.snapshotBytes().equals(beforeSnap)).toBe(true);
+    const priorAfter = await f.ports.readPrior();
+    expect(priorAfter.digest).toBe(priorBefore.digest);
+    expect(priorAfter.manifest?.equals(priorBefore.manifest ?? Buffer.alloc(0))).toBe(true);
+    expect((await f.ports.journal().read())?.equals(journalBefore ?? Buffer.alloc(0))).toBe(true);
+    // Jobs left stopped (lab disabled snapshot), verified via owned handles.
+    expect(await f.ports.services().isStopped('core')).toBe(true);
+    expect(await f.ports.services().isStopped('tunnel')).toBe(true);
   });
 });

@@ -14,6 +14,12 @@ function fail(code: SafeCode): InstallResult {
   return { ok: false, code };
 }
 
+/** Strip service/reset extras (stage/raw/...) to the fixed {ok,code} shape. */
+function sanitize(result: InstallResult): InstallResult {
+  if (result.ok === true) return { ok: true, code: 'OK' };
+  return { ok: false, code: result.code };
+}
+
 /** Local administrative control. Only start|stop|restart|reset-failure|
  * uninstall. Status never repairs journals or restarts jobs. All mutations go
  * through the injected narrow ports; no generic user-switch shell, no purge
@@ -68,9 +74,9 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
     const stopBoth = async (): Promise<InstallResult | null> => {
       try {
         const stopTunnel = await services.stop('tunnel');
-        if (stopTunnel.ok !== true) return stopTunnel;
+        if (stopTunnel.ok !== true) return sanitize(stopTunnel);
         const stopCore = await services.stop('core');
-        if (stopCore.ok !== true) return stopCore;
+        if (stopCore.ok !== true) return sanitize(stopCore);
         if (await services.isStopped('tunnel') !== true) return fail('PARTIAL_INSTALL');
         if (await services.isStopped('core') !== true) return fail('PARTIAL_INSTALL');
         return null;
@@ -82,8 +88,16 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
 
     const startDesired = async (): Promise<InstallResult | null> => {
       let coreStarted = false;
-      const compensateCore = async (): Promise<void> => {
+      let tunnelStarted = false;
+      const compensate = async (): Promise<void> => {
+        if (tunnelStarted) {
+          tunnelStarted = false;
+          try {
+            await services.stop('tunnel');
+          } catch { /* best-effort; the original failure is preserved */ }
+        }
         if (!coreStarted) return;
+        coreStarted = false;
         try {
           await services.stop('core');
         } catch { /* best-effort; the original failure is preserved */ }
@@ -92,33 +106,39 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         // Lab disabled snapshot: desired state is stopped. Starting here
         // reflects an explicit local start request, verified by owned health.
         const startCore = await services.start('core');
-        if (startCore.ok !== true) return startCore;
+        if (startCore.ok !== true) return sanitize(startCore);
         coreStarted = true;
         if (await services.ownedHealthy('core') !== true) {
-          await compensateCore();
+          await compensate();
           return fail('HEALTH_UNKNOWN');
         }
         if (prior.config !== null) {
+          let tunnelEnabled = false;
           try {
             const parsed: unknown = JSON.parse(prior.config.toString('utf8'));
             const tunnel = (parsed as { tunnel?: { enabled?: unknown } }).tunnel;
-            if (tunnel !== null && typeof tunnel === 'object' && (tunnel as { enabled?: unknown }).enabled === true) {
-              const startTunnel = await services.start('tunnel');
-              if (startTunnel.ok !== true) {
-                await compensateCore();
-                return startTunnel;
-              }
-              if (await services.ownedHealthy('tunnel') !== true) {
-                await compensateCore();
-                return fail('HEALTH_UNKNOWN');
-              }
-            }
+            tunnelEnabled = tunnel !== null && typeof tunnel === 'object'
+              && (tunnel as { enabled?: unknown }).enabled === true;
           } catch {
+            await compensate();
             return fail('FOREIGN_SERVICE');
+          }
+          if (tunnelEnabled) {
+            const startTunnel = await services.start('tunnel');
+            if (startTunnel.ok !== true) {
+              await compensate();
+              return sanitize(startTunnel);
+            }
+            tunnelStarted = true;
+            if (await services.ownedHealthy('tunnel') !== true) {
+              await compensate();
+              return fail('HEALTH_UNKNOWN');
+            }
           }
         }
         return null;
       } catch (error) {
+        await compensate();
         if (error instanceof Error && error.message === 'INTERRUPTED') return fail('PARTIAL_INSTALL');
         return fail('PARTIAL_INSTALL');
       }
@@ -177,7 +197,7 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         } catch {
           return fail('PARTIAL_INSTALL');
         }
-        if (!reset.ok) return { ok: reset.ok, code: reset.code };
+        if (reset.ok !== true) return sanitize(reset);
         // Revalidate and start only as previously desired. The supported lab
         // snapshot is disabled, so reset leaves jobs stopped after recovery.
         return { ok: true, code: 'OK' };
