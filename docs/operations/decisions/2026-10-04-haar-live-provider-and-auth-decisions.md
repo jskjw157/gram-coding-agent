@@ -4,6 +4,11 @@
 **Status:** USER APPROVED (decisions below are explicit user decisions)
 **Scope:** Source of truth for MAC-03/MAC-04/MAC-05 implementation. Does NOT flip existing DRAFT specs to APPROVED.
 
+## D0 — Sequencing note (added 2026-10-04, user-directed)
+
+- Shopify implementation is DEFERRED (user: "shopify는 나중에 구현하자"). D1 (Shopify as first live provider) stands as the provider decision; only the build order changes. Until re-activated, WP-18 transport live binding, WP-21 Gate B, WP-22 Shopify test-store path, Gate C/D and high-risk live gates stay NOT_RUN/BLOCKED. Fixture-level Shopify adapter work already delivered stays valid as contract/fixture evidence, not live proof.
+- Target-Mac account names approved: `mac_ops` (OPERATIONS), `mac_code` (CODING).
+
 ## D1 — Shopify is the first official live commerce provider
 
 - The earlier analysis was correct: no prior repo/spec confirmed Shopify. The user now explicitly approves **Shopify as HAAR's first official live commerce provider**. It is no longer "platform undecided".
