@@ -1,54 +1,94 @@
-# MAC-02 C / #141 release packaging note
+# MAC-02 C / #141 release packaging note (T7 repair)
 
-Lane C greenfield delivery. Base `origin/feat/macos-service-lifecycle` at
-`3d0187c`; branch `feat/mac02-release-packaging`; PR target
-`feat/macos-service-lifecycle`. No edits outside
-`platform/macos/packaging/**` and this note; `packages/macos-lifecycle/src/**`
-untouched. No secrets (tokens/keys/certs/.env/keychain) in bundle, tests, or
-logs: fixtures are synthetic repeated-character canaries, findings report rule
-names only.
+Lane C delivery against the #141 contract (source of truth). Branch
+`feat/mac02-release-packaging`; PR #168 target `feat/macos-service-lifecycle`.
+Edits stay inside `platform/macos/package-release.*`,
+`packages/macos-lifecycle/src/packaging-boundary.test.ts`, this note, and a
+collection-only workflow step. Runtime/installer/diagnostic/CLI/shared
+types/`index.ts`/package.json/lockfile untouched; PR #181 untouched.
 
 ## What was built
 
-`platform/macos/packaging/release-packaging.mjs` — dependency-free (node:crypto,
-node:fs, node:path) deterministic bundle writer:
+`platform/macos/package-release.mjs` — dependency-free (node:crypto,
+node:fs, node:path, node:url) sealed release packager. Importing it performs
+no I/O and spawns nothing. Exports:
 
-- Layout: `<dest>/manifest.json` + `<dest>/payload/<sorted relative paths>`.
-- Manifest: `{schemaVersion:1, releaseId, entries:[{path,sha256,bytes,mode}],
-  fileCount, totalBytes, manifestDigest}` where `manifestDigest` is sha256 over
-  the canonical `{schemaVersion, releaseId, entries}` encoding. Entries sorted
-  by path; rewrite is byte-identical.
-- Validation: releaseId `^[a-z0-9][a-z0-9._-]{0,63}$`; clean relative posix
-  paths only (no absolute, `..`, backslash, empty segments); unique paths;
-  modes `0644` (data, default) or `0600` (config) only.
-- No-secrets: content scan for github-token, aws-access-key, pem-private-key,
-  slack-token, openai-key, google-api-key; secret-bearing basenames rejected
-  (`.env*`, `*.pem`, `*keychain*`); payload containing `0.0.0.0` rejected
-  (loopback-only, AGENTS.md). No network, keychain, subprocess, or lifecycle
-  engine imports.
+- `packageRelease({sourceDir, stagingDir, releaseId, sourceCommit,
+  lockBytes?, schemaCompatibility, tunnel?, additionalFiles?,
+  additionalLinks?})` → `{stagingDir, releaseJson, digest, entries}`.
+- `publishRelease({stagingDir, destDir})` → `{destDir, digest, releaseJson}`.
+- Direct-execution CLI (`--source/--staging/--release-id/--source-commit/
+  --schema-min/--schema-max/--lock-file/--tunnel-digest/--allow/--link/
+  --publish`); prints `{stagingDir, destDir, digest}` as JSON.
 
-Tests: `platform/macos/packaging/release-packaging.test.mjs` (`node --test`),
-7 tests across layout, manifest, no-secrets scan, permissions.
+Output is `release.json` with the EXACT consumer keys (`schemaVersion`,
+`releaseId`, `sourceCommit`, `lockDigest`, `files`, `coreTools`,
+`schemaCompatibility`, plus `tunnelCompatibilityDigest` only when the tunnel
+is enabled). `coreTools` is always `['agent_health']`. Entries are
+`{path,sha256,executable}` or `{path,target}`, sorted by path; bytes are
+canonical (fixed key order, compact JSON, trailing newline) so the digest is
+stable across runs. No new manifest consumer: acceptance goes through the
+existing `inspectRelease`.
 
-## Verification (TDD)
+Required entries: `bin/node`, `apps/agent/dist/main.js`,
+`packages/macos-lifecycle/dist/supervisor-cli.js`, `pnpm-lock.yaml`,
+`bin/file-acl`, `bin/peer-owner`, plus `bin/tunnel-client` when the tunnel is
+enabled. A real base without `supervisor-cli.js` fails closed (no stubs);
+complete fixtures live in temp dirs only.
 
-- RED (impl moved aside): `node --test "platform/macos/packaging/*.test.mjs"` →
-  1 fail (`ERR_MODULE_NOT_FOUND` for `./release-packaging.mjs`). Log
-  `/tmp/mac02-red.log` (outside repo, no secrets).
-- GREEN: same command → 7 pass / 0 fail. Log `/tmp/mac02-green.log`.
-- Regression: `pnpm --filter @gram/macos-lifecycle test` — untouched lane,
-  expected green (see PR body for observed counts).
-- `pnpm typecheck`, `pnpm lint`: no new inputs (platform/ is outside workspace
-  lint/typecheck projects); observed status in PR body.
-- Secret scan: `grep -rniE` for credential shapes over the two allowed paths
-  returns only synthetic canary builders (`'ghp_' + 'A'.repeat(36)` style, no
-  contiguous literal) — zero real secrets. No values echoed in code, tests,
-  or logs.
+Binding: `sourceCommit` (40 hex) and `schemaCompatibility` are bound verbatim
+(never guessed); `lockDigest` is the sha256 of the actual staged
+`pnpm-lock.yaml`, and a supplied `lockBytes` that differs is refused.
+
+## Refusals (all covered by tests)
+
+- `DIRTY_SOURCE`: `.git` entries, secret-bearing basenames (`.env*`,
+  `*.pem`, `*keychain*`), control-char names.
+- `EXTRA_FILE`: any undeclared file/link/directory in the source scan.
+- `MISSING_FILE`: any required entry (or declared link) absent.
+- `EXECUTABLE_MISMATCH`: `bin/*` must be executable, all other files not.
+- `SYMLINK_ESCAPE`: absolute, escaping, cyclic, file-traversing, or
+  unresolvable internal link targets (lexical resolution mirrors the
+  consumer's inventory semantics; only declared links are preserved).
+- `LOCK_MISMATCH`, `OUTPUT_EXISTS` (staging/dest already present),
+  `INVALID_*` for malformed ids/commits/ranges/options.
+
+Staging and final publication are separate: `packageRelease` never touches
+`destDir`; `publishRelease` refuses an existing destination. Failures remove
+only the newly created staging/dest; source and pre-existing output are never
+modified or purged. No secrets in bundle, tests, or logs; no network,
+keychain, subprocess, signing, or install.
+
+## Prior divergent implementation (replaced additively)
+
+The earlier `platform/macos/packaging/release-packaging.mjs` wrote a
+`manifest.json` schema (`{schemaVersion, releaseId, entries:[{path,sha256,
+bytes,mode}], fileCount, totalBytes, manifestDigest}`) that no
+`inspectRelease` consumer reads. It and its spec are removed in this repair;
+no history rewrite. Content-shape credential scanning was intentionally not
+carried over (binary-hostile); secret basenames and the strict allowlist
+enforce the same exclusion at the boundary.
+
+## Verification (TDD RED→GREEN)
+
+- RED: new contract tests failed on the missing module (`ERR_MODULE_NOT_FOUND`
+  in `node --test`; `Cannot find module` in vitest), and the old impl was
+  shown to emit non-contract keys (`schemaVersion,releaseId,entries,
+  fileCount,totalBytes,manifestDigest`). Logs `/tmp/mac02-red-node.log`,
+  `/tmp/mac02-red-vitest.log` (outside repo).
+- GREEN: `node --test platform/macos/package-release.test.mjs` → 11 pass;
+  `pnpm --filter @gram/macos-lifecycle test --run
+  src/packaging-boundary.test.ts` → 7 pass (incl. `inspectRelease`
+  round-trip accept + mutate/link/hash refusal cases, tunnel on/off).
+- Full package suite + `pnpm lint` + `pnpm typecheck` status in PR body.
+  Workflow gains one collection step only
+  (`Collect sealed release packaging contract tests`, mirroring the T4
+  `b1b8478` step style); the vitest round-trip is collected by the existing
+  `Behavioral tests` step.
 
 ## Status
 
-Draft delivery only. No installed service, signing, notarization, or
-user-device acceptance is claimed. Consumer: installer lane verifies
-`manifestDigest` before install; CLI preview digest can be sourced from the
-manifest. Follow-ups (not in this lane): signature/provenance envelope,
-plist authoring from manifest, installer-side verification wiring.
+`IMPLEMENTED / INTEGRATION_PENDING`. No deployable release is claimed: real
+release creation waits on lane A's execution entry (`supervisor-cli.js`) and
+actual native binaries. A lane-A request (unchanged): register any additional
+compiled runtime beyond the required set via `additionalFiles` allowlist.
