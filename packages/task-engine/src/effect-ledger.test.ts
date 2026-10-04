@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BlindRetryRefusedError,
   EffectLedger,
+  LedgerError,
   RetryBudgetExhaustedError,
   StaleFenceDispatchError,
 } from './effect-ledger.js';
@@ -129,5 +130,72 @@ describe('EffectLedger (durable-before-effect, UNKNOWN, reconcile-before-retry)'
         evidence: { observedState: 'NOT_APPLIED', policyDecision: 'ALLOW' },
       }),
     ).toThrow(RetryBudgetExhaustedError);
+  });
+});
+
+describe('EffectLedger Gate A F1: UNKNOWN settles only via provider-query evidence', () => {
+  it('RED F1: UNKNOWN + provider-confirmed-applied settles to CONFIRMED', () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const settled = ledger.reconcile(rec.effectId, {
+      observedState: 'CONFIRMED',
+      policyDecision: 'ALLOW',
+      providerEvidence: 'provider-confirmed-applied',
+    });
+    expect(settled.state).toBe('CONFIRMED');
+    expect(ledger.get(rec.effectId)?.state).toBe('CONFIRMED');
+  });
+
+  it('RED F1: UNKNOWN + provider-confirmed-not-applied settles to NOT_APPLIED', () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'READ');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const settled = ledger.reconcile(rec.effectId, {
+      observedState: 'NOT_APPLIED',
+      policyDecision: 'ALLOW',
+      providerEvidence: 'provider-confirmed-not-applied',
+    });
+    expect(settled.state).toBe('NOT_APPLIED');
+    // Then retry flows only through the governed path (policy/approval recheck).
+    const retried = ledger.requestRetry(rec.effectId, {
+      evidence: { observedState: 'NOT_APPLIED', policyDecision: 'ALLOW' },
+    });
+    expect(retried.state).toBe('PREPARED');
+  });
+
+  it('RED F1: UNKNOWN without provider evidence stays UNKNOWN', () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    const settled = ledger.reconcile(rec.effectId, {
+      observedState: 'UNKNOWN',
+      policyDecision: 'ALLOW',
+    });
+    expect(settled.state).toBe('UNKNOWN');
+  });
+
+  it('RED F1: evidence-less UNKNOWN->CONFIRMED settlement stays refused', () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    expect(() =>
+      ledger.reconcile(rec.effectId, { observedState: 'CONFIRMED', policyDecision: 'ALLOW' }),
+    ).toThrow(LedgerError);
+    expect(ledger.get(rec.effectId)?.state).toBe('UNKNOWN');
+  });
+
+  it('RED F1: mismatched provider evidence stays refused', () => {
+    const ledger = new EffectLedger();
+    const rec = ledger.prepare('op-1', 'WRITE');
+    ledger.reconcile(rec.effectId, { observedState: 'UNKNOWN', policyDecision: 'ALLOW' });
+    expect(() =>
+      ledger.reconcile(rec.effectId, {
+        observedState: 'CONFIRMED',
+        policyDecision: 'ALLOW',
+        providerEvidence: 'provider-confirmed-not-applied',
+      }),
+    ).toThrow(LedgerError);
+    expect(ledger.get(rec.effectId)?.state).toBe('UNKNOWN');
   });
 });
