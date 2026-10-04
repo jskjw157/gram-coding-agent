@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  InMemoryOperationApprovalStore,
   OperationPolicyGate,
   classifyOperation,
   decideOperation,
@@ -35,7 +36,7 @@ const approvalFor = (intent: OperationIntentLike, overrides: Record<string, unkn
   id: 'approval-1',
   taskId: intent.taskId,
   operationHash: hashOperationIntent(intent),
-  status: 'PENDING' as const,
+  status: 'APPROVED' as const,
   expiresAt: Date.now() + 60_000,
   ...overrides,
 });
@@ -105,6 +106,24 @@ describe('full-field operation-hash verification', () => {
     const approval = approvalFor(intent);
     expect(gate.verify(approval, { ...intent, targetResource: 'order/999' }).accepted).toBe(false);
   });
+
+  it('rejects expectedVersion mutation as an identity change', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const gate = new OperationPolicyGate();
+    const approval = approvalFor(intent);
+    const tampered = { ...intent, expectedVersion: 'v999' };
+    expect(hashOperationIntent(tampered)).not.toBe(hashOperationIntent(intent));
+    expect(gate.verify(approval, tampered).accepted).toBe(false);
+  });
+
+  it('rejects provider/recipe substitution as an identity change', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.refund.create', effectClass: 'WRITE' });
+    const gate = new OperationPolicyGate();
+    const approval = approvalFor(intent);
+    const tampered = { ...intent, providerId: 'evil-provider', recipeId: 'evil-recipe' };
+    expect(hashOperationIntent(tampered)).not.toBe(hashOperationIntent(intent));
+    expect(gate.verify(approval, tampered).accepted).toBe(false);
+  });
 });
 
 describe('single-use + expiry + cross-task replay rejection', () => {
@@ -113,8 +132,19 @@ describe('single-use + expiry + cross-task replay rejection', () => {
     const gate = new OperationPolicyGate();
     const approval = approvalFor(intent);
     expect(gate.verify(approval, intent).accepted).toBe(true);
-    gate.consume(approval.id);
+    // verify() consumes atomically: a second verify is a single-use replay.
     expect(gate.verify(approval, intent).accepted).toBe(false);
+  });
+
+  it('rejects cross-instance double-consume via the shared persistent store', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const store = new InMemoryOperationApprovalStore();
+    const gateA = new OperationPolicyGate({ store });
+    const gateB = new OperationPolicyGate({ store });
+    const approval = approvalFor(intent);
+    expect(gateA.verify(approval, intent).accepted).toBe(true);
+    // A second gate instance sharing the store must still see the consume.
+    expect(gateB.verify(approval, intent).accepted).toBe(false);
   });
 
   it('rejects cross-task replay (approval bound to a different taskId)', () => {
@@ -134,6 +164,25 @@ describe('single-use + expiry + cross-task replay rejection', () => {
     const result = gate.verify(expired, intent);
     expect(result.accepted).toBe(false);
     expect(result.reason).toMatch(/expir/i);
+  });
+});
+
+describe('APPROVED-only authorization (PENDING/DENIED/EXPIRED/CONSUMED all deny)', () => {
+  it.each([['PENDING'], ['DENIED'], ['EXPIRED'], ['CONSUMED']] as const)(
+    'denies %s approvals even when hash, task, and expiry are valid',
+    (status) => {
+      const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+      const gate = new OperationPolicyGate();
+      const result = gate.verify(approvalFor(intent, { status }), intent);
+      expect(result.accepted).toBe(false);
+      expect(result.reason).toMatch(/APPROVED/);
+    },
+  );
+
+  it('PENDING approvals stay NEEDS_APPROVAL through decideOperation', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const decision = decideOperation(intent, meta(), approvalFor(intent, { status: 'PENDING' }));
+    expect(decision.kind).toBe('NEEDS_APPROVAL');
   });
 });
 
