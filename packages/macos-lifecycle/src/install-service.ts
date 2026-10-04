@@ -122,13 +122,20 @@ export async function apply(
     return fail('CONFIG_CHANGED');
   }
   if (preview.releaseDigest !== normalized.releaseDigest) return fail('CONFIG_CHANGED');
+  // B1: snapshot caller-owned preview scalars before the first await. The
+  // caller may mutate the preview object mid-flight; every post-await
+  // decision must use the reviewed values, never a post-await re-read.
+  // (config is already safe: normalized is a parsed copy made above.)
+  const previewToken: string = preview.configDigest;
+  const previewPriorDigest: string | null = preview.previousInstallDigest;
+  const previewReleaseDigest: string = preview.releaseDigest;
   let expectedToken: string;
   try {
-    expectedToken = compositeToken(normalized, preview.releaseDigest, preview.previousInstallDigest);
+    expectedToken = compositeToken(normalized, previewReleaseDigest, previewPriorDigest);
   } catch {
     return fail('INVALID_CONFIG');
   }
-  if (preview.configDigest !== expectedToken) return fail('CONFIG_CHANGED');
+  if (previewToken !== expectedToken) return fail('CONFIG_CHANGED');
 
   if (!(await authorizeAdmin(ports))) return fail('NOT_AUTHORIZED');
 
@@ -140,8 +147,8 @@ export async function apply(
       return fail('PARTIAL_INSTALL');
     }
     if (!revalidated || revalidated.ok !== true) return fail(revalidated?.code ?? 'PARTIAL_INSTALL');
-    if (revalidated.previewToken !== preview.configDigest
-      || revalidated.priorDigest !== preview.previousInstallDigest) {
+    if (revalidated.previewToken !== previewToken
+      || revalidated.priorDigest !== previewPriorDigest) {
       return fail('CONFIG_CHANGED');
     }
 
@@ -151,7 +158,7 @@ export async function apply(
     } catch {
       return fail('PARTIAL_INSTALL');
     }
-    if (prior.digest !== preview.previousInstallDigest) return fail('CONFIG_CHANGED');
+    if (prior.digest !== previewPriorDigest) return fail('CONFIG_CHANGED');
     // Foreign / partial prior: digest null must mean fully absent.
     if (prior.digest === null) {
       if (prior.manifest !== null || prior.config !== null || prior.corePlist !== null
