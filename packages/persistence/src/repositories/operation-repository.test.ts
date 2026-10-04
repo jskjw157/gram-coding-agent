@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
@@ -18,29 +18,26 @@ function tempDatabasePath(): string {
   return join(dir, 'state.db');
 }
 
+const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations');
+
+function readMigrationFile(file: string): string {
+  return readFileSync(join(migrationsDir, basename(file)), 'utf8');
+}
+
 function openMigratedV1(path: string): Database.Database {
   const db = openDatabase(path);
   openDbs.push(db);
-  runMigrations(db);
+  runMigrations(db, {
+    migrations: [{ version: 1, file: './migrations/001_initial.sql' }],
+    readSql: readMigrationFile,
+  });
   return db;
 }
 
-function applyOperationsMigration(db: Database.Database): void {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const sql = readFileSync(join(here, '..', 'migrations', '002_operations.sql'), 'utf8');
-  const apply = db.transaction(() => {
-    db.exec(sql);
-    db.prepare('INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(
-      2,
-      new Date().toISOString(),
-    );
-  });
-  apply.immediate();
-}
-
-function openMigratedV2(path: string): Database.Database {
-  const db = openMigratedV1(path);
-  applyOperationsMigration(db);
+function openMigratedV5(path: string): Database.Database {
+  const db = openDatabase(path);
+  openDbs.push(db);
+  runMigrations(db);
   return db;
 }
 
@@ -56,8 +53,8 @@ function migrateTo(db: Database.Database, target: number): void {
   if (target < current) {
     throw new Error(`downgrade refused: current=${current} target=${target}`);
   }
-  if (target >= 2 && current < 2) {
-    applyOperationsMigration(db);
+  if (target >= 5 && current < 5) {
+    runMigrations(db);
   }
 }
 
@@ -74,9 +71,9 @@ function seedTask(db: Database.Database, taskType = 'CODING') {
   return tasks.create({ goal: 'ops persistence', taskType, publishMode: 'PULL_REQUEST' });
 }
 
-describe('Operations persistence (002_operations)', () => {
+describe('Operations persistence (005_operations)', () => {
   it('creates all six operations tables with required indexes', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const tables = new Set(
       (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
         ({ name }) => name,
@@ -95,7 +92,7 @@ describe('Operations persistence (002_operations)', () => {
   });
 
   it('enforces UNIQUE(task_id, step, revision) on operations', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
     const ops = new OperationRepository(db);
     ops.createOperation({
@@ -117,7 +114,7 @@ describe('Operations persistence (002_operations)', () => {
   });
 
   it('maps duplicate (requester_id, client_request_id) to REQUEST_CONFLICT and never silently dedupes', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
     const ops = new OperationRepository(db);
     const first = ops.createOperation({
@@ -155,7 +152,7 @@ describe('Operations persistence (002_operations)', () => {
   });
 
   it('rolls back the task touch plus audit write when the operation insert conflicts (atomic)', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
     const ops = new OperationRepository(db);
     ops.createOperation({
@@ -193,7 +190,7 @@ describe('Operations persistence (002_operations)', () => {
   });
 
   it('rejects operations for unknown tasks via foreign key', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const ops = new OperationRepository(db);
     expect(() =>
       ops.createOperation({
@@ -206,9 +203,9 @@ describe('Operations persistence (002_operations)', () => {
     ).toThrow(/FOREIGN KEY/i);
   });
 
-  it('refuses schema downgrade once version 2 is applied (downgrade-guard)', () => {
-    const db = openMigratedV2(tempDatabasePath());
-    expect(currentSchemaVersion(db)).toBe(2);
+  it('refuses schema downgrade once version 5 is applied (downgrade-guard)', () => {
+    const db = openMigratedV5(tempDatabasePath());
+    expect(currentSchemaVersion(db)).toBe(5);
     expect(() => migrateTo(db, 1)).toThrow(/downgrade refused/i);
     const tables = new Set(
       (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
@@ -235,18 +232,18 @@ describe('Operations persistence (002_operations)', () => {
     expect(v1Row.taskType).toBe('CODING');
     while (openDbs.length) openDbs.pop()?.close();
 
-    const dbV2raw = openDatabase(path);
-    openDbs.push(dbV2raw);
-    runMigrations(dbV2raw);
-    applyOperationsMigration(dbV2raw);
-    const reopened = dbV2raw.prepare('SELECT id, goal, task_type AS taskType FROM tasks WHERE id = ?').get(coding.id) as {
+    const dbV5raw = openDatabase(path);
+    openDbs.push(dbV5raw);
+    runMigrations(dbV5raw);
+    expect(currentSchemaVersion(dbV5raw)).toBe(5);
+    const reopened = dbV5raw.prepare('SELECT id, goal, task_type AS taskType FROM tasks WHERE id = ?').get(coding.id) as {
       id: string;
       goal: string;
       taskType: string;
     };
     expect(reopened).toMatchObject({ id: coding.id, goal: 'coding row must survive upgrade', taskType: 'CODING' });
 
-    const ops = new OperationRepository(dbV2raw);
+    const ops = new OperationRepository(dbV5raw);
     const created = ops.createOperation({
       taskId: coding.id,
       step: 'post-upgrade',
@@ -258,7 +255,7 @@ describe('Operations persistence (002_operations)', () => {
   });
 
   it('writes audit with canonical metadata/digest/sanitized receipt only and no raw bodies', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
     const ops = new OperationRepository(db);
     ops.createOperation({
@@ -285,8 +282,31 @@ describe('Operations persistence (002_operations)', () => {
     expect(flat).not.toContain('raw-body');
   });
 
+  it('redacts secret values in operation metadata/receipt before the audit write', () => {
+    const db = openMigratedV5(tempDatabasePath());
+    const task = seedTask(db);
+    const ops = new OperationRepository(db);
+    ops.createOperation({
+      taskId: task.id,
+      step: 'audit-redact',
+      revision: 1,
+      requesterId: 'req-redact',
+      clientRequestId: 'idem-redact',
+      metadata: { lane: 'ops', apiKey: 'sk-live-secret-0123456789' },
+      digest: 'sha256:deadbeef',
+      receipt: { status: 'ok', password: 'hunter2-secret' },
+    });
+    const row = db
+      .prepare("SELECT payload_json AS payload FROM audit_events WHERE event_type = 'operation.created' ORDER BY id DESC LIMIT 1")
+      .get() as { payload: string };
+    const flat = JSON.stringify(JSON.parse(row.payload) as Record<string, unknown>);
+    expect(flat).not.toContain('sk-live-secret-0123456789');
+    expect(flat).not.toContain('hunter2-secret');
+    expect(flat).toContain('***REDACTED***');
+  });
+
   it('enforces domain NO NULL triggers on operations critical columns', () => {
-    const db = openMigratedV2(tempDatabasePath());
+    const db = openMigratedV5(tempDatabasePath());
     const task = seedTask(db);
     expect(() =>
       db
