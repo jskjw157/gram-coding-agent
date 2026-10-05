@@ -48,23 +48,26 @@ export function withResetExecutionSpy(fixture: InstallFixture): ResetExecutionSp
 }
 
 /**
- * Installs the narrow `resetStoppedFailure` capability on `ports.restore()`,
- * funnelling into the underlying `resetExecutionRecords()` so the shared spy
- * observes capability use exactly like a direct reset call.
+ * Installs the narrow `resetStoppedFailure` capability on `ports.restore()`.
+ *
+ * IMPORTANT: stopped-failure reset is NOT an alias for execution-record reset.
+ * A real A-owned adapter resets the stopped lifecycle failure/circuit state
+ * only after confirmed stop while preserving the execution HELD/revision
+ * record, database bytes, installation bytes, and journal identity. This
+ * fixture mirrors that boundary: it records capability use and returns a
+ * bounded success without mutating the shared fixture's execution record.
  */
 export function withStoppedFailureCapability(fixture: InstallFixture): ResetExecutionSpy {
   const spy: ResetExecutionSpy = { calls: 0 };
   const restore = fixture.ports.restore.bind(fixture.ports);
   fixture.ports.restore = (): LocalControlRestorePort => {
     const base: LocalControlRestorePort = restore();
-    const resetExecutionRecords = async (): Promise<InstallResult> => {
-      spy.calls += 1;
-      return base.resetExecutionRecords();
-    };
     return {
       ...base,
-      resetExecutionRecords,
-      resetStoppedFailure: resetExecutionRecords,
+      resetStoppedFailure: async (): Promise<InstallResult> => {
+        spy.calls += 1;
+        return { ok: true, code: 'OK' };
+      },
     };
   };
   return spy;
