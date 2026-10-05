@@ -37,8 +37,8 @@ function matchesExpected(preview: Preview, request: ExpectedInstallRequest): boo
 
 export interface ReviewedInstallerCliOptions {
   readonly config: ServiceConfig;
-  readonly preview(): Promise<Preview>;
-  readonly diagnostic(): Promise<DiagnosticEvidence>;
+  preview(): Promise<Preview>;
+  diagnostic(): Promise<DiagnosticEvidence>;
   readonly installPorts: InstallPorts;
   readonly rollbackPorts: RollbackPorts;
   readonly output: CliDeps['output'];
