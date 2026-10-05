@@ -1,6 +1,7 @@
 import { isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runSupervisorEntry, type SupervisorBootstrap, type SupervisorSignals } from './supervisor-entry.js';
+import { createASystemSupervisorBootstrapFromFixedSources } from './a-bootstrap.js';
 
 /** Pure direct-entry test. Importing this module never starts a service. */
 export function isDirectSupervisorCli(moduleUrl: string, argv1: string | undefined): boolean {
@@ -26,7 +27,13 @@ export async function runSupervisorCli(
 }
 
 if (isDirectSupervisorCli(import.meta.url, process.argv[1])) {
-  void runSupervisorCli(process.argv.slice(2)).then(
+  let bootstrap: SupervisorBootstrap | undefined;
+  try {
+    bootstrap = createASystemSupervisorBootstrapFromFixedSources();
+  } catch {
+    bootstrap = undefined;
+  }
+  void runSupervisorCli(process.argv.slice(2), bootstrap).then(
     code => { process.exitCode = code; },
     () => { process.exitCode = 70; },
   );
