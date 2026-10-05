@@ -170,6 +170,17 @@ test('refusal: missing required entries fail one by one', async () => {
   );
 });
 
+test('additional deployed dependency preserves its executable bit without becoming a top-level bin requirement', () => {
+  const source = writeSource();
+  const rel = 'apps/agent/node_modules/tool/bin/tool.js';
+  mkdirSync(join(source, rel, '..'), { recursive: true });
+  writeFileSync(join(source, rel), '#!/usr/bin/env node\n');
+  chmodSync(join(source, rel), 0o755);
+  const out = pack(source, { additionalFiles: [rel] });
+  const entry = JSON.parse(out.releaseJson).files.find(item => item.path === rel);
+  assert.equal(entry?.executable, true);
+});
+
 test('refusal: wrong executable flag fails both directions', () => {
   const execOff = writeSource();
   chmodSync(join(execOff, 'bin/node'), 0o644);
