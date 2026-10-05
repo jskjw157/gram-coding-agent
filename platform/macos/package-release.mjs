@@ -279,7 +279,8 @@ function scanSource(sourceDir, requiredFiles, allowedFiles, allowedLinks) {
     const parents = [...allowedFileSet, ...allowedLinkMap.keys()].some((p) => p.startsWith(`${rel}/`));
     if (!parents) throw new Error(`EXTRA_FILE: undeclared directory: ${rel}`);
   }
-  for (const rel of allowedFileSet) {
+  const requiredSet = new Set(requiredFiles);
+  for (const rel of requiredSet) {
     const executable = (found.get(rel).mode & 0o111) !== 0;
     if (rel.startsWith('bin/') !== executable) {
       throw new Error(`EXECUTABLE_MISMATCH: ${rel} executable=${executable}`);
@@ -342,7 +343,7 @@ export function packageRelease(options) {
     throw new Error(`OUTPUT_EXISTS: staging already exists, refusing to overwrite: ${opt.stagingDir}`);
   }
   const requiredFiles = [...BASE_REQUIRED, ...HELPER_REQUIRED, ...(opt.tunnelEnabled ? [TUNNEL_BIN] : [])];
-  scanSource(opt.sourceDir, requiredFiles, opt.additionalFiles, opt.additionalLinks);
+  const sourceInventory = scanSource(opt.sourceDir, requiredFiles, opt.additionalFiles, opt.additionalLinks);
 
   const readSource = (rel) => readFileSync(join(opt.sourceDir, rel));
   const lockFileBytes = readSource('pnpm-lock.yaml');
@@ -358,7 +359,11 @@ export function packageRelease(options) {
     if (rel === 'pnpm-lock.yaml' && sha256Hex(bytes) !== lockDigest) {
       throw new Error('LOCK_MISMATCH: staged lock drifted mid-run');
     }
-    const executable = rel.startsWith('bin/');
+    const sourceEntry = sourceInventory.get(rel);
+    if (!sourceEntry || sourceEntry.kind !== 'file') {
+      throw new Error(`MISSING_FILE: required bundle entry absent: ${rel}`);
+    }
+    const executable = (sourceEntry.mode & 0o111) !== 0;
     fileEntries.push({ path: rel, sha256: sha256Hex(bytes), executable });
     payload.push({ path: rel, bytes, executable });
   }
