@@ -67,6 +67,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
 
@@ -83,6 +84,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
 
@@ -105,6 +107,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
 
@@ -118,6 +121,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     const abort = new AbortController();
@@ -136,6 +140,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     const review = await source.read(new AbortController().signal);
@@ -146,6 +151,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
@@ -181,6 +187,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     const review = await source.read(new AbortController().signal);
@@ -191,6 +198,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     expect(await provisioner.ensure(review, new AbortController().signal)).toBe(false);
@@ -208,6 +216,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     const review = await source.read(new AbortController().signal);
@@ -218,6 +227,7 @@ describe('A fixed bootstrap trust sources', () => {
       relative: 'installed',
       ownerUid: f.uid,
       runtimeUid: f.uid,
+      runtimeGid: f.gid,
       acl: f.acl,
     });
     expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
