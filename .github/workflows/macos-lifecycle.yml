@@ -114,3 +114,22 @@ jobs:
         shell: bash
         run: |
           /usr/bin/plutil -lint "$RUNNER_TEMP/mac02-plists/core.plist" "$RUNNER_TEMP/mac02-plists/tunnel.plist"
+      - name: Validate bootstrap scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          bash -n platform/macos/build-bootstrap-helper.sh
+          bash -n platform/macos/provision-bootstrap.sh
+      - name: Build independent bootstrap ACL helper on Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          out="$RUNNER_TEMP/bootstrap-helper"
+          mkdir "$out"
+          bash platform/macos/build-bootstrap-helper.sh "$out/file-acl" | tee "$RUNNER_TEMP/bootstrap-helper.log"
+          test -x "$out/file-acl"
+          test "$(/usr/bin/stat -f '%Lp' "$out/file-acl")" = "755"
+          /usr/bin/grep -Eq '^BOOTSTRAP_HELPER_BUILT source_sha256=[a-f0-9]{64} binary_sha256=[a-f0-9]{64} "$RUNNER_TEMP/bootstrap-helper.log"
