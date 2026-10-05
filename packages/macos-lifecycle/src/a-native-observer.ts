@@ -24,8 +24,11 @@ import {
 import { inspectRelease } from './release-inspection.js';
 import { createInstalledRuntimeReviewSource } from './a-system-sources.js';
 import type { RecordFiles } from './telemetry-store.js';
+import type { RoleObservation } from './cli-contracts.js';
+import type { ServiceStatus, StatusIdentity } from './telemetry.js';
 
 export interface InstalledHealthObserver {
+  observe(role: Role, signal: AbortSignal): Promise<RoleObservation>;
   healthy(role: Role, signal: AbortSignal): Promise<boolean>;
 }
 
@@ -41,143 +44,159 @@ function sameExecutable(
 }
 
 export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObserver {
-  return Object.freeze({
-    async healthy(role: Role, signal: AbortSignal): Promise<boolean> {
-      try {
-        if ((role !== 'core' && role !== 'tunnel') || signal.aborted
-          || process.platform !== 'darwin' || process.arch !== 'arm64') return false;
+  const unknown = (): RoleObservation => ({ status: null, currentIdentity: null });
 
-        const account = await inspectMacAccount();
-        if (account === null || account.admin !== false || signal.aborted) return false;
+  const observe = async (role: Role, signal: AbortSignal): Promise<RoleObservation> => {
+    try {
+      if ((role !== 'core' && role !== 'tunnel') || signal.aborted
+        || process.platform !== 'darwin' || process.arch !== 'arm64') return unknown();
 
-        const sourceLayout = {
-          anchor: '/',
-          relative: root.slice(1),
-          ownerUid: 0,
-          runtimeUid: account.uid,
-          runtimeGid: account.gid,
-          acl,
-        };
-        const review = await createInstalledRuntimeReviewSource(sourceLayout).read(signal);
-        if (review === null || signal.aborted) return false;
-        if (role === 'tunnel' && !review.config.tunnel.enabled) return false;
+      const account = await inspectMacAccount();
+      if (account === null || account.admin !== false || signal.aborted) return unknown();
 
-        const directories = await inspectRuntimeDirectories(
-          { anchor: '/', relative: root.slice(1), ownerUid: 0 },
-          account.uid,
-          acl,
-          signal,
-        );
-        const verify = directories.verify.bind(directories);
-        const guard = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
-          async read(candidate) {
-            await verify();
-            const value = await raw.read(candidate);
-            await verify();
-            return value;
-          },
-          async compareAndSwap(candidate, expected, slot, bytes) {
-            await verify();
-            await raw.compareAndSwap(candidate, expected, slot, bytes);
-            await verify();
-          },
-        });
+      const sourceLayout = {
+        anchor: '/',
+        relative: root.slice(1),
+        ownerUid: 0,
+        runtimeUid: account.uid,
+        runtimeGid: account.gid,
+        acl,
+      };
+      const review = await createInstalledRuntimeReviewSource(sourceLayout).read(signal);
+      if (review === null || signal.aborted) return unknown();
+      if (role === 'tunnel' && !review.config.tunnel.enabled) return unknown();
 
-        const execution = new ExecutionLeaseStore(
-          guard(createExecutionFilesAt(directories.runPolicy)),
-        );
-        const coreRegistration = new CoreRegistrationStore(
-          guard(createCoreProcessFilesAt(directories.runPolicy)),
+      const directories = await inspectRuntimeDirectories(
+        { anchor: '/', relative: root.slice(1), ownerUid: 0 },
+        account.uid,
+        acl,
+        signal,
+      );
+      const verify = directories.verify.bind(directories);
+      const guard = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
+        async read(candidate) {
+          await verify();
+          const value = await raw.read(candidate);
+          await verify();
+          return value;
+        },
+        async compareAndSwap(candidate, expected, slot, bytes) {
+          await verify();
+          await raw.compareAndSwap(candidate, expected, slot, bytes);
+          await verify();
+        },
+      });
+
+      const execution = new ExecutionLeaseStore(
+        guard(createExecutionFilesAt(directories.runPolicy)),
+      );
+      const coreRegistration = new CoreRegistrationStore(
+        guard(createCoreProcessFilesAt(directories.runPolicy)),
+        execution,
+      );
+      const tunnelRegistration = review.config.tunnel.enabled
+        ? new TunnelRegistrationStore(
+          guard(createTunnelProcessFilesAt(directories.runPolicy)),
           execution,
-        );
-        const tunnelRegistration = review.config.tunnel.enabled
-          ? new TunnelRegistrationStore(
-            guard(createTunnelProcessFilesAt(directories.runPolicy)),
-            execution,
-          )
-          : null;
-        const stores = createRuntimeStores(directories);
+        )
+        : null;
+      const stores = createRuntimeStores(directories);
 
-        const held = await execution.read(role);
-        if (held.state !== 'HELD'
-          || held.releaseDigest !== review.config.releaseDigest
-          || held.configDigest !== review.configDigest) return false;
+      const held = await execution.read(role);
+      if (held.state !== 'HELD'
+        || held.releaseDigest !== review.config.releaseDigest
+        || held.configDigest !== review.configDigest) return unknown();
 
-        const registration = role === 'core'
-          ? await coreRegistration.read()
-          : await tunnelRegistration?.read() ?? null;
-        if (registration === null) return false;
-        const matched = role === 'core'
-          ? registration.role === 'core' && matchesCoreExecution(registration, held)
-          : registration.role === 'tunnel' && matchesTunnelExecution(registration, held);
-        if (!matched) return false;
+      const registration = role === 'core'
+        ? await coreRegistration.read()
+        : await tunnelRegistration?.read() ?? null;
+      if (registration === null) return unknown();
+      const matched = role === 'core'
+        ? registration.role === 'core' && matchesCoreExecution(registration, held)
+        : registration.role === 'tunnel' && matchesTunnelExecution(registration, held);
+      if (!matched) return unknown();
 
-        const registrationBytes = role === 'core'
-          ? encodeCoreRegistration(registration)
-          : encodeTunnelRegistration(registration);
-        const executionBytes = encodeExecution(held);
+      const registrationBytes = role === 'core'
+        ? encodeCoreRegistration(registration)
+        : encodeTunnelRegistration(registration);
+      const executionBytes = encodeExecution(held);
 
-        const releasePrefix = `${root.slice(1)}/releases/${review.config.releaseId}`;
-        const releaseFiles = createTrustedFiles('/', 0, acl, releasePrefix);
-        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles);
-        if (signal.aborted) return false;
+      const releasePrefix = `${root.slice(1)}/releases/${review.config.releaseId}`;
+      const releaseFiles = createTrustedFiles('/', 0, acl, releasePrefix);
+      await inspectRelease(review.config, review.config.releaseDigest, releaseFiles);
+      if (signal.aborted) return unknown();
 
-        const helperPath = join(root, 'releases', review.config.releaseId, 'bin', 'peer-owner');
-        const helperStat = await lstat(helperPath);
-        if (!sameExecutable(helperStat, 0)
-          || await releaseFiles.hash('bin/peer-owner', 256 * 1024 * 1024) !== review.peerOwnerDigest) {
-          return false;
-        }
-
-        const executableRelative = role === 'core' ? 'bin/node' : 'bin/tunnel-client';
-        const executablePath = join(root, 'releases', review.config.releaseId, executableRelative);
-        const executableStat = await lstat(executablePath);
-        if (!sameExecutable(executableStat, 0)) return false;
-        if (role === 'core'
-          && await releaseFiles.hash('bin/node', 256 * 1024 * 1024) !== review.nodeDigest) return false;
-
-        const start = coreStartIdentity(registration.child.startIdentity);
-        const proof = createNativePeerProof(helperPath);
-        const identity = Object.freeze({
-          pid: registration.child.pid,
-          uid: registration.child.uid,
-          startSec: start.sec,
-          startUsec: start.usec,
-          executable: Object.freeze({ dev: BigInt(executableStat.dev), ino: BigInt(executableStat.ino) }),
-        });
-        if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return false;
-
-        const status = await stores.telemetry.readStatus(
-          role,
-          {
-            role,
-            generation: registration.child.generation,
-            releaseDigest: registration.child.releaseDigest,
-          },
-          Date.now(),
-        );
-        if (status === null || status.code !== 'OK'
-          || (role === 'core' ? status.state !== 'LOCAL_CORE_HEALTHY' : status.state !== 'TRANSPORT_READY')) {
-          return false;
-        }
-
-        if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return false;
-
-        const afterExecution = await execution.read(role);
-        if (!encodeExecution(afterExecution).equals(executionBytes)) return false;
-        const afterRegistration = role === 'core'
-          ? await coreRegistration.read()
-          : await tunnelRegistration?.read() ?? null;
-        if (afterRegistration === null) return false;
-        const afterRegistrationBytes = role === 'core'
-          ? afterRegistration.role === 'core' ? encodeCoreRegistration(afterRegistration) : null
-          : afterRegistration.role === 'tunnel' ? encodeTunnelRegistration(afterRegistration) : null;
-        return afterRegistrationBytes !== null
-          && afterRegistrationBytes.equals(registrationBytes)
-          && !signal.aborted;
-      } catch {
-        return false;
+      const helperPath = join(root, 'releases', review.config.releaseId, 'bin', 'peer-owner');
+      const helperStat = await lstat(helperPath);
+      if (!sameExecutable(helperStat, 0)
+        || await releaseFiles.hash('bin/peer-owner', 256 * 1024 * 1024) !== review.peerOwnerDigest) {
+        return unknown();
       }
+
+      const executableRelative = role === 'core' ? 'bin/node' : 'bin/tunnel-client';
+      const executablePath = join(root, 'releases', review.config.releaseId, executableRelative);
+      const executableStat = await lstat(executablePath);
+      if (!sameExecutable(executableStat, 0)) return unknown();
+      if (role === 'core'
+        && await releaseFiles.hash('bin/node', 256 * 1024 * 1024) !== review.nodeDigest) return unknown();
+
+      const start = coreStartIdentity(registration.child.startIdentity);
+      const proof = createNativePeerProof(helperPath);
+      const identity = Object.freeze({
+        pid: registration.child.pid,
+        uid: registration.child.uid,
+        startSec: start.sec,
+        startUsec: start.usec,
+        executable: Object.freeze({ dev: BigInt(executableStat.dev), ino: BigInt(executableStat.ino) }),
+      });
+      if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return unknown();
+
+      const currentIdentity: StatusIdentity = Object.freeze({
+        role,
+        generation: registration.child.generation,
+        releaseDigest: registration.child.releaseDigest,
+      });
+      const status: ServiceStatus | null = await stores.telemetry.readStatus(
+        role,
+        currentIdentity,
+        Date.now(),
+      );
+      if (status === null) return unknown();
+
+      if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return unknown();
+
+      const afterExecution = await execution.read(role);
+      if (!encodeExecution(afterExecution).equals(executionBytes)) return unknown();
+      const afterRegistration = role === 'core'
+        ? await coreRegistration.read()
+        : await tunnelRegistration?.read() ?? null;
+      if (afterRegistration === null) return unknown();
+      const afterRegistrationBytes = role === 'core'
+        ? afterRegistration.role === 'core' ? encodeCoreRegistration(afterRegistration) : null
+        : afterRegistration.role === 'tunnel' ? encodeTunnelRegistration(afterRegistration) : null;
+      if (afterRegistrationBytes === null
+        || !afterRegistrationBytes.equals(registrationBytes)
+        || signal.aborted) return unknown();
+
+      return {
+        status: structuredClone(status),
+        currentIdentity: { ...currentIdentity },
+      };
+    } catch {
+      return unknown();
+    }
+  };
+
+  return Object.freeze({
+    observe,
+    async healthy(role: Role, signal: AbortSignal): Promise<boolean> {
+      const observation = await observe(role, signal);
+      const status = observation.status as ServiceStatus | null;
+      return status !== null
+        && status.code === 'OK'
+        && (role === 'core'
+          ? status.state === 'LOCAL_CORE_HEALTHY'
+          : status.state === 'TRANSPORT_READY');
     },
   });
 }
