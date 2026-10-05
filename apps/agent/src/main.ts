@@ -1,9 +1,9 @@
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMcpHttpServer } from '@gram/mcp';
+import { createMcpHttpServer, type ApprovalToolsPort } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
-import { AuditRepository, openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
+import { ApprovalRepository, AuditRepository, openDatabase, runMigrations, TaskRepository } from '@gram/persistence';
 import { PolicyEngine } from '@gram/policy';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
 
@@ -22,6 +22,56 @@ export interface RunningAgent {
   url: string;
   health(): AgentHealthStatus;
   close(): Promise<void>;
+}
+
+// Local structural copy of the ApprovalConsumptionPort owned by
+// packages/shell on the M2 lineage (no @gram/shell package on main yet).
+// Shape is identical so the factory below ports verbatim.
+export interface ApprovalConsumptionPort {
+  consume(taskId: string, operationHash: string): Promise<boolean>;
+}
+
+// Thin approval adapter: the CommandRunner has already decided
+// NEEDS_APPROVAL and already computed the exact operationHash, so this
+// layer never re-evaluates policy, never re-derives the hash, and never
+// re-classifies. It only forwards the (taskId, operationHash) it is
+// handed to the durable repository. On a miss it idempotently records a
+// PENDING request (so the attempt becomes visible to the MCP
+// list/approve/deny surface) and still returns false, keeping the first
+// blocked attempt fail-closed: CommandRunner throws ApprovalRequiredError.
+export function createApprovalConsumptionPort(
+  repository: ApprovalRepository,
+): ApprovalConsumptionPort {
+  return {
+    consume: async (taskId, operationHash) => {
+      if (repository.consume(taskId, operationHash) === true) return true;
+      repository.request({ taskId, operationHash });
+      return false;
+    },
+  };
+}
+
+function parseApprovalId(approvalId: string): number {
+  if (/^(?:[1-9][0-9]*)$/.test(approvalId) !== true) {
+    throw new Error('Invalid approval id: expected a positive decimal integer string with no leading zeros');
+  }
+  const id = Number(approvalId);
+  if (Number.isSafeInteger(id) !== true) {
+    throw new Error('Invalid approval id: expected a positive decimal integer string with no leading zeros');
+  }
+  return id;
+}
+
+// MCP control surface over the same durable rows: list surfaces pending
+// requests (including ones recorded by blocked consume attempts above),
+// approve/deny resolve them by id with the expected operation hash.
+export function createApprovalToolsPort(repository: ApprovalRepository): ApprovalToolsPort {
+  return {
+    list: (taskId) => repository.listForTask(taskId),
+    approve: (approvalId, operationHash) =>
+      repository.approve(parseApprovalId(approvalId), operationHash),
+    deny: (approvalId, operationHash) => repository.deny(parseApprovalId(approvalId), operationHash),
+  };
 }
 
 export async function startAgent(options: StartAgentOptions): Promise<RunningAgent> {
