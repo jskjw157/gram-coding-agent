@@ -6,7 +6,12 @@ import { configDigest, parseConfig } from './config.js';
 import type { CoreCredentials } from './health-probe.js';
 import { copyRuntimeReview, type RuntimeReview } from './runtime-review.js';
 import { inspectRelease } from './release-inspection.js';
-import { shaBytes, validateManifestBytes } from './adapters/install-files.js';
+import { FIXED_FILES, shaBytes, validateManifestBytes } from './adapters/install-files.js';
+import { inspectRuntimeDirectories } from './adapters/runtime-directories.js';
+import { createExecutionFilesAt } from './adapters/execution-files.js';
+import { createRuntimeStores } from './adapters/runtime-stores.js';
+import { ExecutionLeaseStore } from './execution-lease.js';
+import type { RecordFiles } from './telemetry-store.js';
 import { checkMacAcl } from './adapters/macos-acl.js';
 import { createTrustedFiles, type AclProbe } from './adapters/trusted-files.js';
 
@@ -193,6 +198,164 @@ export function createInstalledRuntimeReviewSource(
   });
 }
 
+export interface RuntimeRecordProvisioner {
+  ensure(review: Readonly<RuntimeReview>, signal: AbortSignal): Promise<boolean>;
+}
+
+function missingCode(error: unknown, code: string): boolean {
+  return error instanceof Error
+    && Object.getOwnPropertyDescriptor(error, 'message')?.value === code;
+}
+
+function freshPublishedJournal(bytes: Buffer, installationBytes: Buffer): boolean {
+  try {
+    const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    const journal = data(value, ['schemaVersion', 'stage', 'previousDigest', 'nextDigest', 'inventory']);
+    if (journal === null || journal.schemaVersion !== 1 || journal.stage !== 'PUBLISHED'
+      || journal.previousDigest !== null || journal.nextDigest !== shaBytes(installationBytes)
+      || !Array.isArray(journal.inventory)) return false;
+    const expected = Object.values(FIXED_FILES);
+    return journal.inventory.length === expected.length
+      && journal.inventory.every((entry, index) => entry === expected[index]);
+  } catch {
+    return false;
+  }
+}
+
+function pristineExecution(value: Awaited<ReturnType<ExecutionLeaseStore['read']>>): boolean {
+  return value.state === 'FREE' && value.revision === 0 && value.token === null
+    && value.generation === null && value.configDigest === null && value.releaseDigest === null;
+}
+
+/**
+ * Create-only first-install record provisioning. Existing complete records are
+ * left untouched. Missing records are created only while the root-owned
+ * installer journal proves a fresh PUBLISHED transaction (previousDigest=null)
+ * bound to the current installation manifest. Upgrades with missing history
+ * fail closed instead of silently manufacturing new history.
+ */
+export function createRuntimeRecordProvisioner(
+  layout: BootstrapSourceLayout,
+): RuntimeRecordProvisioner {
+  const configFiles = createTrustedFiles(
+    layout.anchor,
+    layout.ownerUid,
+    layout.acl,
+    `${layout.relative}/config`,
+  );
+
+  return Object.freeze({
+    async ensure(review: Readonly<RuntimeReview>, signal: AbortSignal): Promise<boolean> {
+      try {
+        if (signal.aborted) return false;
+        const directories = await inspectRuntimeDirectories(
+          { anchor: layout.anchor, relative: layout.relative, ownerUid: layout.ownerUid },
+          layout.runtimeUid,
+          layout.acl,
+          signal,
+        );
+        if (signal.aborted) return false;
+
+        const guardRecords = (raw: RecordFiles): RecordFiles => Object.freeze({
+          async read(role) {
+            await directories.verify();
+            const result = await raw.read(role);
+            await directories.verify();
+            return result;
+          },
+          async compareAndSwap(role, expected, slot, bytes) {
+            await directories.verify();
+            await raw.compareAndSwap(role, expected, slot, bytes);
+            await directories.verify();
+          },
+        });
+
+        const execution = new ExecutionLeaseStore(
+          guardRecords(createExecutionFilesAt(directories.runPolicy)),
+        );
+        const lifecycle = createRuntimeStores(directories).lifecycle;
+        const roles = review.config.tunnel.enabled
+          ? (['core', 'tunnel'] as const)
+          : (['core'] as const);
+
+        const state = new Map<'core' | 'tunnel', {
+          execution: 'missing' | 'present';
+          lifecycle: 'missing' | 'present';
+          pristineExecution: boolean;
+          pristineLifecycle: boolean;
+        }>();
+
+        for (const role of roles) {
+          let executionState: 'missing' | 'present' = 'present';
+          let executionPristine = false;
+          try {
+            executionPristine = pristineExecution(await execution.read(role));
+          } catch (error) {
+            if (!missingCode(error, 'MISSING_EXECUTION')) return false;
+            executionState = 'missing';
+          }
+
+          let lifecycleState: 'missing' | 'present' = 'present';
+          let lifecyclePristine = false;
+          try {
+            const history = (await lifecycle.read(role)).history;
+            lifecyclePristine = history.blocked === false
+              && history.lastGeneration === null
+              && history.activeAttempt === null
+              && history.exitsMs.length === 0;
+          } catch (error) {
+            if (!missingCode(error, 'MISSING_HISTORY')) return false;
+            lifecycleState = 'missing';
+          }
+
+          state.set(role, {
+            execution: executionState,
+            lifecycle: lifecycleState,
+            pristineExecution: executionPristine,
+            pristineLifecycle: lifecyclePristine,
+          });
+        }
+
+        const missing = [...state.values()].some(value =>
+          value.execution === 'missing' || value.lifecycle === 'missing');
+        if (!missing) return true;
+
+        // Never fill a hole next to non-pristine existing state.
+        if ([...state.values()].some(value =>
+          value.execution === 'present' && !value.pristineExecution
+          || value.lifecycle === 'present' && !value.pristineLifecycle)) return false;
+
+        const [journalBytes, installationBytes] = await Promise.all([
+          configFiles.read('install-journal.json', 262_144),
+          configFiles.read('installation.json', 262_144),
+        ]);
+        if (signal.aborted || !validateManifestBytes(installationBytes)
+          || !freshPublishedJournal(journalBytes, installationBytes)) return false;
+
+        const now = Date.now();
+        if (!Number.isSafeInteger(now) || now < 0) return false;
+        for (const role of roles) {
+          const current = state.get(role);
+          if (!current) return false;
+          if (current.execution === 'missing') await execution.initializeNew(role);
+          if (current.lifecycle === 'missing') await lifecycle.initializeNew(role, now);
+        }
+
+        // Re-read exact create-only state before allowing runtime bind.
+        for (const role of roles) {
+          if (!pristineExecution(await execution.read(role))) return false;
+          const history = (await lifecycle.read(role)).history;
+          if (history.blocked !== false || history.lastGeneration !== null
+            || history.activeAttempt !== null || history.exitsMs.length !== 0) return false;
+        }
+        return !signal.aborted;
+      } catch {
+        return false;
+      }
+    },
+  });
+}
+
 async function readRuntimeSecret(
   layout: BootstrapSourceLayout,
   use: (secret: string) => Promise<unknown>,
@@ -266,6 +429,7 @@ export function createRuntimeCoreCredentials(layout: BootstrapSourceLayout): Cor
 export function createSystemBootstrapSources(): {
   acl: AclProbe;
   review: InstalledRuntimeReviewSource;
+  records: RuntimeRecordProvisioner;
   credentials: CoreCredentials;
 } {
   const uid = process.getuid?.() ?? 0;
@@ -280,6 +444,7 @@ export function createSystemBootstrapSources(): {
   return Object.freeze({
     acl,
     review: createInstalledRuntimeReviewSource(layout),
+    records: createRuntimeRecordProvisioner(layout),
     credentials: createRuntimeCoreCredentials(layout),
   });
 }
