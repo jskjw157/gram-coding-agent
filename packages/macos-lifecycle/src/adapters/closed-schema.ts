@@ -4,6 +4,12 @@
  * applied-version sets; the actual complete set must match exactly.
  */
 
+/** Maximum accepted migration-list length. Real schema_migrations sets are
+ * tiny; anything beyond this bound is a malformed or hostile input and can
+ * never equal a sane trusted accepted set, so it is refused outright.
+ */
+const MAX_VERSIONS = 1024;
+
 /** Pure compatibility predicate. Consumes versions from schema_migrations and
  * an independently trusted release policy. Proves nothing about DB closure,
  * migration compatibility, or release provenance by itself.
@@ -12,12 +18,14 @@ export function schemaCompatible(
   actual: unknown,
   accepted: readonly (readonly number[])[],
 ): boolean {
-  if (!Array.isArray(actual) || !actual.every(v => Number.isSafeInteger(v) && (v as number) > 0)) return false;
+  if (!Array.isArray(actual) || actual.length > MAX_VERSIONS
+    || !actual.every(v => Number.isSafeInteger(v) && (v as number) > 0)) return false;
   const versions = actual as number[];
   if (new Set(versions).size !== versions.length) return false;
   const key = [...versions].sort((a, b) => a - b).join(',');
   return accepted.some(set =>
     Array.isArray(set)
+    && set.length <= MAX_VERSIONS
     && set.every(v => Number.isSafeInteger(v) && (v as number) > 0)
     && new Set(set).size === set.length
     && [...set].sort((a, b) => a - b).join(',') === key);
@@ -34,6 +42,7 @@ export type SchemaReadingState = 'absent' | 'present' | 'unreadable' | 'corrupt'
 export function parseClosedVersions(value: unknown): number[] | null {
   if (value === null || value === undefined) return null;
   if (!Array.isArray(value)) return null;
+  if (value.length > MAX_VERSIONS) return null;
   if (!value.every(v => Number.isSafeInteger(v) && (v as number) > 0)) return null;
   if (new Set(value).size !== value.length) return null;
   return [...(value as number[])];

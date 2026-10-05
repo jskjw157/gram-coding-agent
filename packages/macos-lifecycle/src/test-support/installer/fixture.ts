@@ -152,6 +152,18 @@ export function makeInstallFixture(options: InstallFixtureOptions = {}): Install
   const dbWal = Buffer.from('lab-wal-bytes-v1:' + 'b'.repeat(32), 'utf8');
   const dbShm = Buffer.from('lab-shm-bytes-v1', 'utf8');
 
+  const kinds: readonly PublishKind[] = ['configuration', 'core', 'tunnel', 'manifest', 'journal'];
+  const copyLive = (): Map<PublishKind, Buffer | null> => new Map(
+    kinds.map(kind => {
+      const value = live.get(kind) ?? null;
+      return [kind, value ? Buffer.from(value) : null] as [PublishKind, Buffer | null];
+    }),
+  );
+  // Pre-operation byte baseline. restorePrior prefers the reviewed prior it
+  // is given; when called without one it falls back to these bytes so a
+  // restore is always a real byte replacement, never a silent no-op.
+  const baseline = copyLive();
+
   const shouldInterrupt = (point: string): boolean => options.interruptAt === point;
 
   const checkInterrupt = (point: string): void => {
@@ -268,9 +280,28 @@ export function makeInstallFixture(options: InstallFixtureOptions = {}): Install
     },
     restore() {
       return {
-        async restorePrior(): Promise<void> {
+        async restorePrior(prior?: PriorInstall): Promise<void> {
           checkInterrupt('restore:before');
-          // No-op in fixture: live bytes already preserved on failure paths.
+          const source = prior ?? {
+            manifest: baseline.get('manifest') ?? null,
+            config: baseline.get('configuration') ?? null,
+            corePlist: baseline.get('core') ?? null,
+            tunnelPlist: baseline.get('tunnel') ?? null,
+          };
+          const pairs: Array<[PublishKind, Buffer | null]> = [
+            ['configuration', source.config ?? null],
+            ['core', source.corePlist ?? null],
+            ['tunnel', source.tunnelPlist ?? null],
+            ['manifest', source.manifest ?? null],
+          ];
+          for (const [kind, bytes] of pairs) {
+            live.set(kind, bytes ? Buffer.from(bytes) : null);
+          }
+          if (prior === undefined) {
+            const journalBytes = baseline.get('journal') ?? null;
+            live.set('journal', journalBytes ? Buffer.from(journalBytes) : null);
+          }
+          staged.clear();
           checkInterrupt('restore:after');
         },
         async removeManifestOwned(kind, expectedBytes): Promise<boolean> {
@@ -361,7 +392,12 @@ export function makeInstallFixture(options: InstallFixtureOptions = {}): Install
           const value = live.get(kind) ?? null;
           return [kind, value ? shaBytes(value) : null] as [string, string | null];
         });
-      return Buffer.from(JSON.stringify({ files: entries, prior: manifestDigestOf(live) }), 'utf8');
+      return Buffer.from(JSON.stringify({
+        files: entries,
+        prior: manifestDigestOf(live),
+        services: { core: stopped.get('core') ?? true, tunnel: stopped.get('tunnel') ?? true },
+        execution,
+      }), 'utf8');
     },
     databaseBytes(): Buffer {
       return Buffer.concat([dbPrimary, dbWal, dbShm]);
