@@ -22,7 +22,6 @@ import type {
 } from './installation-transaction/contracts.js';
 import { createSystemBootstrapAclProbe } from './a-system-sources.js';
 import {
-  createNativeInstallStorageAt,
   createSystemNativeInstallStorage,
   type NativeInstallStorage,
 } from './a-native-storage.js';
