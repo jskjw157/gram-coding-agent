@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createReviewedInstallerCliDeps, createReviewedStoppedFailureReset } from './a-integration.js';
+import { createReviewedInstallerCliDeps, createReviewedLocalControlPorts } from './a-integration.js';
 import type { Preview } from './contracts.js';
 import { bindReviewedCoreRuntimeAt, type ReviewedServiceRuntime } from './adapters/runtime-authority.js';
 import { fixture as runtimeFixture } from './test-support/runtime/fixture.js';
@@ -125,15 +125,20 @@ describe('A/WP-06 installer + lifecycle composition', () => {
         return base.resetExecutionRecords();
       },
     };
-    const resetPort = createReviewedStoppedFailureReset(guardedBase, {
-      runtime,
-      services: {
-        isStopped: async () => true,
+    install.ports.restore = () => guardedBase;
+    const reviewedPorts = createReviewedLocalControlPorts(
+      {
+        ...install.ports,
+        services: () => ({
+          ...install.ports.services(),
+          isStopped: async () => true,
+        }),
       },
-      clock: () => 100,
-    });
+      runtime,
+      () => 100,
+    );
 
-    expect(await resetPort.resetStoppedFailure?.()).toEqual({ ok: true, code: 'OK' });
+    expect(await reviewedPorts.restore().resetStoppedFailure?.()).toEqual({ ok: true, code: 'OK' });
     expect(broadResetCalls).toBe(0);
     const lifecycleAfter = await runtime.stores.lifecycle.read('core');
     expect(lifecycleAfter.history.blocked).toBe(false);
@@ -156,15 +161,19 @@ describe('A/WP-06 installer + lifecycle composition', () => {
     await runtime.stores.lifecycle.initializeNew('core', 0);
 
     const install = makeInstallFixture({ existingInstall: true });
-    const resetPort = createReviewedStoppedFailureReset(install.ports.restore(), {
-      runtime,
-      services: {
-        isStopped: async (role) => role !== 'core',
+    const reviewedPorts = createReviewedLocalControlPorts(
+      {
+        ...install.ports,
+        services: () => ({
+          ...install.ports.services(),
+          isStopped: async (role) => role !== 'core',
+        }),
       },
-      clock: () => 1,
-    });
+      runtime,
+      () => 1,
+    );
 
-    expect(await resetPort.resetStoppedFailure?.()).toEqual({
+    expect(await reviewedPorts.restore().resetStoppedFailure?.()).toEqual({
       ok: false,
       code: 'PARTIAL_INSTALL',
     });
