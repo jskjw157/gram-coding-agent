@@ -51,9 +51,12 @@ const names: Readonly<Record<PublishKind, string>> = Object.freeze({
   tunnel: 'com.haar.gram-agent.tunnel.plist',
 });
 
-function same(a: BigIntStats, b: BigIntStats): boolean {
+function sameIdentity(a: BigIntStats, b: BigIntStats): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode
-    && a.uid === b.uid && a.gid === b.gid && a.nlink === b.nlink;
+    && a.uid === b.uid && a.gid === b.gid;
+}
+function sameFile(a: BigIntStats, b: BigIntStats): boolean {
+  return sameIdentity(a, b) && a.nlink === b.nlink;
 }
 
 function nativeCode(error: unknown): unknown {
@@ -82,9 +85,9 @@ async function trustedDirectory(
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY | constants.O_NONBLOCK,
   );
   try {
-    if (!same(before, await file.stat({ bigint: true }))
+    if (!sameIdentity(before, await file.stat({ bigint: true }))
       || await layout.acl(file) !== true
-      || !same(before, await lstat(absolute, { bigint: true }))) {
+      || !sameIdentity(before, await lstat(absolute, { bigint: true }))) {
       throw new Error('UNSAFE_PATH');
     }
     return { path: absolute, file, stat: before };
@@ -125,7 +128,7 @@ async function createExact(
     await file.writeFile(bytes);
     await file.sync();
     const ready = await file.stat({ bigint: true });
-    if (ready.size !== BigInt(bytes.length) || !same(stat, ready)) {
+    if (ready.size !== BigInt(bytes.length) || !sameFile(stat, ready)) {
       throw new Error('STATE_CONFLICT');
     }
     return file;
@@ -150,8 +153,8 @@ async function atomicReplace(
   let file: FileHandle | null = null;
   try {
     file = await createExact(directory, temporary, bytes);
-    if (!same(directory.stat, await directory.file.stat({ bigint: true }))
-      || !same(directory.stat, await lstat(directory.path, { bigint: true }))) {
+    if (!sameIdentity(directory.stat, await directory.file.stat({ bigint: true }))
+      || !sameIdentity(directory.stat, await lstat(directory.path, { bigint: true }))) {
       throw new Error('UNSAFE_PATH');
     }
     if (suffix === 'write') {
@@ -183,10 +186,10 @@ export function createNativeInstallStorageAt(
     readRelative(layout, pathFor(layout, kind));
 
   const publish: PublishPort = Object.freeze({
-    async stageFile(kind, bytes) {
+    async stageFile(kind: PublishKind, bytes: Buffer) {
       await atomicReplace(layout, kind, Buffer.from(bytes), 'stage');
     },
-    async publishFile(kind, inputBytes) {
+    async publishFile(kind: PublishKind, inputBytes: Buffer) {
       const bytes = Buffer.from(inputBytes);
       const liveRelative = pathFor(layout, kind);
       const parentRelative = dirname(liveRelative);
@@ -205,7 +208,7 @@ export function createNativeInstallStorageAt(
         await directory.file.close().catch(() => undefined);
       }
     },
-    async readStaged(kind) {
+    async readStaged(kind: PublishKind) {
       const liveRelative = pathFor(layout, kind);
       return readRelative(
         layout,
@@ -219,7 +222,7 @@ export function createNativeInstallStorageAt(
     async read() {
       return readLive('journal');
     },
-    async writeStage(_stage, body) {
+    async writeStage(_stage, body: Buffer) {
       await atomicReplace(layout, 'journal', Buffer.from(body), 'write');
     },
   });
@@ -228,7 +231,7 @@ export function createNativeInstallStorageAt(
     journal,
     publish,
     readLive,
-    async presence(kind) {
+    async presence(kind: PublishKind) {
       const value = await probeTrustedPath(
         layout.anchor,
         layout.ownerUid,
@@ -238,7 +241,7 @@ export function createNativeInstallStorageAt(
       if (value === 'directory') throw new Error('UNSAFE_PATH');
       return value;
     },
-    async removeLiveIfMatches(kind, expected) {
+    async removeLiveIfMatches(kind: 'core' | 'tunnel', expected: Buffer) {
       const liveRelative = pathFor(layout, kind);
       const current = await readRelative(layout, liveRelative);
       if (current === null) return true;
@@ -294,7 +297,7 @@ export function createNativeInstallStorageAt(
           try {
             const current = await lstat(lockPath, { bigint: true });
             const held = await file.stat({ bigint: true });
-            if (!same(before, current) || !same(before, held)) throw new Error('STATE_CONFLICT');
+            if (!sameFile(before, current) || !sameFile(before, held)) throw new Error('STATE_CONFLICT');
             await unlink(lockPath);
             await directory.file.sync();
           } finally {
