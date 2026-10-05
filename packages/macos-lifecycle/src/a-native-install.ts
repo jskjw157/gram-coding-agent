@@ -209,7 +209,8 @@ export function createNativeInstallPortsAt(options: NativeInstallPortsOptions): 
     publish: () => storage.publish,
     restore(): RestorePort {
       return {
-        async restorePrior(_prior: PriorInstall): Promise<void> {
+        async restorePrior(prior: PriorInstall): Promise<void> {
+          void prior;
           throw new Error('PARTIAL_INSTALL');
         },
         async removeManifestOwned(kind: 'core' | 'tunnel', expectedBytes: Buffer): Promise<boolean> {
