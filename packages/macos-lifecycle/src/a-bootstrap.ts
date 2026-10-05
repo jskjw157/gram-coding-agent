@@ -8,6 +8,7 @@ import {
   type RuntimeReviewCandidate,
 } from './reviewed-bootstrap.js';
 import type { SupervisorBootstrap } from './supervisor-entry.js';
+import { createSystemBootstrapSources } from './a-system-sources.js';
 import type { ReviewedTunnelProvider } from './tunnel-supervisor-runtime.js';
 
 export interface AReviewedBootstrapOptions {
@@ -77,5 +78,21 @@ export function createASystemReviewedSupervisorBootstrap(
       ? {}
       : { tunnelProvider: options.tunnelProvider }),
     bind: (review, signal) => bindReviewedCoreRuntime(review, options.acl, signal),
+  });
+}
+
+/**
+ * Direct launchd production composition. Construction performs no IO; all
+ * fixed-file/ACL/secret checks occur lazily inside prepare/health use.
+ * Tunnel provider wiring remains intentionally absent until external tunnel
+ * credentials/provider compatibility are explicitly provisioned.
+ */
+export function createASystemSupervisorBootstrapFromFixedSources(): SupervisorBootstrap {
+  const sources = createSystemBootstrapSources();
+  return createASystemReviewedSupervisorBootstrap({
+    acl: sources.acl,
+    approval: sources.approval,
+    candidate: sources.candidate,
+    credentials: sources.credentials,
   });
 }
