@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.haar.gram-agent.core</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/env</string>
+		<string>node</string>
+		<string>__GRAM_AGENT_REPO_ROOT__/apps/agent/dist/main.js</string>
+	</array>
+	<key>UserName</key>
+	<string>mac_ops</string>
+	<key>WorkingDirectory</key>
+	<string>__GRAM_AGENT_REPO_ROOT__</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>NODE_ENV</key>
+		<string>production</string>
+		<key>GRAM_AGENT_STATE_DIR</key>
+		<string>/Users/mac_ops/.gram-agent/state</string>
+		<key>GRAM_AGENT_SECRET_DIR</key>
+		<string>/Users/mac_ops/.gram-agent/secrets</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/Users/mac_ops/Library/Logs/gram-agent/core.out.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/mac_ops/Library/Logs/gram-agent/core.err.log</string>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>
