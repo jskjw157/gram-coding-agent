@@ -132,6 +132,23 @@ test('refusal: dirty source (.git, .env, pem) is refused', () => {
   assert.throws(() => pack(pemSource), /DIRTY_SOURCE/);
 });
 
+test('dependency code named @gram/secrets is allowed but root secret/state/browser trees remain forbidden', () => {
+  const source = writeSource();
+  const code = 'apps/agent/node_modules/@gram/secrets/dist/index.js';
+  mkdirSync(join(source, code, '..'), { recursive: true });
+  writeFileSync(join(source, code), 'export {};\n');
+  const out = pack(source, { additionalFiles: [code] });
+  assert.ok(JSON.parse(out.releaseJson).files.some((entry) => entry.path === code));
+
+  for (const root of ['secrets', 'state', 'browser']) {
+    const blocked = writeSource();
+    const rel = `${root}/payload.txt`;
+    mkdirSync(join(blocked, root), { recursive: true });
+    writeFileSync(join(blocked, rel), 'x\n');
+    assert.throws(() => pack(blocked, { additionalFiles: [rel] }), /INVALID_PATH|DIRTY_SOURCE/);
+  }
+});
+
 test('refusal: extra undeclared file is refused', () => {
   const source = writeSource();
   writeFileSync(join(source, 'scratch.txt'), 'x\n');
