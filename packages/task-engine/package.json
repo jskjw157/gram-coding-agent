@@ -17,7 +17,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "better-sqlite3": "^13.0.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "typescript": "^6.0.0",
     "vitest": "^5.0.0"
   }
