@@ -256,14 +256,19 @@ export function createRuntimeRecordProvisioner(
         );
         if (signal.aborted) return false;
 
-        const guardRecords = (raw: RecordFiles): RecordFiles => Object.freeze({
-          async read(role) {
+        const guardRecords = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
+          async read(role: 'core' | 'tunnel') {
             await directories.verify();
             const result = await raw.read(role);
             await directories.verify();
             return result;
           },
-          async compareAndSwap(role, expected, slot, bytes) {
+          async compareAndSwap(
+            role: 'core' | 'tunnel',
+            expected: readonly (string | null)[],
+            slot: number,
+            bytes: Buffer,
+          ) {
             await directories.verify();
             await raw.compareAndSwap(role, expected, slot, bytes);
             await directories.verify();
