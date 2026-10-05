@@ -14,3 +14,7 @@ export * from './a-native-observer.js';
 export * from './a-native-services.js';
 export * from './a-native-storage.js';
 export * from './a-native-install.js';
+export * from './a-candidate-config.js';
+export * from './a-native-diagnostic.js';
+export * from './a-operator.js';
+export * from './operator-cli.js';
