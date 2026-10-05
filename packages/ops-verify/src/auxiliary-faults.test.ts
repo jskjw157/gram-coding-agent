@@ -10,7 +10,7 @@ import { AuthSessionKeeper } from '../../auth-session/src/session-keeper.js';
 import { CredentialBroker } from '../../credentials/src/broker.js';
 import type { FixtureVault } from '../../credentials/src/broker.js';
 import { OperationPolicyGate, decideOperation } from '../../policy/src/operation-policy.js';
-import { InMemoryOperationApprovalStore } from '../../policy/src/operation-policy.js';
+import { FixtureConsumeOnceStore } from './harness.js';
 import { EffectLedger } from '../../task-engine/src/effect-ledger.js';
 import { ShopifyAmbiguousError, ShopifyTransport } from '../../shopify-adapter/src/transport.js';
 import { FakeBroker } from '../../shopify-adapter/src/fixture-endpoint.js';
@@ -70,7 +70,7 @@ describe('auxiliary faults (OAuth, approval, worker, restart, tunnel)', () => {
   });
 
   it('post-approval crash: consumed approval cannot replay after rehydrate', () => {
-    const store = new InMemoryOperationApprovalStore();
+    const store = new FixtureConsumeOnceStore();
     const gate = new OperationPolicyGate({ clock: () => 1000, store });
     const intent = {
       taskId: 'task-1',

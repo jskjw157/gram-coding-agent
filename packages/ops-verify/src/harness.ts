@@ -33,6 +33,7 @@ import {
   decideOperation,
   hashOperationIntent,
 } from '../../policy/src/operation-policy.js';
+import type { ApprovalConsumptionPort } from '../../policy/src/operation-policy.js';
 
 export type CrashPoint =
   | 'before-ledger'
@@ -260,11 +261,25 @@ const policyIntentFor = (operationId: string) => ({
   recipeId: 'recipe-verify',
 });
 
+export class FixtureConsumeOnceStore implements ApprovalConsumptionPort {
+  private readonly consumed = new Set<string>();
+
+  consume(taskId: string, operationHash: string): boolean {
+    const pair = `${taskId}:${operationHash}`;
+    if (this.consumed.has(pair)) return false;
+    this.consumed.add(pair);
+    return true;
+  }
+}
+
 export class CrashSafeExecutor {
   readonly ledger = new EffectLedger();
   readonly journal = new IntentJournal();
   readonly world = new ScriptedWorld();
-  private readonly gate = new OperationPolicyGate({ clock: () => 1000 });
+  private readonly gate = new OperationPolicyGate({
+    clock: () => 1000,
+    store: new FixtureConsumeOnceStore(),
+  });
   private readonly receipted = new Set<string>();
   private readonly tasksDone = new Set<string>();
 
@@ -376,8 +391,9 @@ export class CrashSafeExecutor {
       intent,
     );
     if (!check.accepted) throw new Error(`governed retry refused: ${check.reason}`);
-    // verify() consumed the approval atomically through the persistent
-    // consume-once store; no separate consume step exists anymore.
+    // verify() consumed the approval atomically through the consume-once
+    // port (same shape as the lane's durable PersistentOperationApprovalStore);
+    // no separate consume step exists anymore.
   }
 
   private async governedDispatch(
