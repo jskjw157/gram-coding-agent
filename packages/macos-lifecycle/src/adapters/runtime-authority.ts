@@ -5,7 +5,7 @@ import { root, type Role, type ServiceConfig } from '../contracts.js';
 import { configDigest, parseConfig } from '../config.js';
 import { copyRuntimeReview } from '../runtime-review.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
-import { createStoppedRecovery } from '../stopped-recovery.js';
+import { createStoppedProof, createStoppedRecovery } from '../stopped-recovery.js';
 import { CoreRegistrationStore } from '../core-registration.js';
 import { TunnelRegistrationStore } from '../tunnel-registration.js';
 import { decodeStatus, type ServiceStatus } from '../telemetry.js';
@@ -54,6 +54,7 @@ export interface ReviewedServiceRuntime extends ReviewedCoreRuntime {
   stores: RuntimeStores;
   tunnelRegistration: TunnelRegistrationStore | null;
   tunnelRuntime: ReviewedTunnelRuntime | null;
+  proveStopped(role: Role, signal: AbortSignal): Promise<boolean>;
   confirmStopped(role: Role, signal: AbortSignal): Promise<boolean>;
 }
 function refuse(): never { throw new Error('CORE_AUTHORITY_UNAVAILABLE'); }
@@ -221,19 +222,21 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
           catch { return 'UNKNOWN'; }
         },
       });
-      const confirmStopped = createStoppedRecovery({
+      const stoppedDeps = {
         config: review.config,
         execution,
         coreRegistration: registration,
         tunnelRegistration,
         proof,
-        async executable(role, abort) {
+        async executable(role: Role, abort: AbortSignal) {
           if (role === 'core') return validate(abort);
           if (role !== 'tunnel' || !review.config.tunnel.enabled) return null;
           await validate(abort);
           return manifestExecutable('bin/tunnel-client', abort);
         },
-      });
+      };
+      const proveStopped = createStoppedProof(stoppedDeps);
+      const confirmStopped = createStoppedRecovery(stoppedDeps);
       const authority: CoreAuthority = Object.freeze<CoreAuthority>({
         async acquire(input, abort) {
           try {
@@ -286,7 +289,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       }
       return Object.freeze({
         authority, execution, registration, readCoreStatus,
-        configuration: review.config, stores, tunnelRegistration, tunnelRuntime, confirmStopped,
+        configuration: review.config, stores, tunnelRegistration, tunnelRuntime, proveStopped, confirmStopped,
       });
     });
   } catch { return null; }
