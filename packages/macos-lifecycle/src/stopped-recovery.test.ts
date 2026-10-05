@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { configDigest, parseConfig } from './config.js';
 import { CoreRegistrationStore } from './core-registration.js';
 import { ExecutionLeaseStore } from './execution-lease.js';
-import { createStoppedRecovery } from './stopped-recovery.js';
+import { createStoppedProof, createStoppedRecovery } from './stopped-recovery.js';
 import { TunnelRegistrationStore } from './tunnel-registration.js';
 import type { NativePeerProofPort, PeerVerdict } from './adapters/owned-process.js';
 import { MemoryExecutionFiles, releaseDigest } from './test-support/execution-fixture.js';
@@ -28,13 +28,15 @@ async function fixture(role:'core'|'tunnel', verdict:PeerVerdict='FOREIGN'){
     });return verdict;},
     async peer(){return 'UNKNOWN';},
   });
-  const recover=createStoppedRecovery({
+  const deps={
     config,execution,coreRegistration,tunnelRegistration,proof,
-    async executable(candidate){
+    async executable(candidate:'core'|'tunnel'){
       expect(candidate).toBe(role);return Object.freeze({dev:11n,ino:22n});
     },
-  });
-  return {execution,coreRegistration,tunnelRegistration,recover,currentCalls:()=>currentCalls};
+  };
+  const prove=createStoppedProof(deps);
+  const recover=createStoppedRecovery(deps);
+  return {execution,coreRegistration,tunnelRegistration,prove,recover,currentCalls:()=>currentCalls};
 }
 
 describe('exact stopped execution recovery',()=>{
@@ -43,6 +45,24 @@ describe('exact stopped execution recovery',()=>{
     expect(await f.recover('core',new AbortController().signal)).toBe(true);
     expect(f.currentCalls()).toBe(0);
     expect(await f.execution.read('core')).toMatchObject({state:'FREE',revision:0});
+  });
+
+  it('proves an exact held Core stopped without mutating HELD/revision evidence',async()=>{
+    const f=await fixture('core','FOREIGN');
+    await f.execution.acquire('core','cg1',digest,releaseDigest);
+    await f.coreRegistration.publish(config,child('core','cg1'));
+    const before=await f.execution.read('core');
+    expect(await f.prove('core',new AbortController().signal)).toBe(true);
+    expect(f.currentCalls()).toBe(1);
+    expect(await f.execution.read('core')).toEqual(before);
+  });
+
+  it('read-only stopped proof refuses OWNED native evidence and preserves HELD',async()=>{
+    const f=await fixture('core','OWNED');
+    await f.execution.acquire('core','cg1',digest,releaseDigest);
+    await f.coreRegistration.publish(config,child('core','cg1'));
+    expect(await f.prove('core',new AbortController().signal)).toBe(false);
+    expect(await f.execution.read('core')).toMatchObject({state:'HELD',revision:1,generation:'cg1'});
   });
 
   it('recovers an exact held Core only after native FOREIGN proof',async()=>{
