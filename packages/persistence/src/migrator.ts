@@ -15,10 +15,14 @@ export interface MigrationRunOptions {
 }
 
 // Append-only manifest per WP-07 convergence section (b): versions 2-4 are
-// M2-owned (002_coding_steps, 003_verification_reviews, 004_approvals) and
-// land with the M2 lineage; the ops lane owns version 5 = MAX(M2 001-004)+1.
+// M2-owned (002_coding_steps, 003_verification_reviews, 004_approvals,
+// landed here via the ops-common-approvals merge); the ops lane owns
+// version 5 = MAX(M2 001-004)+1.
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, file: './migrations/001_initial.sql' },
+  { version: 2, file: './migrations/002_coding_steps.sql' },
+  { version: 3, file: './migrations/003_verification_reviews.sql' },
+  { version: 4, file: './migrations/004_approvals.sql' },
   { version: 5, file: './migrations/005_operations.sql' },
 ];
 
