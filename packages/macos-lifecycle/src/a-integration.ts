@@ -15,7 +15,7 @@ import type {
   InstallResult,
   ServiceHandle,
 } from './installation-transaction/contracts.js';
-import type { LocalControlRestorePort } from './installation-transaction/control-contracts.js';
+import type { LocalControlPorts, LocalControlRestorePort } from './installation-transaction/control-contracts.js';
 import type { ReviewedServiceRuntime } from './adapters/runtime-authority.js';
 
 function fail(code: Result['code']): Result {
@@ -144,6 +144,30 @@ export function createReviewedStoppedFailureReset(
       } catch {
         return { ok: false, code: 'PARTIAL_INSTALL' };
       }
+    },
+  });
+}
+
+
+/**
+ * Bind the B3 control surface to the A-owned reviewed LifecycleStore reset.
+ * Every other installer capability is delegated unchanged; only restore()
+ * gains the narrow resetStoppedFailure capability.
+ */
+export function createReviewedLocalControlPorts(
+  ports: InstallPorts,
+  runtime: Pick<ReviewedServiceRuntime, 'stores'>,
+  clock?: () => number,
+): LocalControlPorts {
+  return Object.freeze({
+    ...ports,
+    restore(): LocalControlRestorePort {
+      const services = ports.services();
+      return createReviewedStoppedFailureReset(ports.restore(), {
+        runtime,
+        services,
+        ...(clock === undefined ? {} : { clock }),
+      });
     },
   });
 }
