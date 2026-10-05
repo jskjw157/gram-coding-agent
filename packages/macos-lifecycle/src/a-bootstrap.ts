@@ -160,8 +160,9 @@ export function createASystemSupervisorBootstrapFromFixedSources(): SupervisorBo
   return createAInstalledReviewedSupervisorBootstrap({
     review: sources.review,
     credentials: sources.credentials,
-    bind: (review, signal) => review === null
-      ? Promise.resolve(null)
-      : bindReviewedCoreRuntime(review, sources.acl, signal),
+    bind: async (review, signal) => {
+      if (review === null || await sources.records.ensure(review, signal) !== true) return null;
+      return bindReviewedCoreRuntime(review, sources.acl, signal);
+    },
   });
 }
