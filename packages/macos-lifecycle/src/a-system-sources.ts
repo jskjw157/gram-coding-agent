@@ -88,6 +88,7 @@ export interface BootstrapSourceLayout {
   readonly relative: string;
   readonly ownerUid: number;
   readonly runtimeUid: number;
+  readonly runtimeGid: number;
   readonly acl: AclProbe;
 }
 
@@ -163,6 +164,8 @@ export function createInstalledRuntimeReviewSource(
         if (installation === null || runtime === null
           || installation.schemaVersion !== 1 || installation.state !== 'COMMITTED'
           || runtime.name !== 'gram-agent'
+          || runtime.uid !== layout.runtimeUid
+          || runtime.gid !== layout.runtimeGid
           || installation.configSha256 !== shaBytes(configBytes)
           || installation.releaseId !== config.releaseId
           || installation.releaseDigest !== config.releaseDigest) return null;
@@ -439,11 +442,13 @@ export function createSystemBootstrapSources(): {
 } {
   const uid = process.getuid?.() ?? 0;
   const acl = createSystemBootstrapAclProbe();
+  const gid = process.getgid?.() ?? 0;
   const layout: BootstrapSourceLayout = {
     anchor: '/',
     relative: root.slice(1),
     ownerUid: 0,
     runtimeUid: uid,
+    runtimeGid: gid,
     acl,
   };
   return Object.freeze({
