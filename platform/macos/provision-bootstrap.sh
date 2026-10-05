@@ -67,11 +67,11 @@ fi
   echo "NOT_AUTHORIZED" >&2
   exit 77
 }
-[[ -x "$BUILDER" ]] || { echo "BUILDER_UNAVAILABLE" >&2; exit 2; }
+[[ -f "$BUILDER" && ! -L "$BUILDER" ]] || { echo "BUILDER_UNAVAILABLE" >&2; exit 2; }
 
 TMP="$(/usr/bin/mktemp -d "${TMPDIR:-/var/tmp}/gram-bootstrap.XXXXXX")"
 trap '/bin/rm -rf "$TMP"' EXIT
-"$BUILDER" "$TMP/file-acl" >/dev/null
+/bin/bash "$BUILDER" "$TMP/file-acl" >/dev/null
 
 /bin/mkdir -p "$BOOTSTRAP_DIR" "$RUN_DIR" "$STATE_DIR" "$SECRET_DIR" "$LOG_DIR"
 /usr/sbin/chown root:wheel "$ROOT" "$ROOT/bootstrap" "$BOOTSTRAP_DIR"
