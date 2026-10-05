@@ -8,3 +8,4 @@ export * from './cli.js';
 export * from './diagnostic.js';
 export * from './a-integration.js';
 export * from './rollback-contracts.js';
+export * from './a-bootstrap.js';
