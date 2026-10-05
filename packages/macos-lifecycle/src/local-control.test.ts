@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { control } from './local-control.js';
 import { makeInstallFixture } from './test-support/installer/fixture.js';
+import { resetExecutionCalls, withResetExecutionSpy, withStoppedFailureCapability } from './test-support/installer-control/index.js';
 import { validateManifestBytes } from './adapters/install-files.js';
 
 describe('local-control', () => {
@@ -37,8 +38,17 @@ describe('local-control', () => {
 
   it('reset-failure requires stopped core', async () => {
     const f = makeInstallFixture({ existingInstall: true });
+    withStoppedFailureCapability(f);
     const res = await control('reset-failure', f.ports);
     expect(res).toEqual({ ok: true, code: 'OK' });
+  });
+
+  it('reset-failure without capability leaves reset untouched', async () => {
+    const f = makeInstallFixture({ existingInstall: true });
+    const spy = withResetExecutionSpy(f);
+    const res = await control('reset-failure', f.ports);
+    expect(res.ok).toBe(false);
+    expect(resetExecutionCalls(spy)).toBe(0);
   });
 
   it('rejects unknown action + auth/lock', async () => {

@@ -5,10 +5,19 @@ import {
   type InstallPorts,
   type InstallResult,
 } from './installation-transaction/contracts.js';
+import type { LocalControlRestorePort } from './installation-transaction/control-contracts.js';
+import { reconcileJournal } from './installation-transaction/journal.js';
 import { validateManifestBytes } from './adapters/install-files.js';
+import { parseConfig } from './config.js';
 
 function fail(code: SafeCode): InstallResult {
   return { ok: false, code };
+}
+
+/** Strip service/reset extras (stage/raw/...) to the fixed {ok,code} shape. */
+function sanitize(result: InstallResult): InstallResult {
+  if (result.ok === true) return { ok: true, code: 'OK' };
+  return { ok: false, code: result.code };
 }
 
 /** Local administrative control. Only start|stop|restart|reset-failure|
@@ -34,7 +43,7 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
   } catch {
     return fail('PARTIAL_INSTALL');
   }
-  if (!session.acquired) return fail('BUSY');
+  if (session.acquired !== true) return fail('BUSY');
   const run = async (): Promise<InstallResult> => {
     let prior;
     try {
@@ -42,14 +51,32 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
     } catch {
       return fail('PARTIAL_INSTALL');
     }
+    // Config-first: malformed prior config is FOREIGN_SERVICE before ANY
+    // service mutation (start/restart must not stop or start first).
+    if (prior.config !== null) {
+      try {
+        parseConfig(JSON.parse(prior.config.toString('utf8')));
+      } catch {
+        return fail('FOREIGN_SERVICE');
+      }
+    }
+    // Journal gate: anything but clean-absent/clean-committed is
+    // PARTIAL_INSTALL with zero service calls. Status never repairs.
+    let journal: Buffer | null;
+    try {
+      journal = await ports.journal().read();
+    } catch {
+      return fail('PARTIAL_INSTALL');
+    }
+    if (reconcileJournal(journal, prior.manifest).state === 'partial') return fail('PARTIAL_INSTALL');
     const services = ports.services();
 
     const stopBoth = async (): Promise<InstallResult | null> => {
       try {
         const stopTunnel = await services.stop('tunnel');
-        if (!stopTunnel.ok) return stopTunnel;
+        if (stopTunnel.ok !== true) return sanitize(stopTunnel);
         const stopCore = await services.stop('core');
-        if (!stopCore.ok) return stopCore;
+        if (stopCore.ok !== true) return sanitize(stopCore);
         if (await services.isStopped('tunnel') !== true) return fail('PARTIAL_INSTALL');
         if (await services.isStopped('core') !== true) return fail('PARTIAL_INSTALL');
         return null;
@@ -60,27 +87,58 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
     };
 
     const startDesired = async (): Promise<InstallResult | null> => {
+      let coreStarted = false;
+      let tunnelStarted = false;
+      const compensate = async (): Promise<void> => {
+        if (tunnelStarted) {
+          tunnelStarted = false;
+          try {
+            await services.stop('tunnel');
+          } catch { /* best-effort; the original failure is preserved */ }
+        }
+        if (!coreStarted) return;
+        coreStarted = false;
+        try {
+          await services.stop('core');
+        } catch { /* best-effort; the original failure is preserved */ }
+      };
       try {
         // Lab disabled snapshot: desired state is stopped. Starting here
         // reflects an explicit local start request, verified by owned health.
         const startCore = await services.start('core');
-        if (!startCore.ok) return startCore;
-        if (await services.ownedHealthy('core') !== true) return fail('HEALTH_UNKNOWN');
+        if (startCore.ok !== true) return sanitize(startCore);
+        coreStarted = true;
+        if (await services.ownedHealthy('core') !== true) {
+          await compensate();
+          return fail('HEALTH_UNKNOWN');
+        }
         if (prior.config !== null) {
+          let tunnelEnabled = false;
           try {
             const parsed: unknown = JSON.parse(prior.config.toString('utf8'));
             const tunnel = (parsed as { tunnel?: { enabled?: unknown } }).tunnel;
-            if (tunnel !== null && typeof tunnel === 'object' && (tunnel as { enabled?: unknown }).enabled === true) {
-              const startTunnel = await services.start('tunnel');
-              if (!startTunnel.ok) return startTunnel;
-              if (await services.ownedHealthy('tunnel') !== true) return fail('HEALTH_UNKNOWN');
-            }
+            tunnelEnabled = tunnel !== null && typeof tunnel === 'object'
+              && (tunnel as { enabled?: unknown }).enabled === true;
           } catch {
+            await compensate();
             return fail('FOREIGN_SERVICE');
+          }
+          if (tunnelEnabled) {
+            const startTunnel = await services.start('tunnel');
+            if (startTunnel.ok !== true) {
+              await compensate();
+              return sanitize(startTunnel);
+            }
+            tunnelStarted = true;
+            if (await services.ownedHealthy('tunnel') !== true) {
+              await compensate();
+              return fail('HEALTH_UNKNOWN');
+            }
           }
         }
         return null;
       } catch (error) {
+        await compensate();
         if (error instanceof Error && error.message === 'INTERRUPTED') return fail('PARTIAL_INSTALL');
         return fail('PARTIAL_INSTALL');
       }
@@ -88,7 +146,20 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
 
     switch (action) {
       case 'stop': {
-        if (prior.digest === null) return { ok: true, code: 'OK' };
+        if (prior.digest === null) {
+          let coreStopped: boolean;
+          let tunnelStopped: boolean;
+          try {
+            coreStopped = await services.isStopped('core');
+            tunnelStopped = await services.isStopped('tunnel');
+          } catch {
+            return fail('PARTIAL_INSTALL');
+          }
+          if (coreStopped === true && tunnelStopped === true) return { ok: true, code: 'OK' };
+          const stopped = await stopBoth();
+          if (stopped !== null) return stopped;
+          return fail('PARTIAL_INSTALL');
+        }
         const stopped = await stopBoth();
         if (stopped !== null) return stopped;
         return { ok: true, code: 'OK' };
@@ -117,13 +188,16 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
         // creates root-owned records the supervisor cannot update.
         const stopped = await stopBoth();
         if (stopped !== null) return stopped;
+        if (await services.isStopped('core') !== true) return fail('PARTIAL_INSTALL');
+        const maybe = (ports.restore() as unknown as { resetStoppedFailure?: unknown }).resetStoppedFailure;
+        if (typeof maybe !== 'function') return fail('PARTIAL_INSTALL');
         let reset: InstallResult;
         try {
-          reset = await ports.restore().resetExecutionRecords();
+          reset = await (maybe as NonNullable<LocalControlRestorePort['resetStoppedFailure']>)();
         } catch {
           return fail('PARTIAL_INSTALL');
         }
-        if (!reset.ok) return reset;
+        if (reset.ok !== true) return sanitize(reset);
         // Revalidate and start only as previously desired. The supported lab
         // snapshot is disabled, so reset leaves jobs stopped after recovery.
         return { ok: true, code: 'OK' };
@@ -131,7 +205,10 @@ export async function control(action: ControlAction, ports: InstallPorts): Promi
       case 'uninstall': {
         const stopped = await stopBoth();
         if (stopped !== null) return stopped;
-        if (prior.digest === null) return { ok: true, code: 'OK' };
+        if (prior.digest === null) {
+          if (prior.corePlist === null && prior.tunnelPlist === null) return { ok: true, code: 'OK' };
+          return fail('FOREIGN_SERVICE');
+        }
         try {
           const restore = ports.restore();
           if (prior.corePlist !== null) {
