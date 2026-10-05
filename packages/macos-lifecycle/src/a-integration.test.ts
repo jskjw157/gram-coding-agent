@@ -134,7 +134,10 @@ describe('A/WP-06 installer + lifecycle composition', () => {
           isStopped: async () => true,
         }),
       },
-      runtime,
+      {
+        stores: runtime.stores,
+        proveStopped: async () => true,
+      },
       () => 100,
     );
 
@@ -169,7 +172,12 @@ describe('A/WP-06 installer + lifecycle composition', () => {
           isStopped: async (role) => role !== 'core',
         }),
       },
-      runtime,
+      {
+        stores: runtime.stores,
+        proveStopped: async () => {
+          throw new Error('must not prove while launchd still reports running');
+        },
+      },
       () => 1,
     );
 
