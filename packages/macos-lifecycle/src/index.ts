@@ -10,3 +10,5 @@ export * from './a-integration.js';
 export * from './rollback-contracts.js';
 export * from './a-bootstrap.js';
 export * from './a-system-sources.js';
+export * from './a-native-observer.js';
+export * from './a-native-services.js';
