@@ -1,110 +1,238 @@
-# MAC-02 Service Lifecycle — Durable Core Reservation Checkpoint
+# MAC-02 Service Lifecycle — Exact Stopped Recovery and Session Wiring Checkpoint
 
-**Updated:** 2026-09-29 (Asia/Seoul)  
-**Status:** IN_PROGRESS / PARTIAL. This increment implements cooperative execution reservations; it is not a deployable service.  
+**Updated:** 2026-10-03 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Durable Core/Tunnel process registration and exact stopped-recovery are wired through reviewed service sessions. Production bootstrap trust/credentials, installer/packager integration and installed acceptance remain incomplete.  
 **Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
-**Code/test checkpoint:** `4401a6648cc6784ec594efc20998eed09918049f`.  
-**Continuation baseline:** `796e102bf1efadc715a57775e5377bf38d1e5923`.  
+**Verified code/test checkpoint:** `df6284197e5506936721ec544672b3e065a9ebfe`.
+
+## Current increment — crash/reboot-safe stopped recovery
+
+This increment closes the cooperative recovery path that previously left a HELD execution slot blocking later starts after a supervisor crash.
+
+- Core and tunnel process registrations bind the exact execution revision/token to PID, UID, kernel start identity, generation and release digest.
+- `tunnel.process.json` uses the same private run-directory protections as Core but a separate tunnel-only decoder/validator.
+- tunnel start is not exposed until the durable registration is published; failed publication must confirm actual child exit before reporting a failed start.
+- `ExecutionLeaseStore.recoverStopped` transitions HELD→FREE only with literal stopped proof and an exact compare-and-swap of the observed record.
+- stopped recovery treats `OWNED` and `UNKNOWN` as not stopped. Only native `FOREIGN` for the exact registered PID+UID+start-time+executable identity is accepted for a HELD slot.
+- stale stopped proof cannot overwrite a newer owner.
+- a FREE cooperative execution slot can confirm no currently owned child without probing native process state.
+- reviewed runtime binds the recovery verifier to the already reviewed release/helper/context and reviewed service-session dependencies pass that capability into the existing supervisor recovery hook.
+- no TTL, process age, guessed PID, port absence, launchd label presence, stale-file deletion or truthy non-boolean evidence authorizes recovery.
+
+### TDD / exact-head verification
+
+Key RED checkpoints:
+- `ee1ed4229cc76cf9cdfccab61b51b990fedb729c`: stopped-recovery behavior intentionally absent; 4 new failures / 882 previous passes on Ubuntu.
+- `1e145aee0bd6ec67ae03fedeef6fd2bb0992c9ce`: reviewed runtime lacked `confirmStopped`; 4 new failures / 886 previous passes.
+- `f63deda696a616f865569353cb0c1819bc6548b2`: reviewed session dependency glue absent; 2 new failures / 890 previous passes.
+
+Verified exact head `df6284197e5506936721ec544672b3e065a9ebfe`:
+- focused workflow `37097179807`: success on Ubuntu and native Apple Silicon Mac;
+- root CI `37097179859`: success;
+- native Mac lifecycle: **78 files / 914 tests passed**, zero failures/skips;
+- same Mac root suite: **86 files / 962 tests passed**, zero failures/skips;
+- lint, typecheck, root tests, build, diff and production-output checks passed;
+- plist structure: 2 valid roles / 12 altered cases rejected; native `plutil` accepted both generated plists.
+
+No actual launchd install, reboot/logout acceptance, administrator mutation, real credential, Keychain/TCC/FileVault change, network/tunnel session, HAAR business action or merge was performed.
+
+### Remaining deployment blockers
+
+- direct `supervisor-cli.js` remains fail-closed without an independently provisioned production bootstrap trust source;
+- bootstrap ACL helper provenance cannot be derived only from the candidate release it is meant to verify;
+- real Core/tunnel credential providers remain unprovisioned;
+- installer/rollback/packaging integration and sealed artifact provenance are still pending external lanes;
+- actual user-Mac launchd/reboot/logout acceptance and final privileged-boundary review remain NOT_RUN.
+
+---
+
+# MAC-02 Service Lifecycle — Fixed Supervisor Entry and Reviewed Tunnel Authority Checkpoint
+
+**Updated:** 2026-10-03 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. A fixed launchd-only supervisor executable entry and reviewed tunnel binary/compatibility authority are now tested components. Independent bootstrap trust provisioning, real tunnel credential/provider health, installed service acceptance and final lane integration remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified code/test checkpoint:** `ba707e3a724335164be604b47669d7337b4ec17d`.  
+**Supervisor CLI RED:** `58eba6519f2d61da0149b3f2c2a150a0b554b5b4`.  
+**Tunnel authority RED:** `0d5f7690beef9f8feb8d109b97db687cd4acb763`.
+
+## Current increment — fixed private executable entry
+
+`supervisor-cli.ts` is the private launchd entry referenced by the generated plist. It is deliberately separate from lane D's public diagnostic/operator CLI.
+
+- direct execution is recognized only when `process.argv[1]` is the exact absolute path represented by `import.meta.url`;
+- the only accepted runtime grammar remains the existing fixed `--role core|tunnel --config <fixed installed service.json>` contract;
+- public-style commands such as `status` or `start core` are rejected before bootstrap;
+- importing the module has no service start, signal hook, console output or process exit side effect;
+- direct execution uses `process.exitCode`, never a forced process exit;
+- without an independently trusted bootstrap capability the executable fails closed with exit 78. No production success stub was added.
+
+RED `58eba65` produced six new expected failures while 823 prior tests passed on the Ubuntu focused run. GREEN code `ec7a05fc73e5dcb1db0c4fafc99da74d49317ac2` passed focused workflow `37073174865` and root CI `37073174861`; native Mac job `111057097805` recorded **65 lifecycle files / 851 tests** and **73 root files / 899 tests**, zero failures/skips.
+
+## Current increment — reviewed tunnel runtime authority
+
+For a tunnel-enabled reviewed release, the existing runtime authority now additionally exposes a frozen `tunnelRuntime` containing:
+
+- compatibility digest copied from the strict reviewed configuration;
+- a `TunnelAuthority` that requires the exact configuration/compatibility and matching LOCAL_CORE_HEALTHY release evidence;
+- revalidation of the existing sealed release before every grant;
+- descriptor identity of the fixed `bin/tunnel-client` that remains root-owned, executable, single-link and non-writable by group/world;
+- an existing durable `tunnel.execution.json` HELD reservation matching the reviewed config/release before any grant.
+
+The tunnel executable is trusted through the already independently pinned `releaseDigest` plus full `inspectRelease` inventory/content verification. The runtime does not treat the tunnel binary's own metadata as a new trust anchor. Tunnel-enabled binding now also refuses a missing/corrupt tunnel execution record rather than initializing it.
+
+This component does **not** read a control-plane credential, contact a provider, start a tunnel, claim provider health, or solve the independently provisioned ACL/bootstrap trust anchor.
+
+RED `0d5f769` recorded five expected tunnel-authority failures with 830 prior tests passing. GREEN `ba707e3a724335164be604b47669d7337b4ec17d`:
+
+- focused workflow `37073884917`: completed/success on Ubuntu and native Apple Silicon Mac;
+- root CI `37073884924`: completed/success;
+- native Mac job `111059326371`: **66 lifecycle files / 857 tests passed**, zero failures/skips;
+- same Mac root suite: **74 files / 905 tests passed**, zero failures/skips;
+- lint, typecheck, root tests, build, diff/output exclusions all passed;
+- plist verifier accepted 2 roles, rejected 12 altered cases; native `plutil` accepted both plists.
+
+No real credential, OpenAI tunnel session, service installation, administrator action, account/security setting, browser/store operation or merge was performed.
+
+---
+
+# MAC-02 Service Lifecycle — Durable Tunnel Execution Lease Checkpoint
+
+**Updated:** 2026-10-02 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Durable tunnel execution ownership and ambiguous-start cleanup are now tested; provider credentials, runnable production entry and installed acceptance remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Verified code/test checkpoint:** `4bd20ca99960e6769a0c2963c0ac89e7da59fdb2`.  
+**RED checkpoint:** `7241caff04ae75dc33046604c48ad0efceec3a25`.
+
+## Current increment — durable tunnel execution ownership
+
+This increment adds `withExclusiveTunnelCustody` and integrates it as an optional `ExecutionLeaseStore` gate on the existing native tunnel custody adapter.
+
+- the `tunnel.execution.json` slot is acquired before native custody spawn;
+- a second cooperating supervisor cannot spawn while the slot is HELD;
+- successful stop does not release the slot until the actual child exit resolves;
+- spontaneous confirmed exit releases the lease;
+- copied/foreign handles, uncertain CAS, missing records and failed stops fail closed;
+- no TTL, PID-age, port ownership or elapsed-time reclaim is introduced;
+- an already-cancelled start writes no reservation;
+- the native tunnel rejection path now waits for confirmed child exit when an OS child exists and cleanup is uncertain, so an outer lease cannot mistake a live orphan for a definite no-child failure.
+
+The wrapper contains no provider credential, compatibility policy, health interpretation or public CLI surface. `TunnelCustodyOptions.execution` is optional for controlled fixtures, but production composition must later supply the same reviewed runtime execution store already used for Core.
+
+### Fresh exact-head verification
+
+Exact head `4bd20ca99960e6769a0c2963c0ac89e7da59fdb2`:
+
+- focused workflow `36919938564`: completed/success on Ubuntu and native Apple Silicon Mac;
+- root CI `36919938531`: completed/success;
+- native Mac job `110563172982`: **64 lifecycle files / 845 tests passed, zero failures/skips**;
+- same Mac root suite: **72 files / 893 tests passed, zero failures/skips**;
+- lint, typecheck, test, build, diff and production-output checks passed;
+- plist structure: 2 roles accepted / 12 altered cases rejected; native `plutil` accepted both generated plists.
+
+RED evidence at `7241caf`: **14 new failures, 809 prior tests passed, 22 Linux-native skips**. Thirteen failures came from the deliberate `NOT_IMPLEMENTED` tunnel-lease scaffold and one reproduced the existing ambiguous cleanup race (`rejected` vs required `pending`). The implementation was then added without weakening those expectations. A later test-only lint correction replaced invalid `deferred<void>()` generic uses with `deferred<undefined>()`.
+
+No real OpenAI tunnel credential/session, launchd install, administrator action, account mutation, Keychain/TCC/FileVault/security change, browser/store operation or merge was performed.
+
+---
+
+# MAC-02 Service Lifecycle — Reviewed Bootstrap and Tunnel Custody Checkpoint
+
+**Updated:** 2026-09-30 (Asia/Seoul)  
+**Status:** IN_PROGRESS / PARTIAL. Reviewed-metadata admission, role-aware native sealing, fixed tunnel invocation and tunnel child custody are tested components; credential/provider wiring and installed acceptance remain incomplete.  
+**Branch / PR:** `feat/macos-service-lifecycle` / #138, Draft, open and unmerged.  
+**Parallel ownership:** #139 v2; ChatGPT A #143; installer repairs #146–149; packaging #141; public CLI #142.  
+**Verified code/test checkpoint:** `56acae2035b543fa7fe5007573ee2ae9f0ae8b71`.  
+**Continuation baseline:** `c2275d4ff9e20336e5e507a61edf1703d0015446`.  
 **Plan:** `docs/superpowers/plans/2026-09-20-macos-service-lifecycle.md` at `3c643d4c10772d57287af0b401e4219ad7782a34`.  
 **Spec:** `docs/superpowers/specs/2026-09-20-macos-lifecycle-design.md` at `3b66075d9ef4cf2d7e87416547ea807b43ec856e`.
 
-## 1. Actual progress, not a completion percentage
 
-| Scope | Actual state / remaining work |
+## Current increment — reviewed bootstrap and tunnel custody
+
+This increment adds three narrow runtime pieces without taking over installer, packager or public-CLI lanes:
+
+1. `reviewed-bootstrap.ts` requires an independently supplied expected SHA-256 before it reads candidate review bytes, copies those bytes, decodes the existing canonical RuntimeReview envelope, revalidates the bound runtime configuration, and only then prepares the existing service session. Preparation uses no credentials and launches no child.
+2. `owned-process.ts` now has additive `sealMacOwnedProcess` support for both core and tunnel roles while the existing core-only API remains compatible. The connected-peer verifier remains core-specific.
+3. `adapters/native-tunnel.ts` derives only the fixed OpenAI `tunnel-client run --config <fixed path>` command with a nonsecret environment, then provides a custody-only adapter that accepts a reviewed authority grant, seals the exact tunnel child, discards child output, permits one launch attempt, and stops only the exact ManagedChild it returned after rechecking native ownership. It does not read a control-plane key, authenticate a tunnel, inspect provider protocol, or claim tunnel readiness.
+
+The previously safety-blocked credential-file/private-ACL source was not retried or bypassed. Production credential/provider integration therefore remains an explicit missing gate. No fake `supervisor-cli.js` or deployable tunnel entry was created.
+
+### Fresh exact-head verification
+
+Exact code/test head `56acae2035b543fa7fe5007573ee2ae9f0ae8b71`:
+- focused workflow `36700329553`: completed/success on Ubuntu and native Apple Silicon Mac.
+- native Mac job `109837995559`: **62 lifecycle files / 831 tests passed, zero failures/skips**; root **70 files / 879 tests passed, zero failures/skips**.
+- root lint, typecheck, test, build and diff checks passed; production-output exclusions passed.
+- plist verifier accepted 2 roles and rejected 12 altered cases; native `plutil` passed both generated plists.
+- root workflow `36700329445`: completed/success; this is still CI evidence, not an actual merge or installed-daemon acceptance.
+
+RED evidence was kept separate:
+- reviewed-bootstrap scaffold failed only its new positive paths before implementation.
+- role-aware native seal failed because the new function was absent.
+- tunnel launch-plan scaffold produced explicit `NOT_IMPLEMENTED` failures.
+- tunnel custody scaffold produced six explicit `NOT_IMPLEMENTED` failures while the prior suite remained green.
+
+Current tunnel custody tests execute real temporary Node child processes, including one that ignores SIGTERM and requires bounded SIGKILL. The native ownership verdict itself is a controlled proof port in these tests; this is not evidence that a real OpenAI tunnel-client session was authenticated or connected.
+
+
+## 1. Delivered scope and explicit interruption
+
+This increment adds `runtime-review.ts` and 36 tests in `runtime-review.test.ts`. The existing `adapters/runtime-authority.ts` now reuses the same validator instead of its private duplicate (+2/-12 lines). Existing public types, runtime interfaces and native behavior remain intact.
+
+The initially proposed credential-file/private-ACL batch was rejected by the tool safety check. No tree or commit resulted from that request. That operation was stopped and was not retried through another tool, encoding or path. The delivered replacement is a different, metadata-only operation: validating already supplied configuration and reviewed binary hashes. It does not read credentials or files, execute a helper, modify ACLs, establish native trust, or launch a service. Credential-file/private-ACL work remains PAUSED, not implemented.
+
+**The generated plists remain NOT DEPLOYABLE.** `supervisor-cli.js` is still absent. This component does not complete the native bootstrap or connect real authentication. Independent whole-branch review remains deferred to integration.
+
+Previous verified store/session/internal-entry implementation, full history and contracts:
+https://github.com/jskjw157/gram-coding-agent/blob/c7b51db11cddff6be0917a9fb6ac927f72ec0ff3/docs/operations/macos-service-lifecycle.md
+
+## 2. RuntimeReview metadata contract
+
+`RuntimeReview` remains exported from `adapters/runtime-authority.ts` with the same fields: `config`, `configDigest`, `nodeDigest`, `fileAclDigest`, `peerOwnerDigest`. The new module imports/re-exports that type only; it does not import native adapters at runtime.
+
+Exports from `runtime-review.ts`:
+
+```ts
+copyRuntimeReview(value: unknown): Readonly<RuntimeReview>
+encodeRuntimeReview(value: unknown): Buffer
+decodeRuntimeReview(bytes: Buffer, expectedDigest: string): Readonly<RuntimeReview> | null
+```
+
+`copyRuntimeReview` accepts only exact plain data records, refuses accessors and unexpected fields without invoking them, normalizes configuration with the existing parser, and checks its normalized digest. All binary pins are exactly 64 lowercase hex characters. The output and nested configuration are detached and frozen. Invalid copy/encode requests throw only `INVALID_RUNTIME_REVIEW` without the offending value or cause.
+
+The private envelope is exactly `JSON.stringify({schemaVersion:1,review:normalizedReview}) + '\n'`, capped at 65536 bytes. Decoding copies the buffer, checks its SHA-256 against the supplied expected digest, parses strict UTF-8 and compares with canonical re-encoding. Duplicate fields, BOM, unknown keys, reordered envelopes, extra newlines, invalid text, mismatches and oversized input return null.
+
+**The expected digest must originate independently of the candidate.** Hashing the same untrusted bytes and passing that hash is not approval. This module cannot determine provenance or supply a trust anchor. Its record is not `release.json`, an installation manifest, a public CLI format, a credential store or an authorization grant.
+
+`RuntimeReview.configDigest` is the normalized configuration hash. It is not `Preview.configDigest` (composite preview token), `Preview.previousInstallDigest` (files+registry composite), installation `configSha256` (stored configuration bytes), or the expected digest of this review envelope.
+
+## 3. Verification actually executed
+
+Exact code/test checkpoint `c2275d4ff9e20336e5e507a61edf1703d0015446`:
+
+| Check | Observed result |
 |---|---|
-| MAC-01 | Implemented on its separate unmerged branch; not included in this branch's test totals |
-| MAC-02 Tasks 1–4 | Existing configuration, preflight, persistence, telemetry and owned-health components retained; real fixed-root/helper provenance, production directory binding and safe abandoned-lock recovery remain gates |
-| MAC-02 Task 5 | Supervisor/native Core retained; durable reservation now fences starts across cooperating factories using the same trusted storage. Production CoreAuthority, fixed-root binding, cross-daemon currentCore and native tunnel composition remain incomplete |
-| MAC-02 Task 6 | Authorized installation, rollback, uninstall, explicit new-install provisioning and stopped recovery/reset not implemented |
-| MAC-02 Task 7 | Runnable supervisor CLI and sealed packaging not implemented |
-| MAC-02 Task 8 | Installed launchd/reboot/user-device acceptance and independent review not completed |
-| MAC-03 | Detailed design/plan only: 9 tasks for non-coding operations, approval, effects, scheduling and artifacts |
-| MAC-04 | Detailed design/plan only: 11 tasks for browser/API routing, credential use and GUI boundaries |
-| MAC-05 | Detailed design/plan only: 8 tasks for a single-product local draft/review bundle, not live publication |
+| Focused workflow | `36624597738`, completed/success |
+| Native Mac job | `109598227754`; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5; full log read |
+| Mac lifecycle | 58 files / 813 passed; zero failures/skips |
+| Mac root | 66 files / 861 passed; zero failures/skips |
+| Root quality checks | lint, typecheck, test, build and diff check passed on the exact-head Mac run |
+| Ubuntu job | `109598227614`; focused workflow completed successfully; precise final Linux test count not claimed from unread logs |
+| Compiled plist checks | 2 roles accepted, 12 altered cases refused; native plutil passed both files |
+| Existing root CI | `36624597750`, completed/success; synthetic PR merge preview, not an actual merge |
 
-There is still no `supervisor-cli.js`. Generated plists are **NOT DEPLOYABLE**. The remaining MAC-02 work is Task 5 integration plus Tasks 6–8 and unresolved Tasks 2–3 acceptance gates, not simply three small changes. The 28 later-phase tasks are not estimates of equal effort. Test counts are not product completion percentages or evidence of live shopping-mall operations.
+Root861 includes lifecycle813 plus pinned main48; separate MAC-01, Windows M2 and external-lane code are not included. Existing native suites were rerun, but the new 36 cases operate only on synthetic in-memory metadata. No installed service, native bootstrap, real credential, tunnel or reboot acceptance is implied. Tests/test-support remain excluded from production output.
 
-The MAC-03–05 index remains on documentation branch commit `31e66aa21b705b1793f11122c1b12d5ebf41715c`. Its first business outcome is a local product draft, with no storefront write. Orders, refunds, advertising and outbound CS are not completed by that fixture outcome.
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36624597738
+https://github.com/jskjw157/gram-coding-agent/actions/runs/36624597750
 
-Earlier native Core implementation and verification remain available at the immutable baseline:
-https://github.com/jskjw157/gram-coding-agent/blob/796e102bf1efadc715a57775e5377bf38d1e5923/docs/operations/macos-service-lifecycle.md
+RED evidence: `61a362c13c2fa1116076e51063ced852734610ac`, workflow36624310062, Ubuntu job109597245318. Full log read: 5 expected new positive-path failures,786 passes,22 native skips. The conservative scaffold already rejected invalid inputs; all36 cases are not claimed to have failed. The implementation then passed the full suites without weakening tests. Local clone failed DNS and local Node24/pnpm were unavailable; the full validation above used the existing read-only Actions exact-head isolated worktrees, not a local full-suite claim.
 
-## 2. Implemented reservation and launch boundary
+## 4. Existing installation and execution contracts retained
 
-New product modules:
-- `execution-lease.ts`: canonical bounded execution records, explicit absent-only initialization, atomic reservation and original-object release capabilities.
-- `exclusive-core.ts`: reserve-before-native-start and release-after-confirmed-exit composition.
-- `adapters/execution-files.ts`: fixed private execution record family using the existing file CAS mechanics.
+Fixed installation paths:
 
-`adapters/private-record-files.ts` adds the fixed `execution` family and its validator. Existing circuit/status/event filenames, limits and mechanics remain unchanged. `adapters/native-core.ts` now requires a valid ExecutionLeaseStore before using the default native launcher. Invalid or missing providers are rejected before launch authority/credential use. The explicit in-process fixture launcher remains an isolated testing dependency, not a CLI/MCP/configuration command feature.
-
-An ExecutionRecord contains exactly schemaVersion, role, revision, state, token, generation, configDigest and releaseDigest. The initial FREE revision0 has null identity fields. Later acquisitions/releases monotonically advance the revision; HELD uses odd revisions and FREE uses even revisions. The UUID token identifies a reservation and is not a service credential or authorization token. Free records retain the previous generation as a tombstone instead of deleting the file. The immediately previous generation cannot be reused; callers still supply unique generation IDs.
-
-Missing/corrupt state never becomes permission to launch. There is no TTL, elapsed-time reset, PID inspection for stealing, or automatic removal of an abandoned HELD reservation or transaction lock. Concurrent stores compete with digest compare-and-swap; only the winner can proceed. Release accepts the original in-memory capability only, is idempotent after success, and never retries an uncertain operation against a newer record.
-
-The Core wrapper acquires the shared reservation before the inner native port (including authority acquisition). A definite no-child rejection releases under the existing strict native-port contract. An unresolved launch remains reserved; an invalid fulfilled child identity is ambiguous and is not freed or signalled by PID guessing.
-
-Actual inner-child exit initiates reservation release. The wrapper's outward exit promise completes only after release completes, so the supervisor cannot treat mere signal delivery as successful cleanup. A rejected exit or uncertain release disables health forwarding and does not manufacture permission to start another child. Stop observes the original registered handle and one <=20000ms budget; copied handles are refused.
-
-This is **cooperative exclusion over the same independently trusted run directory**, not a sandbox against root or hostile same-UID code. It does not provide production CoreAuthority, attest a helper, authenticate a process, prove no orphan exists, or establish cross-daemon health by itself. The file reservation is occupancy evidence, not process liveness.
-
-## 3. Verification scope and review record
-
-Five new test files add 43 cases: execution-lease15, exclusive-core14, execution-files6, execution-boundary7, execution-process1. Test support uses actual canonical stores and digest CAS. Filesystem cases use temporary private directories and a synthetic ACL predicate. The process contention case starts a separate temporary Node child that owns the fixed transaction lock; a competing acquisition returns BUSY without deleting or changing that lock. This is not an installed two-daemon or production-authority test.
-
-| Checkpoint | Observed evidence |
-|---|---|
-| RED `15a1278` | Lifecycle36491201850, Mac109159959165: 35 new failures /603 prior passes |
-| First implementation `922fe5a` | Lifecycle36491599226 and root36491599255 completed/success |
-| Review RED `df317cf` | Lifecycle36491809753, Mac109161946823: 3 failures /642 passes. Null/false provider accepted; ambiguous exit still forwarded healthy evidence |
-| Additional fixture `975b3f4` | Adds separate-process transaction-lock contention test; not a production bootstrap test |
-| Corrections `1f52efc` + `4401a66` | Normalize provider type before authority use; disable health after rejected exit without releasing the HELD slot |
-
-### Final exact-head checks
-
-Code/test commit `4401a6648cc6784ec594efc20998eed09918049f`:
-
-| Check | Evidence |
-|---|---|
-| Focused lifecycle run | `36492204440`; Mac and Ubuntu jobs completed/success |
-| Native Mac | Job `109163214001`, full log read; macOS15.7.9, darwin/arm64, Node24.20.0, pnpm10.34.5 |
-| Mac lifecycle suite | **44 files /646 tests passed**, zero failed or skipped |
-| Mac root suite | **52 files /694 tests passed**, zero failed or skipped |
-| Ubuntu | Job `109163214246`; applicable steps completed/success; Apple-only cases remain explicitly skipped |
-| Quality checks | Root lint/typecheck/test/build/diff checks passed; test support excluded from compiled production output |
-| Plist validation | Two generated roles passed structure checks,12 altered structures rejected; native plutil accepted both files |
-| Existing root CI | `36492204438`, completed/success; synthetic PR merge preview, not an actual merge |
-
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204440
-https://github.com/jskjw157/gram-coding-agent/actions/runs/36492204438
-
-A later documentation-head workflow is separate from the counted code/test log. Upstream runner deprecation notices are not claimed to have been removed.
-
-The root suite includes this branch's lifecycle tests and main's48 tests. Separate MAC-01 and Windows M2 branches are excluded. Apple-only tests skipped on Linux are not native passes. No assertion, security gate, lint rule, deadline or workflow was relaxed. No dependency or lockfile update was made.
-
-**Independent review NOT_PERFORMED.** Review in this increment is author self-review. The earlier security-blocked combined Core/libproc/health fixture was not retried and remains NOT_ADDED/NOT_RUN; this reservation work does not substitute for it.
-
-Local authoring has no full repository checkout/pnpm/Node24; direct GitHub DNS was attempted and unavailable. Full validation uses the unchanged read-only GitHub Actions exact-head worktrees. The existing empty-workspace-importer normalization remains a packaging gate. No local full-suite claim is made.
-
-## 4. Rulings, costs and provisioning contract
-
-Ruling: implement occupancy persistence before production authority integration, reusing the existing private-file CAS. Reason: the previous one-factory guard cannot serialize independent launches. Cost: bootstrap must still bind every default factory to one trustworthy location; this component alone is not host-wide deployment proof.
-
-Ruling: a held record never expires and an unresolved launch never frees it. Reason: a crashed supervisor may leave a live child. Cost: unavailable or abandoned state requires separately authorized stopped-owner recovery; this increment does not implement that recovery.
-
-Ruling: reserve before the authority call. Reason: validate and spawn only after exclusive access is acquired. Cost: even a pre-spawn crash can leave HELD, intentionally blocking unsafe retries.
-
-Ruling: no automatic reinitialization/migration/reset of execution state. Task6 must explicitly provision absent records only for a verified new installation. Existing installs must be stopped and reconciled before adding this family. A rollback must preserve reservation generations/revisions and must not remove a HELD file to run an older version. Unknown durability requires reconciliation, not a blind rewrite.
-
-Required fixed record names under the eventual trusted private run directory:
-- `core.execution.json`, `tunnel.execution.json`;
-- transaction locks `core.execution.lock`, `tunnel.execution.lock`.
-
-The runtime adapter does not create that directory or select an arbitrary public destination. Files require restrictive ownership/modes and independent ACL verification, just like existing private records. Production fixed-root directory setup is still pending.
-
-## 5. Existing installer read contract retained
-
-| Record | Fixed path |
+| Item | Path |
 |---|---|
 | Configuration | `/Library/Application Support/HAAR/GramAgent/config/service.json` |
 | Manifest | `/Library/Application Support/HAAR/GramAgent/config/installation.json` |
@@ -112,15 +240,16 @@ The runtime adapter does not create that directory or select an arbitrary public
 | Core plist | `/Library/LaunchDaemons/com.haar.gram-agent.core.plist` |
 | Tunnel plist | `/Library/LaunchDaemons/com.haar.gram-agent.tunnel.plist` |
 
-Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind exact bytes; absent tunnel hash is null. The presently supported installed state is disabled/unregistered for both roles.
+Manifest exact fields: `schemaVersion:1`, `state:'COMMITTED'`, `runtime:{name,uid,gid}`, `configSha256`, `releaseId`, `releaseDigest`, `plistSha256:{core,tunnel}`, `desiredEnabled:{core,tunnel}`. Runtime name is gram-agent; hashes bind actual bytes; absent tunnel hash is null. The current static installation reader supports stopped/disabled, unregistered roles, not live-owned acceptance.
 
-A remaining journal has exactly `schemaVersion:1`, `stage:'COMMITTED'`, and `installationDigest` matching the exact manifest SHA-256. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused, not automatically deleted or replayed. Metadata is bounded to262144 bytes. The actual plist must match the fixed renderer, not merely a manifest-supplied hash. Writer changes require versioned review.
+Final journal exact fields: `schemaVersion:1`, `stage:'COMMITTED'`, `installationDigest` matching exact manifest bytes. Absence is allowed only with an otherwise valid installation. Intermediate/mismatched journals are refused by the existing reader, not silently removed/replayed. Metadata limit262144 bytes. Plist bytes must match the fixed renderer, not merely a manifest-supplied hash. Installer repair lanes own the transaction writers; A owns later live acceptance integration.
 
+Existing run records remain `core.execution.json`, `tunnel.execution.json` with fixed transaction locks `core.execution.lock`, `tunnel.execution.lock`. Verified new installation alone may initialize absent records. Existing HELD state, generation and revision must survive upgrade/rollback. Runtime binding never calls initializeNew or resets locks. The Core process hint needs no installer initialization: absence remains unavailable until a validated Core publishes it. Preserve the run directory and last hint.
 
-## 6. Exact next work and isolation
+## 5. Parallel handoff and next exact work
 
-Continue Task5 integration with independently trusted CoreAuthority: reviewed release digest, account and executable identity, helper provenance, fixed state/secret/run directories and no live orphan. Reuse the existing reservation, Core custody, supervisor, owned-health and file inspection components instead of rebuilding them. Bind cross-daemon currentCore and the separately verified restricted native tunnel port, then provide the runnable CLI. Finish Task2/3 trust/abandoned-lock gates alongside Task6 provisioning and stopped recovery. Do not enable the native default by injecting test grants or a synthetic ACL predicate.
+A #143 owns this metadata codec and its use in runtime-authority. External B1–B4/C/D files and schemas were not changed or merged. No conclusion about the latest external repair quality is made by these tests. Their heads and combined regression results still require a separate review.
 
-Task6 administrative transactions, Task7 sealed packaging and Task8 independent/user-device launchd and reboot acceptance remain open. No real credential, service, account, Keychain/TCC/FileVault/SSH, tunnel, browser or HAAR operation was provisioned. No installer or live store write was executed.
+The next non-credential connection is admission of this exact reviewed metadata from an independently trusted local source before preparing the existing service session. Reuse `copyRuntimeReview`/`decodeRuntimeReview`, `createReviewedServiceSession` and `runSupervisorEntry`; do not invent another lifecycle engine or treat matching candidate hashes as provenance. No disk location, provisioning writer, automatic trust grant, public command or production stub was introduced by this increment.
 
-Only `feat/macos-service-lifecycle` was written. Baseline separate refs: main=fdf5dda, Windows M2=f6daebed, MAC-01=a98c8ff, documentation=31e66aa. Preserve later concurrent work. No main/WSL/shared product code, workflow, lockfile, migration, MAC-03–05 implementation or GPT-Bridge integration changed. No merge, force push, rebase, branch deletion, or Windows issue closure.
+The paused credential/private-ACL operation must not be retried as a tool-safety workaround. Native trust provisioning, the standalone fixed supervisor entry, provider-verified restricted tunnel, full-size timing, orphan/stopped recovery, installation/logout/reboot acceptance and final integration remain open. No actual administrator, account, credential, Keychain, OS-security, tunnel, browser or store change was performed; no merge, force push, rebase, branch deletion or Windows issue closure.

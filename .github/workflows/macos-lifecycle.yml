@@ -103,6 +103,12 @@ jobs:
           }), 'tunnel'));
           JS
           python3 platform/macos/tests/verify-plist.py "$RUNNER_TEMP/mac02-plists"
+      - name: Collect sealed release packaging contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          node --test platform/macos/package-release.test.mjs
       - name: Native Apple plist syntax check only
         if: runner.os == 'macOS'
         shell: bash
