@@ -3,3 +3,8 @@ export * from './config.js';
 export * from './launchd-plist.js';
 export * from './inspection-contracts.js';
 export * from './preflight.js';
+export * from './cli-contracts.js';
+export * from './cli.js';
+export * from './diagnostic.js';
+export * from './a-integration.js';
+export * from './rollback-contracts.js';
