@@ -1,13 +1,87 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
-  InMemoryOperationApprovalStore,
+  PersistentOperationApprovalStore,
   OperationPolicyGate,
   classifyOperation,
   decideOperation,
+  ensureApprovalLedgerSchema,
   hashOperationIntent,
+  type OperationApprovalInput,
   type OperationIntentLike,
   type OperationMetadata,
+  type PersistentApprovalDb,
+  type StoredOperationApproval,
 } from './operation-policy.js';
+
+// better-sqlite3 is a dependency of @gram/persistence, not @gram/policy, and
+// this lane must not add cross-package files: resolve the REAL driver through
+// the persistence package's node_modules (test-only scaffolding; production
+// code stays driver-agnostic behind PersistentApprovalDb). Verified with tsc:
+// no static cross-package import, only a stringly resolve + structural cast.
+const policyRequire = createRequire(import.meta.url);
+const sqliteEntry: string = policyRequire.resolve('better-sqlite3', {
+  paths: [fileURLToPath(new URL('../../persistence/src/', import.meta.url))],
+});
+const openLedgerDb = policyRequire(sqliteEntry) as new (
+  filename: string,
+  options?: { readonly timeout?: number },
+) => PersistentApprovalDb;
+
+const openDatabases: PersistentApprovalDb[] = [];
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (openDatabases.length > 0) openDatabases.pop()?.close();
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function trackDb(db: PersistentApprovalDb): PersistentApprovalDb {
+  openDatabases.push(db);
+  return db;
+}
+
+function releaseDb(db: PersistentApprovalDb): void {
+  const index = openDatabases.indexOf(db);
+  if (index !== -1) openDatabases.splice(index, 1);
+  db.close();
+}
+
+/** Fresh isolated durable ledger on :memory: (same SQL, same winner protocol). */
+function setupMemoryLedger(): PersistentOperationApprovalStore {
+  const db = trackDb(new openLedgerDb(':memory:'));
+  ensureApprovalLedgerSchema(db);
+  return new PersistentOperationApprovalStore(db);
+}
+
+function approvalInputFor(row: StoredOperationApproval): OperationApprovalInput {
+  if (row.status !== 'APPROVED' || row.expiresAt === null) {
+    throw new Error('test setup: expected an APPROVED ledger row with expiry');
+  }
+  return {
+    id: String(row.id),
+    taskId: row.taskId,
+    operationHash: row.operationHash,
+    status: 'APPROVED',
+    expiresAt: Date.parse(row.expiresAt),
+  };
+}
+
+/** Request + approve through the REAL ledger path, mapped to gate input. */
+function ledgerApproval(
+  store: PersistentOperationApprovalStore,
+  intent: OperationIntentLike,
+): OperationApprovalInput {
+  const requested = store.request(intent.taskId, hashOperationIntent(intent));
+  return approvalInputFor(store.approve(requested.id, hashOperationIntent(intent)));
+}
 
 const baseIntent = (overrides: Partial<OperationIntentLike> = {}): OperationIntentLike => ({
   taskId: 'task-1',
@@ -40,6 +114,14 @@ const approvalFor = (intent: OperationIntentLike, overrides: Record<string, unkn
   expiresAt: Date.now() + 60_000,
   ...overrides,
 });
+
+const gateWithLedger = (): {
+  gate: OperationPolicyGate;
+  store: PersistentOperationApprovalStore;
+} => {
+  const store = setupMemoryLedger();
+  return { gate: new OperationPolicyGate({ store }), store };
+};
 
 describe('operation action-to-verdict table', () => {
   it.each([
@@ -91,7 +173,7 @@ describe('central engine decides risk (adapter cannot self-downgrade)', () => {
 describe('full-field operation-hash verification', () => {
   it('recomputes the hash and requires re-approval when any identity field changes', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const approval = approvalFor(intent);
     const tampered = { ...intent, parameterDigest: 'tampered-digest' };
     const result = gate.verify(approval, tampered);
@@ -102,14 +184,14 @@ describe('full-field operation-hash verification', () => {
 
   it('rejects targetResource mutation as an identity change', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.order.cancel', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const approval = approvalFor(intent);
     expect(gate.verify(approval, { ...intent, targetResource: 'order/999' }).accepted).toBe(false);
   });
 
   it('rejects expectedVersion mutation as an identity change', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const approval = approvalFor(intent);
     const tampered = { ...intent, expectedVersion: 'v999' };
     expect(hashOperationIntent(tampered)).not.toBe(hashOperationIntent(intent));
@@ -118,7 +200,7 @@ describe('full-field operation-hash verification', () => {
 
   it('rejects provider/recipe substitution as an identity change', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.refund.create', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const approval = approvalFor(intent);
     const tampered = { ...intent, providerId: 'evil-provider', recipeId: 'evil-recipe' };
     expect(hashOperationIntent(tampered)).not.toBe(hashOperationIntent(intent));
@@ -129,27 +211,31 @@ describe('full-field operation-hash verification', () => {
 describe('single-use + expiry + cross-task replay rejection', () => {
   it('rejects reuse of a consumed approval (single-use)', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
-    const approval = approvalFor(intent);
+    const { gate, store } = gateWithLedger();
+    const approval = ledgerApproval(store, intent);
     expect(gate.verify(approval, intent).accepted).toBe(true);
     // verify() consumes atomically: a second verify is a single-use replay.
-    expect(gate.verify(approval, intent).accepted).toBe(false);
+    const replay = gate.verify(approval, intent);
+    expect(replay.accepted).toBe(false);
+    expect(replay.reason).toMatch(/single-use|consumed/i);
   });
 
-  it('rejects cross-instance double-consume via the shared persistent store', () => {
+  it('rejects cross-instance double-consume via the shared durable ledger', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-    const store = new InMemoryOperationApprovalStore();
+    const store = setupMemoryLedger();
     const gateA = new OperationPolicyGate({ store });
     const gateB = new OperationPolicyGate({ store });
-    const approval = approvalFor(intent);
+    const approval = ledgerApproval(store, intent);
     expect(gateA.verify(approval, intent).accepted).toBe(true);
-    // A second gate instance sharing the store must still see the consume.
-    expect(gateB.verify(approval, intent).accepted).toBe(false);
+    // A second gate instance sharing the ledger must still see the consume.
+    const replay = gateB.verify(approval, intent);
+    expect(replay.accepted).toBe(false);
+    expect(replay.reason).toMatch(/single-use|consumed/i);
   });
 
   it('rejects cross-task replay (approval bound to a different taskId)', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const approval = approvalFor(intent);
     const otherTask = { ...intent, taskId: 'task-2' };
     // Recompute-proof: hash differs across tasks, approval must not transfer.
@@ -159,11 +245,19 @@ describe('single-use + expiry + cross-task replay rejection', () => {
 
   it('rejects expired approvals (fail-closed)', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.inventory.adjust', effectClass: 'WRITE' });
-    const gate = new OperationPolicyGate();
+    const { gate } = gateWithLedger();
     const expired = approvalFor(intent, { expiresAt: Date.now() - 1_000 });
     const result = gate.verify(expired, intent);
     expect(result.accepted).toBe(false);
     expect(result.reason).toMatch(/expir/i);
+  });
+
+  it('decideOperation with a ledger consumes: second decision needs re-approval', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const store = setupMemoryLedger();
+    const approval = ledgerApproval(store, intent);
+    expect(decideOperation(intent, meta(), approval, { store }).kind).toBe('ALLOW');
+    expect(decideOperation(intent, meta(), approval, { store }).kind).toBe('NEEDS_APPROVAL');
   });
 });
 
@@ -172,7 +266,7 @@ describe('APPROVED-only authorization (PENDING/DENIED/EXPIRED/CONSUMED all deny)
     'denies %s approvals even when hash, task, and expiry are valid',
     (status) => {
       const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
-      const gate = new OperationPolicyGate();
+      const { gate } = gateWithLedger();
       const result = gate.verify(approvalFor(intent, { status }), intent);
       expect(result.accepted).toBe(false);
       expect(result.reason).toMatch(/APPROVED/);
@@ -210,8 +304,6 @@ describe('decision mapping', () => {
   it('maps REMOTE_WRITE to NEEDS_APPROVAL without approval and ALLOW with valid approval', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
     expect(decideOperation(intent, meta()).kind).toBe('NEEDS_APPROVAL');
-    const gate = new OperationPolicyGate();
-    void gate;
     expect(decideOperation(intent, meta(), approvalFor(intent)).kind).toBe('ALLOW');
   });
 
@@ -219,5 +311,43 @@ describe('decision mapping', () => {
     const intent = baseIntent({ canonicalAction: 'shopify.refund.create', effectClass: 'WRITE' });
     expect(decideOperation(intent, meta()).kind).toBe('NEEDS_APPROVAL');
     expect(decideOperation(intent, meta(), approvalFor(intent)).kind).toBe('ALLOW');
+  });
+});
+
+describe('restart replay on a REAL file DB (durable single-use)', () => {
+  it('approve -> NEW repository instance on the same file -> second consume FAILS', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'policy-restart-'));
+    tempDirs.push(dir);
+    const path = join(dir, 'restart.db');
+
+    const firstDb = trackDb(new openLedgerDb(path, { timeout: 5_000 }));
+    firstDb.exec('PRAGMA journal_mode = WAL;');
+    ensureApprovalLedgerSchema(firstDb);
+    const first = new PersistentOperationApprovalStore(firstDb);
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const operationHash = hashOperationIntent(intent);
+    const requested = first.request(intent.taskId, operationHash);
+    expect(requested.status).toBe('PENDING');
+    const approved = first.approve(requested.id, operationHash);
+    expect(approved.status).toBe('APPROVED');
+
+    const gateA = new OperationPolicyGate({ store: first });
+    expect(gateA.verify(approvalInputFor(approved), intent).accepted).toBe(true);
+    expect(first.get(requested.id)?.status).toBe('CONSUMED');
+
+    // Simulate a process restart: close every handle, then reopen the SAME
+    // file with a brand-new repository instance. The CONSUMED row survives.
+    releaseDb(firstDb);
+    const secondDb = trackDb(new openLedgerDb(path, { timeout: 5_000 }));
+    ensureApprovalLedgerSchema(secondDb);
+    const second = new PersistentOperationApprovalStore(secondDb);
+    expect(second.get(requested.id)?.status).toBe('CONSUMED');
+
+    // Second consume on the new instance FAILS: single-use holds across restart.
+    expect(second.consume(intent.taskId, operationHash)).toBe(false);
+    const gateB = new OperationPolicyGate({ store: second });
+    const replay = gateB.verify(approvalInputFor(approved), intent);
+    expect(replay.accepted).toBe(false);
+    expect(replay.reason).toMatch(/single-use|consumed/i);
   });
 });
