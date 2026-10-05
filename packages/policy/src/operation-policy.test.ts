@@ -221,3 +221,19 @@ describe('decision mapping', () => {
     expect(decideOperation(intent, meta(), approvalFor(intent)).kind).toBe('ALLOW');
   });
 });
+
+describe('restart replay across process restart (RED: durable single-use)', () => {
+  it('a fresh gate instance after restart must NOT re-accept a consumed approval', () => {
+    const intent = baseIntent({ canonicalAction: 'shopify.product.create', effectClass: 'WRITE' });
+    const gateBeforeRestart = new OperationPolicyGate();
+    const approval = approvalFor(intent);
+    expect(gateBeforeRestart.verify(approval, intent).accepted).toBe(true);
+    // Simulate a process restart: the new gate starts with empty lane-local
+    // memory. A durable (file-backed) ledger must still refuse the replay;
+    // the lane-local InMemory binding loses the consume and re-accepts.
+    const gateAfterRestart = new OperationPolicyGate();
+    const replay = gateAfterRestart.verify(approval, intent);
+    expect(replay.accepted).toBe(false);
+    expect(replay.reason).toMatch(/single-use|consumed/i);
+  });
+});
