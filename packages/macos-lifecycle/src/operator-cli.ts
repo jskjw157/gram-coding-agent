@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { runCli } from './cli.js';
 import { createSystemOperatorCliDeps } from './a-operator.js';
 
@@ -21,4 +21,3 @@ if (isDirectOperatorCli(import.meta.url, process.argv[1])) {
   );
 }
 
-void fileURLToPath;
