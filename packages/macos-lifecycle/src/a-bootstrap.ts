@@ -11,8 +11,9 @@ import {
   type RuntimeReviewApproval,
   type RuntimeReviewCandidate,
 } from './reviewed-bootstrap.js';
-import type { SupervisorBootstrap } from './supervisor-entry.js';
+import type { SupervisorBootstrap, SupervisorInvocation } from './supervisor-entry.js';
 import { createSystemBootstrapSources, type InstalledRuntimeReviewSource } from './a-system-sources.js';
+import type { RuntimeReview } from './runtime-review.js';
 import type { ReviewedTunnelProvider } from './tunnel-supervisor-runtime.js';
 
 export interface AReviewedBootstrapOptions {
@@ -95,7 +96,7 @@ export interface AInstalledReviewedBootstrapOptions {
   readonly review: InstalledRuntimeReviewSource;
   readonly credentials: CoreCredentials;
   readonly bind: (
-    review: Awaited<ReturnType<InstalledRuntimeReviewSource['read']>>,
+    review: Readonly<RuntimeReview>,
     signal: AbortSignal,
   ) => ReturnType<typeof bindReviewedCoreRuntime>;
   readonly tunnelProvider?: ReviewedTunnelProvider;
@@ -117,7 +118,7 @@ export function createAInstalledReviewedSupervisorBootstrap(
   const configPath = `${root}/config/service.json`;
 
   return Object.freeze({
-    async prepare(invocation, signal) {
+    async prepare(invocation: Readonly<SupervisorInvocation>, signal: AbortSignal) {
       try {
         if (signal.aborted
           || (invocation.role !== 'core' && invocation.role !== 'tunnel')
