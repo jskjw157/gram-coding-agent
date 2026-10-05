@@ -13,3 +13,4 @@ export * from './a-system-sources.js';
 export * from './a-native-observer.js';
 export * from './a-native-services.js';
 export * from './a-native-storage.js';
+export * from './a-native-install.js';
