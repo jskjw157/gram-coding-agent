@@ -9,6 +9,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 import { root } from './contracts.js';
 import type {
+  InstallStage,
   JournalPort,
   LockSession,
   PublishKind,
@@ -222,7 +223,7 @@ export function createNativeInstallStorageAt(
     async read() {
       return readLive('journal');
     },
-    async writeStage(_stage, body: Buffer) {
+    async writeStage(_stage: InstallStage, body: Buffer) {
       await atomicReplace(layout, 'journal', Buffer.from(body), 'write');
     },
   });
