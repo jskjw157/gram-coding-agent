@@ -1,13 +1,13 @@
 {
-  "name": "@gram/mcp",
+  "name": "@gram/ops-verify",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./src/harness.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./src/harness.ts",
       "default": "./dist/index.js"
     }
   },
@@ -16,11 +16,6 @@
     "lint": "eslint src",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/node": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
-    "zod": "^4.2.0"
   },
   "devDependencies": {
     "typescript": "^6.0.0",
