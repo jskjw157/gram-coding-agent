@@ -1,4 +1,4 @@
-import { bindReviewedCoreRuntimeAt, type RuntimeEnvironment } from './adapters/runtime-authority.js';
+import { bindReviewedCoreRuntime, bindReviewedCoreRuntimeAt, type RuntimeEnvironment } from './adapters/runtime-authority.js';
 import type { RuntimeLayout } from './adapters/runtime-directories.js';
 import type { AclProbe } from './adapters/trusted-files.js';
 import type { CoreCredentials } from './health-probe.js';
@@ -48,5 +48,34 @@ export function createAReviewedSupervisorBootstrap(
       : { tunnelProvider: options.tunnelProvider }),
     bind: (review, signal) =>
       bindReviewedCoreRuntimeAt(layout, review, acl, environment, signal),
+  });
+}
+
+export interface ASystemReviewedBootstrapOptions {
+  readonly acl: AclProbe;
+  readonly approval: RuntimeReviewApproval;
+  readonly candidate: RuntimeReviewCandidate;
+  readonly credentials: CoreCredentials;
+  readonly tunnelProvider?: ReviewedTunnelProvider;
+}
+
+/**
+ * Production-scope A composition. The runtime layout, host and account
+ * inspection are NOT caller-selectable: bindReviewedCoreRuntime fixes them to
+ * the reviewed macOS deployment root, non-admin gram-agent, current UID/GID,
+ * arm64 and Node 24. Only independently provisioned trust capabilities remain
+ * injectable.
+ */
+export function createASystemReviewedSupervisorBootstrap(
+  options: ASystemReviewedBootstrapOptions,
+): SupervisorBootstrap {
+  return createReviewedBootstrap({
+    approval: options.approval,
+    candidate: options.candidate,
+    credentials: options.credentials,
+    ...(options.tunnelProvider === undefined
+      ? {}
+      : { tunnelProvider: options.tunnelProvider }),
+    bind: (review, signal) => bindReviewedCoreRuntime(review, options.acl, signal),
   });
 }
