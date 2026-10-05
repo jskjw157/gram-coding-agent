@@ -59,15 +59,15 @@ describe('migrator manifest (WP-07 next-migration rule: 005 = MAX(M2 001-004) + 
     ]) {
       expect(tables.has(table), `migrator skipped unregistered migration: missing ${table}`).toBe(true);
     }
-    expect(appliedVersions(db)).toEqual([1, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('runMigrations is idempotent across resume (applied versions are skipped)', () => {
     const db = openDb(tempDatabasePath());
     runMigrations(db);
-    expect(appliedVersions(db)).toEqual([1, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
     runMigrations(db);
-    expect(appliedVersions(db)).toEqual([1, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
     expect(tableNames(db).has('operations')).toBe(true);
   });
 
@@ -77,11 +77,14 @@ describe('migrator manifest (WP-07 next-migration rule: 005 = MAX(M2 001-004) + 
     runMigrations(db, {
       migrations: [
         { version: 5, file: './migrations/005_operations.sql' },
+        { version: 3, file: './migrations/003_verification_reviews.sql' },
         { version: 1, file: './migrations/001_initial.sql' },
+        { version: 4, file: './migrations/004_approvals.sql' },
+        { version: 2, file: './migrations/002_coding_steps.sql' },
       ],
       readSql: (file: string) => readFileSync(join(here, file), 'utf8'),
     });
-    expect(appliedVersions(db)).toEqual([1, 5]);
+    expect(appliedVersions(db)).toEqual([1, 2, 3, 4, 5]);
     expect(tableNames(db).has('operations')).toBe(true);
   });
 });
