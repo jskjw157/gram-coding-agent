@@ -1,0 +1,89 @@
+import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createNativeInstallStorageAt } from './a-native-storage.js';
+
+const roots: string[] = [];
+afterEach(async () => {
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+
+async function fixture() {
+  const anchor = await mkdtemp(join(tmpdir(), 'gram-native-storage-'));
+  roots.push(anchor);
+  const uid = process.getuid?.() ?? 0;
+  await chmod(anchor, 0o700);
+  await mkdir(join(anchor, 'app/config'), { recursive: true, mode: 0o700 });
+  await mkdir(join(anchor, 'Library/LaunchDaemons'), { recursive: true, mode: 0o700 });
+  const storage = createNativeInstallStorageAt({
+    anchor,
+    ownerUid: uid,
+    appRelative: 'app',
+    launchdRelative: 'Library/LaunchDaemons',
+    acl: async () => true,
+  });
+  return { anchor, storage };
+}
+
+describe('A fixed native install storage', () => {
+  it('stages and publishes exact fixed files without caller-selected paths', async () => {
+    const f = await fixture();
+    const bytes = Buffer.from('{"schemaVersion":1}');
+    await f.storage.publish.stageFile('configuration', bytes);
+    expect(await f.storage.publish.readStaged('configuration')).toEqual(bytes);
+    expect(await f.storage.publish.readLive('configuration')).toBeNull();
+
+    await f.storage.publish.publishFile('configuration', bytes);
+    expect(await f.storage.publish.readStaged('configuration')).toBeNull();
+    expect(await f.storage.publish.readLive('configuration')).toEqual(bytes);
+    expect(await f.storage.presence('configuration')).toBe('file');
+  });
+
+  it('uses a durable fixed install lock and never steals an existing lock', async () => {
+    const f = await fixture();
+    const first = await f.storage.lock();
+    expect(first.acquired).toBe(true);
+    const second = await f.storage.lock();
+    expect(second.acquired).toBe(false);
+    await first.release();
+
+    const third = await f.storage.lock();
+    expect(third.acquired).toBe(true);
+    await third.release();
+  });
+
+  it('atomically replaces the live journal while preserving staged committed bytes', async () => {
+    const f = await fixture();
+    const committed = Buffer.from('{"schemaVersion":1,"stage":"COMMITTED","installationDigest":"' + 'a'.repeat(64) + '"}');
+    const intermediate = Buffer.from('{"schemaVersion":1,"stage":"PUBLISHED"}');
+
+    await f.storage.publish.stageFile('journal', committed);
+    await f.storage.journal.writeStage('PUBLISHED', intermediate);
+    expect(await f.storage.journal.read()).toEqual(intermediate);
+    expect(await f.storage.publish.readStaged('journal')).toEqual(committed);
+
+    await f.storage.publish.publishFile('journal', committed);
+    expect(await f.storage.journal.read()).toEqual(committed);
+  });
+
+  it('refuses a second stage instead of deleting crash evidence', async () => {
+    const f = await fixture();
+    await f.storage.publish.stageFile('core', Buffer.from('first'));
+    await expect(f.storage.publish.stageFile('core', Buffer.from('second'))).rejects.toBeDefined();
+    expect(await f.storage.publish.readStaged('core')).toEqual(Buffer.from('first'));
+  });
+
+  it('removes only a byte-identical manifest-owned plist', async () => {
+    const f = await fixture();
+    const owned = Buffer.from('owned-plist');
+    await f.storage.publish.stageFile('core', owned);
+    await f.storage.publish.publishFile('core', owned);
+
+    expect(await f.storage.removeLiveIfMatches('core', Buffer.from('other'))).toBe(false);
+    expect(await f.storage.publish.readLive('core')).toEqual(owned);
+    expect(await f.storage.removeLiveIfMatches('core', owned)).toBe(true);
+    expect(await f.storage.publish.readLive('core')).toBeNull();
+    expect(await f.storage.removeLiveIfMatches('core', owned)).toBe(true);
+  });
+});
