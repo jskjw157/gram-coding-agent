@@ -58,6 +58,19 @@ jobs:
           cd "$RUNNER_TEMP/mac02"
           pnpm --filter @gram/macos-lifecycle test > "$RUNNER_TEMP/mac02-tests.log" 2>&1 || { tail -120 "$RUNNER_TEMP/mac02-tests.log"; exit 1; }
           tail -22 "$RUNNER_TEMP/mac02-tests.log"
+      - name: Rollback lane regressions (review/lanes collection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          cat > "$RUNNER_TEMP/mac02-lane.vitest.config.ts" <<'TS'
+          import { defineConfig } from 'vitest/config';
+          export default defineConfig({ test: {
+            name: 'rollback-lane', environment: 'node',
+            include: ['review/lanes/rollback-regressions.test.ts'],
+          } });
+          TS
+          pnpm exec vitest run --config "$RUNNER_TEMP/mac02-lane.vitest.config.ts" --root "$RUNNER_TEMP/mac02"
       - name: Root lint types tests and build
         shell: bash
         run: |
