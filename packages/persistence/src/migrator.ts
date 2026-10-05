@@ -1,9 +1,34 @@
 import { readFileSync } from 'node:fs';
 import Database from 'better-sqlite3';
 
-const INITIAL_VERSION = 1;
+export interface Migration {
+  readonly version: number;
+  readonly file: string;
+}
 
-export function runMigrations(db: Database.Database): void {
+// Both the manifest and the SQL loader are injectable so tests can exercise
+// ordering, rollback, and resume behaviour without adding real files under
+// src/migrations. Production keeps the file-based manifest below.
+export interface MigrationRunOptions {
+  readonly migrations: readonly Migration[];
+  readonly readSql: (file: string) => string;
+}
+
+const MIGRATIONS: readonly Migration[] = [
+  { version: 1, file: './migrations/001_initial.sql' },
+  { version: 2, file: './migrations/002_coding_steps.sql' },
+  { version: 3, file: './migrations/003_verification_reviews.sql' },
+  { version: 4, file: './migrations/004_approvals.sql' },
+];
+
+function readMigrationSql(file: string): string {
+  return readFileSync(new URL(file, import.meta.url), 'utf8');
+}
+
+export function runMigrations(
+  db: Database.Database,
+  options: MigrationRunOptions = { migrations: MIGRATIONS, readSql: readMigrationSql },
+): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -11,18 +36,21 @@ export function runMigrations(db: Database.Database): void {
     ) STRICT;
   `);
 
-  const applied = db
-    .prepare('SELECT version FROM schema_migrations WHERE version = ?')
-    .get(INITIAL_VERSION) as { version: number } | undefined;
-  if (applied) return;
+  const ordered = [...options.migrations].sort((a, b) => a.version - b.version);
+  const appliedRows = db.prepare('SELECT version FROM schema_migrations').all() as Array<{
+    version: number;
+  }>;
+  const applied = new Set(appliedRows.map((row) => row.version));
 
-  const sql = readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8');
-  const migrate = db.transaction(() => {
-    db.exec(sql);
-    db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(
-      INITIAL_VERSION,
-      new Date().toISOString(),
-    );
-  });
-  migrate.immediate();
+  for (const migration of ordered) {
+    if (applied.has(migration.version)) continue;
+    const apply = db.transaction(() => {
+      db.exec(options.readSql(migration.file));
+      db.prepare('INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)').run(
+        migration.version,
+        new Date().toISOString(),
+      );
+    });
+    apply.immediate();
+  }
 }
