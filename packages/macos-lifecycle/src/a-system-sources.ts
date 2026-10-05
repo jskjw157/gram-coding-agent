@@ -2,33 +2,24 @@ import { constants } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { root } from './contracts.js';
+import { configDigest, parseConfig } from './config.js';
 import type { CoreCredentials } from './health-probe.js';
-import type { RuntimeReviewApproval, RuntimeReviewCandidate } from './reviewed-bootstrap.js';
+import { copyRuntimeReview, type RuntimeReview } from './runtime-review.js';
+import { inspectRelease } from './release-inspection.js';
+import { shaBytes, validateManifestBytes } from './adapters/install-files.js';
 import { checkMacAcl } from './adapters/macos-acl.js';
 import { createTrustedFiles, type AclProbe } from './adapters/trusted-files.js';
 
-const REVIEW_FILE = 'runtime-review.json';
-const REVIEW_DIGEST_FILE = 'runtime-review.sha256';
 const SECRET_FILE = 'mcp-internal-secret';
-const MAX_REVIEW_BYTES = 65_536;
 const MAX_SECRET_BYTES = 65_536;
+const HEX64 = /^[a-f0-9]{64}$/u;
 
 export const systemBootstrapPaths = Object.freeze({
   aclHelper: `${root}/bootstrap/bin/file-acl`,
-  review: `${root}/config/${REVIEW_FILE}`,
-  reviewDigest: `${root}/config/${REVIEW_DIGEST_FILE}`,
+  installation: `${root}/config/installation.json`,
+  config: `${root}/config/service.json`,
   secret: `${root}/secrets/${SECRET_FILE}`,
 });
-
-function safeDigest(bytes: Buffer): string | null {
-  try {
-    if (!Buffer.isBuffer(bytes) || bytes.length !== 65 || bytes.at(64) !== 10) return null;
-    const text = bytes.subarray(0, 64).toString('ascii');
-    return /^[a-f0-9]{64}$/u.test(text) ? text : null;
-  } catch {
-    return null;
-  }
-}
 
 function safeRelative(value: string): string[] {
   if (typeof value !== 'string' || value.length === 0 || value.length > 4096
@@ -95,6 +86,113 @@ export interface BootstrapSourceLayout {
   readonly acl: AclProbe;
 }
 
+export interface InstalledRuntimeReviewSource {
+  read(signal: AbortSignal): Promise<Readonly<RuntimeReview> | null>;
+}
+
+function data(value: unknown, keys: readonly string[]): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== null && proto !== Object.prototype) return null;
+  const own = Reflect.ownKeys(value);
+  if (own.length !== keys.length || own.some(key => typeof key !== 'string' || !keys.includes(key))) return null;
+  const out: Record<string, unknown> = Object.create(null);
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor?.enumerable || !('value' in descriptor)) return null;
+    out[key] = descriptor.value;
+  }
+  return out;
+}
+
+function entryDigest(releaseJson: unknown, path: string): string | null {
+  const manifest = data(releaseJson, ['schemaVersion', 'releaseId', 'sourceCommit', 'lockDigest',
+    'files', 'coreTools', 'schemaCompatibility',
+    ...(data(releaseJson, ['schemaVersion', 'releaseId', 'sourceCommit', 'lockDigest',
+      'files', 'coreTools', 'schemaCompatibility', 'tunnelCompatibilityDigest']) !== null
+      ? ['tunnelCompatibilityDigest']
+      : [])]);
+  if (manifest === null || !Array.isArray(manifest.files)) return null;
+  const matches = manifest.files.filter((value) => {
+    const item = data(value, ['path', 'sha256', 'executable']);
+    return item?.path === path && typeof item.sha256 === 'string' && HEX64.test(item.sha256)
+      && item.executable === true;
+  });
+  if (matches.length !== 1) return null;
+  const item = data(matches[0], ['path', 'sha256', 'executable']);
+  return typeof item?.sha256 === 'string' ? item.sha256 : null;
+}
+
+/**
+ * Build the runtime review from already-installed root-owned evidence:
+ * installation.json approves the config bytes + exact sealed release digest;
+ * release.json (verified by inspectRelease) supplies the exact helper/node pins.
+ * The candidate release therefore never self-approves its own trust.
+ */
+export function createInstalledRuntimeReviewSource(
+  layout: BootstrapSourceLayout,
+): InstalledRuntimeReviewSource {
+  const configFiles = createTrustedFiles(
+    layout.anchor,
+    layout.ownerUid,
+    layout.acl,
+    `${layout.relative}/config`,
+  );
+
+  return Object.freeze({
+    async read(signal: AbortSignal): Promise<Readonly<RuntimeReview> | null> {
+      try {
+        if (signal.aborted) return null;
+        const [configBytes, installationBytes] = await Promise.all([
+          configFiles.read('service.json', 262_144),
+          configFiles.read('installation.json', 262_144),
+        ]);
+        if (signal.aborted || !validateManifestBytes(installationBytes)) return null;
+
+        const config = parseConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(configBytes)));
+        const installation = data(
+          JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(installationBytes)),
+          ['schemaVersion', 'state', 'runtime', 'configSha256', 'releaseId', 'releaseDigest', 'plistSha256', 'desiredEnabled'],
+        );
+        const runtime = data(installation?.runtime, ['name', 'uid', 'gid']);
+        if (installation === null || runtime === null
+          || installation.schemaVersion !== 1 || installation.state !== 'COMMITTED'
+          || runtime.name !== 'gram-agent'
+          || installation.configSha256 !== shaBytes(configBytes)
+          || installation.releaseId !== config.releaseId
+          || installation.releaseDigest !== config.releaseDigest) return null;
+
+        const releaseFiles = createTrustedFiles(
+          layout.anchor,
+          layout.ownerUid,
+          layout.acl,
+          `${layout.relative}/releases/${config.releaseId}`,
+        );
+        await inspectRelease(config, config.releaseDigest, releaseFiles);
+        if (signal.aborted) return null;
+        const releaseBytes = await releaseFiles.read('release.json', 1024 * 1024);
+        if (signal.aborted || shaBytes(releaseBytes) !== config.releaseDigest) return null;
+        const releaseJson: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(releaseBytes));
+
+        const nodeDigest = entryDigest(releaseJson, 'bin/node');
+        const fileAclDigest = entryDigest(releaseJson, 'bin/file-acl');
+        const peerOwnerDigest = entryDigest(releaseJson, 'bin/peer-owner');
+        if (nodeDigest === null || fileAclDigest === null || peerOwnerDigest === null) return null;
+
+        return copyRuntimeReview({
+          config,
+          configDigest: configDigest(config),
+          nodeDigest,
+          fileAclDigest,
+          peerOwnerDigest,
+        });
+      } catch {
+        return null;
+      }
+    },
+  });
+}
+
 async function readRuntimeSecret(
   layout: BootstrapSourceLayout,
   use: (secret: string) => Promise<unknown>,
@@ -107,6 +205,16 @@ async function readRuntimeSecret(
   const held: FileHandle[] = [];
   try {
     let path = anchor;
+    const anchorStat = await lstat(path);
+    if (!anchorStat.isDirectory() || anchorStat.uid !== layout.ownerUid || (anchorStat.mode & 0o022) !== 0) {
+      throw new Error('AUTH_BLOCKED');
+    }
+    const anchorFile = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY | constants.O_NONBLOCK);
+    held.push(anchorFile);
+    if (!await sameStat(anchorFile, path, anchorStat) || await layout.acl(anchorFile) !== true) {
+      throw new Error('AUTH_BLOCKED');
+    }
+
     for (let index = 0; index < parts.length; index++) {
       path = join(path, parts[index] as string);
       const leaf = index === parts.length - 1;
@@ -146,71 +254,32 @@ async function readRuntimeSecret(
   }
 }
 
-/**
- * Fixed-file source contract used by the direct launchd supervisor. Review
- * candidate and its independently provisioned approved digest are separate
- * root-owned files. Core credential access stays use-only and is read only at
- * the health call boundary.
- */
-export function createBootstrapFileSources(layout: BootstrapSourceLayout): {
-  approval: RuntimeReviewApproval;
-  candidate: RuntimeReviewCandidate;
-  credentials: CoreCredentials;
-} {
-  const configFiles = createTrustedFiles(
-    layout.anchor,
-    layout.ownerUid,
-    layout.acl,
-    `${layout.relative}/config`,
-  );
+export function createRuntimeCoreCredentials(layout: BootstrapSourceLayout): CoreCredentials {
   return Object.freeze({
-    approval: Object.freeze({
-      async expectedDigest(signal: AbortSignal): Promise<string | null> {
-        try {
-          if (signal.aborted) return null;
-          const bytes = await configFiles.read(REVIEW_DIGEST_FILE, 128);
-          if (signal.aborted) return null;
-          return safeDigest(bytes);
-        } catch {
-          return null;
-        }
-      },
-    }),
-    candidate: Object.freeze({
-      async read(signal: AbortSignal): Promise<Buffer | null> {
-        try {
-          if (signal.aborted) return null;
-          const bytes = await configFiles.read(REVIEW_FILE, MAX_REVIEW_BYTES);
-          if (signal.aborted) return null;
-          return Buffer.from(bytes);
-        } catch {
-          return null;
-        }
-      },
-    }),
-    credentials: Object.freeze({
-      async withValue<T>(use: (secret: string) => Promise<T>): Promise<T> {
-        return await readRuntimeSecret(layout, use) as T;
-      },
-    }),
+    async withValue<T>(use: (secret: string) => Promise<T>): Promise<T> {
+      return await readRuntimeSecret(layout, use) as T;
+    },
   });
 }
 
 /** Production fixed paths. Construction performs no IO. */
 export function createSystemBootstrapSources(): {
   acl: AclProbe;
-  approval: RuntimeReviewApproval;
-  candidate: RuntimeReviewCandidate;
+  review: InstalledRuntimeReviewSource;
   credentials: CoreCredentials;
 } {
   const uid = process.getuid?.() ?? 0;
   const acl = createSystemBootstrapAclProbe();
-  const sources = createBootstrapFileSources({
+  const layout: BootstrapSourceLayout = {
     anchor: '/',
     relative: root.slice(1),
     ownerUid: 0,
     runtimeUid: uid,
     acl,
+  };
+  return Object.freeze({
+    acl,
+    review: createInstalledRuntimeReviewSource(layout),
+    credentials: createRuntimeCoreCredentials(layout),
   });
-  return Object.freeze({ acl, ...sources });
 }
