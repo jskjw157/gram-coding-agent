@@ -28,9 +28,10 @@ function manifestEntries(value: unknown): Entry[] {
   return value.map(raw => {
     const e = record(raw);
     if (typeof e.path !== 'string') return refuse();
-    relativeParts(e.path);
+    const parts = relativeParts(e.path);
     const key = e.path.normalize('NFC').toLowerCase();
-    if (names.has(key) || key === 'release.json' || e.path.split('/').some(p => ['.git', 'secrets', 'state', 'browser'].includes(p))) return refuse();
+    if (names.has(key) || key === 'release.json' || parts.includes('.git')
+      || ['secrets', 'state', 'browser'].includes(parts[0] ?? '')) return refuse();
     names.add(key);
     if (Object.hasOwn(e, 'target')) {
       exact(e, ['path', 'target']);
