@@ -36,8 +36,8 @@ function sameExecutable(
   return stat.isFile()
     && stat.uid === ownerUid
     && stat.nlink === 1
-    && (stat.mode & 0o6022) === 0
-    && (stat.mode & 0o111) !== 0;
+    && (Number(stat.mode) & 0o6022) === 0
+    && (Number(stat.mode) & 0o111) !== 0;
 }
 
 export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObserver {
