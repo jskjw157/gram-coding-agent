@@ -121,6 +121,7 @@ jobs:
           cd "$RUNNER_TEMP/mac02"
           bash -n platform/macos/build-bootstrap-helper.sh
           bash -n platform/macos/provision-bootstrap.sh
+          node --check platform/macos/stage-candidate-config.mjs
       - name: Build independent bootstrap ACL helper on Apple Silicon
         if: runner.os == 'macOS'
         shell: bash
