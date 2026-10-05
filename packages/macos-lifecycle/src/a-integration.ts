@@ -88,7 +88,7 @@ export function createReviewedInstallerCliDeps(options: ReviewedInstallerCliOpti
 }
 
 export interface StoppedFailureResetOptions {
-  readonly runtime: Pick<ReviewedServiceRuntime, 'stores'>;
+  readonly runtime: Pick<ReviewedServiceRuntime, 'stores' | 'proveStopped'>;
   readonly services: Pick<ServiceHandle, 'isStopped'>;
   readonly clock?: () => number;
 }
@@ -113,9 +113,13 @@ export function createReviewedStoppedFailureReset(
   return Object.freeze({
     ...base,
     async resetStoppedFailure(): Promise<InstallResult> {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5_000);
       try {
         if (await services.isStopped('tunnel') !== true
-          || await services.isStopped('core') !== true) {
+          || await services.isStopped('core') !== true
+          || await options.runtime.proveStopped('core', controller.signal) !== true
+          || controller.signal.aborted) {
           return { ok: false, code: 'PARTIAL_INSTALL' };
         }
 
@@ -143,6 +147,9 @@ export function createReviewedStoppedFailureReset(
         return { ok: true, code: 'OK' };
       } catch {
         return { ok: false, code: 'PARTIAL_INSTALL' };
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
       }
     },
   });
@@ -156,7 +163,7 @@ export function createReviewedStoppedFailureReset(
  */
 export function createReviewedLocalControlPorts(
   ports: InstallPorts,
-  runtime: Pick<ReviewedServiceRuntime, 'stores'>,
+  runtime: Pick<ReviewedServiceRuntime, 'stores' | 'proveStopped'>,
   clock?: () => number,
 ): LocalControlPorts {
   return Object.freeze({
