@@ -161,7 +161,7 @@ function normalizeOptions(options) {
     if (link === null || typeof link !== 'object') throw new Error('INVALID_OPTIONS: link must be {path,target}');
     checkRelPath(link.path);
     if (typeof link.target !== 'string') throw new Error('INVALID_OPTIONS: link target must be a string');
-    if (link.path === 'release.json' || link.(path.split('/').includes('.git') || FORBIDDEN_ROOTS.has(path.split('/')[0]))) {
+    if (link.path === 'release.json' || link.path.split('/').includes('.git') || FORBIDDEN_ROOTS.has(link.path.split('/')[0])) {
       throw new Error(`INVALID_PATH: forbidden entry: ${link.path}`);
     }
     if (seen.has(link.path)) throw new Error(`DUPLICATE_PATH: ${link.path}`);
