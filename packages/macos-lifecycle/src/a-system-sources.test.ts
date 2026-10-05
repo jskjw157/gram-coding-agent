@@ -1,8 +1,9 @@
-import { chmod, rm, writeFile } from 'node:fs/promises';
+import { chmod, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createInstalledRuntimeReviewSource,
   createRuntimeCoreCredentials,
+  createRuntimeRecordProvisioner,
   createSystemBootstrapSources,
   systemBootstrapPaths,
 } from './a-system-sources.js';
@@ -10,7 +11,13 @@ import {
   buildManifest,
   canonicalConfigBytes,
   expectedPlistBytes,
+  buildIntermediateJournal,
+  FIXED_FILES,
+  shaBytes,
 } from './adapters/install-files.js';
+import { decodeExecution } from './execution-lease.js';
+import { decodeHistory, LifecycleStore } from './lifecycle-store.js';
+import { createCircuitFilesAt } from './adapters/service-files.js';
 import { fixture } from './test-support/runtime/fixture.js';
 
 const roots: string[] = [];
@@ -36,6 +43,20 @@ async function installedFixture() {
   await writeFile(`${f.base}/config/service.json`, configBytes, { mode: 0o600 });
   await writeFile(`${f.base}/config/installation.json`, built.bytes, { mode: 0o600 });
   return f;
+}
+
+
+async function writePublishedJournal(
+  f: Awaited<ReturnType<typeof installedFixture>>,
+  previousDigest: string | null,
+) {
+  const installation = await readFile(`${f.base}/config/installation.json`);
+  const journal = buildIntermediateJournal('PUBLISHED', {
+    previousDigest,
+    nextDigest: shaBytes(installation),
+    inventory: Object.values(FIXED_FILES),
+  });
+  await writeFile(`${f.base}/config/install-journal.json`, journal, { mode: 0o600 });
 }
 
 describe('A fixed bootstrap trust sources', () => {
@@ -102,6 +123,104 @@ describe('A fixed bootstrap trust sources', () => {
     const abort = new AbortController();
     abort.abort();
     expect(await source.read(abort.signal)).toBeNull();
+  });
+
+
+  it('create-only provisions missing first-install execution/circuit records under a fresh PUBLISHED journal', async () => {
+    const f = await installedFixture();
+    await unlink(`${f.base}/run/core.execution.json`);
+    await writePublishedJournal(f, null);
+
+    const source = createInstalledRuntimeReviewSource({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    const review = await source.read(new AbortController().signal);
+    if (review === null) throw new Error('missing reviewed install');
+
+    const provisioner = createRuntimeRecordProvisioner({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
+
+    expect(decodeExecution(await readFile(`${f.base}/run/core.execution.json`))).toMatchObject({
+      role: 'core',
+      state: 'FREE',
+      revision: 0,
+      token: null,
+      generation: null,
+    });
+    expect(decodeHistory(await readFile(`${f.base}/run/core.circuit.json`))).toMatchObject({
+      blocked: false,
+      exitsMs: [],
+      lastGeneration: null,
+      activeAttempt: null,
+    });
+
+    const executionBefore = await readFile(`${f.base}/run/core.execution.json`);
+    const circuitBefore = await readFile(`${f.base}/run/core.circuit.json`);
+    expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
+    expect(await readFile(`${f.base}/run/core.execution.json`)).toEqual(executionBefore);
+    expect(await readFile(`${f.base}/run/core.circuit.json`)).toEqual(circuitBefore);
+  });
+
+  it('does not manufacture missing history for an upgrade journal', async () => {
+    const f = await installedFixture();
+    await unlink(`${f.base}/run/core.execution.json`);
+    await writePublishedJournal(f, 'a'.repeat(64));
+
+    const source = createInstalledRuntimeReviewSource({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    const review = await source.read(new AbortController().signal);
+    if (review === null) throw new Error('missing reviewed install');
+
+    const provisioner = createRuntimeRecordProvisioner({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    expect(await provisioner.ensure(review, new AbortController().signal)).toBe(false);
+    await expect(readFile(`${f.base}/run/core.execution.json`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(`${f.base}/run/core.circuit.json`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('accepts complete existing durable records without requiring a fresh-install journal', async () => {
+    const f = await installedFixture();
+    const lifecycle = new LifecycleStore(createCircuitFilesAt(f.runPolicy));
+    await lifecycle.initializeNew('core', 1);
+
+    const source = createInstalledRuntimeReviewSource({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    const review = await source.read(new AbortController().signal);
+    if (review === null) throw new Error('missing reviewed install');
+
+    const provisioner = createRuntimeRecordProvisioner({
+      anchor: f.anchor,
+      relative: 'installed',
+      ownerUid: f.uid,
+      runtimeUid: f.uid,
+      acl: f.acl,
+    });
+    expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
   });
 
   it('constructs production sources without IO and pins only canonical system paths', () => {
