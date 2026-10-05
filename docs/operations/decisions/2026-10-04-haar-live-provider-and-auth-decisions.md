@@ -4,17 +4,17 @@
 **Status:** USER APPROVED (decisions below are explicit user decisions)
 **Scope:** Source of truth for MAC-03/MAC-04/MAC-05 implementation. Does NOT flip existing DRAFT specs to APPROVED.
 
-## D0 — Sequencing note (added 2026-10-04, user-directed)
+## D0 — Sequencing note (added 2026-10-04, user-directed; corrected 2026-10-05: partial UNCONFIRMED)
 
-- Shopify implementation is DEFERRED (user: "shopify는 나중에 구현하자"). D1 (Shopify as first live provider) stands as the provider decision; only the build order changes. Until re-activated, WP-18 transport live binding, WP-21 Gate B, WP-22 Shopify test-store path, Gate C/D and high-risk live gates stay NOT_RUN/BLOCKED. Fixture-level Shopify adapter work already delivered stays valid as contract/fixture evidence, not live proof.
-- Target-Mac account names approved: `mac_ops` (OPERATIONS), `mac_code` (CODING).
-- Apple Developer Team ID: NONE supplied (user: no membership). Production native-helper signing stays BLOCKED; adhoc signatures cover fixture development only. WP-14 execution and WP-20 native Keychain/broker proofs requiring signed peer trust remain gated until a Team ID is provided.
+- Shopify implementation is DEFERRED — USER APPROVED (evidence: user in-session "shopify는 나중에 구현하자"; also "일단 shopify는 나중에 구현하자"). D1 (Shopify as first live provider) stands as the provider decision; only the build order changes. Until re-activated, WP-18 transport live binding, WP-21 Gate B, WP-22 Shopify test-store path, Gate C/D and high-risk live gates stay NOT_RUN/BLOCKED. Fixture-level Shopify adapter work already delivered stays valid as contract/fixture evidence, not live proof.
+- Target-Mac account names reported as `mac_ops` (OPERATIONS), `mac_code` (CODING) — UNCONFIRMED (reported, not confirmed; evidence unverifiable).
+- Apple Developer Team ID reported as NONE supplied (reported as no membership) — UNCONFIRMED (reported, not confirmed; evidence unverifiable). Production native-helper signing stays BLOCKED; adhoc signatures cover fixture development only. WP-14 execution and WP-20 native Keychain/broker proofs requiring signed peer trust remain gated until a Team ID is verified.
 
-### D0 confirmation (user-confirmed 2026-10-04, in-session explicit approval)
+### D0 confirmation (corrected 2026-10-05: partial UNCONFIRMED)
 
-- The three items above were each stated by the user in-session: (1) "일단 shopify는 나중에 구현하자" — Shopify deferred; (2) "mac은 mac_ops, mac_code" — account names, acted upon (UID 502/503 created, homes chmod 700, bidirectional deny verified); (3) "없어" (Team ID) — none, production signing BLOCKED.
-- Scope ruling (user, same session): Shopify Gate B/C/D and live/test-store connections are EXCLUDED from this Mac Goal's completion criteria. Already-delivered Shopify fixture/adapter stays future-ready; no further live Shopify work. Priority is Mac runtime, Operations/Coding isolation, CredentialBroker/Keychain, AuthSessionKeeper/browser session, tunnel-client, real GPT→Mac E2E and Coding E2E — all without Shopify.
-- Status of this ledger section: USER APPROVED (evidence: in-session explicit user statements above). Pre-existing D1–D13 approval states unchanged.
+- Of the three items above, only (1) Shopify deferred is USER APPROVED (evidence: in-session explicit user statement "일단 shopify는 나중에 구현하자"). Items (2) account names (reported "mac은 mac_ops, mac_code"; reported UID 502/503 created, homes chmod 700, bidirectional deny verified — reported, not confirmed) and (3) Team ID none (reported "없어" — reported, not confirmed) are UNCONFIRMED pending verifiable evidence.
+- Scope ruling for the approved Shopify-deferred item (same session): Shopify Gate B/C/D and live/test-store connections are EXCLUDED from this Mac Goal's completion criteria. Already-delivered Shopify fixture/adapter stays future-ready; no further live Shopify work. Priority is Mac runtime, Operations/Coding isolation, CredentialBroker/Keychain, AuthSessionKeeper/browser session, tunnel-client, real GPT→Mac E2E and Coding E2E — all without Shopify.
+- Status of this ledger section: PARTIAL — Shopify-deferred USER APPROVED (evidence above); account-names and Team-ID NONE UNCONFIRMED (reported-not-confirmed, evidence unverifiable). Pre-existing D1–D13 states unchanged.
 ## D1 — Shopify is the first official live commerce provider
 
 - The earlier analysis was correct: no prior repo/spec confirmed Shopify. The user now explicitly approves **Shopify as HAAR's first official live commerce provider**. It is no longer "platform undecided".
