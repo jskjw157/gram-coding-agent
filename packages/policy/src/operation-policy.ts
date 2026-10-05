@@ -222,53 +222,240 @@ function checkApprovalFields(
 }
 
 /**
- * Persistent single-use consume ledger. Lane-local port of the M2
- * ApprovalRepository consume-once semantics: conditional
+ * Durable single-use consume ledger for the approval gate.
+ *
+ * CANONICAL SOURCE (thin vendor, byte-faithful on the consume path):
+ * packages/persistence/src/repositories/approval-repository.ts at
+ * origin/feat/ops-common-approvals de3faf9a7d01d6fa0f1b6286cfa1da8304651f03
+ * (`ApprovalRepository.consume`: conditional
  * `UPDATE approvals SET status = 'CONSUMED' ... WHERE status = 'APPROVED'`
- * with `result.changes === 1` deciding the winner
- * (packages/persistence/src/repositories/approval-repository.ts:212-230),
- * lazy TTL expiry of APPROVED rows (`expires_at <= now` sweep in the same
- * `consume`, plus `APPROVAL_TTL_MS` set at `approve`:162-188), and the
- * live-pair (`task_id`, `operation_hash`) uniqueness from `request` (:95-146).
- * Reimplemented here because `@gram/policy` depends only on `@gram/domain`
- * and cannot import the better-sqlite3-backed M2 repository in this lane;
- * the task/taskId + operationHash + expiry checks in `checkApprovalFields`
- * are the local form of that conditional UPDATE's WHERE clause.
+ * with `changes === 1` deciding the winner, plus the lazy TTL expiry sweep
+ * of APPROVED rows and the live-pair (`task_id`, `operation_hash`)
+ * uniqueness from `request`). Vendored here because `@gram/policy` cannot
+ * take a better-sqlite3-backed `@gram/persistence` dependency in this lane;
+ * the follow-up is `import { ApprovalRepository } from
+ * '../../persistence/src/repositories/approval-repository.js'` (relative path
+ * per monorepo layout) once that file lands verbatim in this lane, at which
+ * point this thin copy is deleted and the gate takes the real class directly
+ * (it already speaks `ApprovalConsumptionPort`, the exact `consume` shape).
+ * The schema omits only the tasks/policy_decisions FOREIGN KEYs (ledger
+ * tests seed approvals directly); every column, CHECK, and index matches 004.
  */
-export interface ApprovalConsumeStore {
-  consumeApproved(approvalId: string): boolean;
-  isConsumed(approvalId: string): boolean;
+
+/** Structural mirror of `ApprovalRepository.consume(taskId, operationHash)`. */
+export interface ApprovalConsumptionPort {
+  consume(taskId: string, operationHash: string): boolean;
 }
 
-export class InMemoryOperationApprovalStore implements ApprovalConsumeStore {
-  private readonly consumed: string[] = [];
+export interface PersistentApprovalStatement {
+  run(
+    ...params: readonly unknown[]
+  ): { readonly changes: number | bigint; readonly lastInsertRowid: number | bigint };
+  get(...params: readonly unknown[]): unknown;
+}
 
-  consumeApproved(approvalId: string): boolean {
-    if (this.consumed.includes(approvalId)) {
-      return false;
-    }
-    this.consumed.push(approvalId);
-    return true;
+/** Minimal structural surface of the better-sqlite3 Database we consume. */
+export interface PersistentApprovalDb {
+  exec(sql: string): unknown;
+  prepare(sql: string): PersistentApprovalStatement;
+  transaction<T>(fn: () => T): { immediate(): T };
+  close(): void;
+}
+
+export interface StoredOperationApproval {
+  readonly id: number;
+  readonly taskId: string;
+  readonly operationHash: string;
+  readonly status: ApprovalStatus;
+  readonly requestedAt: string;
+  readonly approvedAt: string | null;
+  readonly consumedAt: string | null;
+  readonly expiresAt: string | null;
+}
+
+interface ApprovalLedgerRow {
+  readonly id: number;
+  readonly task_id: string;
+  readonly policy_decision_id: number | null;
+  readonly operation_hash: string;
+  readonly status: string;
+  readonly requested_at: string;
+  readonly approved_at: string | null;
+  readonly consumed_at: string | null;
+  readonly expires_at: string | null;
+}
+
+function decodeApprovalRow(row: ApprovalLedgerRow): StoredOperationApproval {
+  if (
+    row.status !== 'PENDING' &&
+    row.status !== 'APPROVED' &&
+    row.status !== 'CONSUMED' &&
+    row.status !== 'DENIED' &&
+    row.status !== 'EXPIRED'
+  ) {
+    throw new Error(`Approval row ${String(row.id)} has invalid status ${row.status}`);
+  }
+  if (row.operation_hash.length === 0) {
+    throw new Error(`Approval row ${String(row.id)} is missing operation_hash`);
+  }
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    operationHash: row.operation_hash,
+    status: row.status as ApprovalStatus,
+    requestedAt: row.requested_at,
+    approvedAt: row.approved_at,
+    consumedAt: row.consumed_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+/** Same TTL as the canonical repository: approvals expire 30 minutes after approval. */
+export const APPROVAL_TTL_MS = 30 * 60 * 1000;
+
+/** Idempotent ledger setup (mirrors 004 columns + live-pair index, minus FKs). Safe to run on reopen. */
+export function ensureApprovalLedgerSchema(db: PersistentApprovalDb): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT NOT NULL,
+      policy_decision_id INTEGER,
+      operation_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('PENDING', 'APPROVED', 'CONSUMED', 'DENIED', 'EXPIRED')),
+      requested_at TEXT NOT NULL,
+      approved_at TEXT,
+      consumed_at TEXT,
+      expires_at TEXT
+    ) STRICT;
+  `);
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS approvals_live_pair_idx
+      ON approvals(task_id, operation_hash)
+      WHERE status IN ('PENDING', 'APPROVED');
+  `);
+}
+
+/**
+ * Thin durable port of the canonical `ApprovalRepository` request/approve/
+ * consume surface. `consume` is the exact conditional-UPDATE winner protocol,
+ * so single-use holds across processes sharing one file.
+ */
+export class PersistentOperationApprovalStore implements ApprovalConsumptionPort {
+  constructor(private readonly db: PersistentApprovalDb) {}
+
+  get(id: number): StoredOperationApproval | undefined {
+    const row = this.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as
+      | ApprovalLedgerRow
+      | undefined;
+    return row === undefined ? undefined : decodeApprovalRow(row);
   }
 
-  isConsumed(approvalId: string): boolean {
-    return this.consumed.includes(approvalId);
+  request(taskId: string, operationHash: string): StoredOperationApproval {
+    if (operationHash.length === 0) {
+      throw new Error('operationHash must not be empty');
+    }
+    const apply = this.db.transaction((): StoredOperationApproval => {
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `UPDATE approvals
+           SET status = 'EXPIRED'
+           WHERE task_id = ? AND operation_hash = ? AND status = 'APPROVED' AND expires_at <= ?`,
+        )
+        .run(taskId, operationHash, now);
+      const live = this.db
+        .prepare(
+          `SELECT * FROM approvals
+           WHERE task_id = ? AND operation_hash = ? AND status IN ('PENDING', 'APPROVED')
+           ORDER BY id DESC LIMIT 1`,
+        )
+        .get(taskId, operationHash) as ApprovalLedgerRow | undefined;
+      if (live !== undefined) {
+        return decodeApprovalRow(live);
+      }
+      const result = this.db
+        .prepare(
+          `INSERT INTO approvals(task_id, policy_decision_id, operation_hash, status, requested_at)
+           VALUES (?, ?, ?, 'PENDING', ?)`,
+        )
+        .run(taskId, null, operationHash, now);
+      const created = this.get(Number(result.lastInsertRowid));
+      if (created === undefined) throw new Error('Approval row was not persisted');
+      return created;
+    });
+    return apply.immediate();
+  }
+
+  approve(id: number, expectedOperationHash: string): StoredOperationApproval {
+    const row = this.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as
+      | ApprovalLedgerRow
+      | undefined;
+    if (row === undefined) throw new Error(`Approval ${String(id)} was not found`);
+    if (row.operation_hash !== expectedOperationHash) {
+      throw new Error(`Approval ${String(id)} operation hash does not match`);
+    }
+    if (row.status !== 'PENDING') {
+      throw new Error(`Approval ${String(id)} is already resolved with status ${row.status}`);
+    }
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + APPROVAL_TTL_MS).toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE approvals
+         SET status = 'APPROVED', approved_at = ?, expires_at = ?
+         WHERE id = ? AND status = 'PENDING'`,
+      )
+      .run(now, expiresAt, id);
+    if (Number(result.changes) !== 1) {
+      const current = this.db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) as
+        | ApprovalLedgerRow
+        | undefined;
+      throw new Error(
+        `Approval ${String(id)} is already resolved with status ${current?.status ?? 'UNKNOWN'}`,
+      );
+    }
+    const stored = this.get(id);
+    if (stored === undefined) throw new Error(`Approval ${String(id)} was not persisted`);
+    return stored;
+  }
+
+  consume(taskId: string, operationHash: string): boolean {
+    const attempt = this.db.transaction((): boolean => {
+      const now = new Date().toISOString();
+      this.db
+        .prepare(
+          `UPDATE approvals
+           SET status = 'EXPIRED'
+           WHERE task_id = ? AND operation_hash = ? AND status = 'APPROVED' AND expires_at <= ?`,
+        )
+        .run(taskId, operationHash, now);
+      const result = this.db
+        .prepare(
+          `UPDATE approvals
+           SET status = 'CONSUMED', consumed_at = ?
+           WHERE task_id = ? AND operation_hash = ? AND status = 'APPROVED' AND expires_at > ?`,
+        )
+        .run(now, taskId, operationHash, now);
+      return Number(result.changes) === 1;
+    });
+    return attempt.immediate();
   }
 }
 
 /**
  * Single-use, expiring, task-bound approval gate. Fail-closed on every path:
  * non-APPROVED, expired, cross-task, or hash-tampered approvals are rejected,
- * and a verified approval is consumed atomically through the shared store so
- * no second gate instance can replay it.
+ * and a verified approval is consumed atomically through the durable ledger
+ * port, so a NEW repository handle on the same file still sees CONSUMED:
+ * restarts cannot replay.
  */
 export class OperationPolicyGate {
-  private readonly store: ApprovalConsumeStore;
+  private readonly store: ApprovalConsumptionPort;
   private readonly clock: () => number;
 
-  constructor(options: { readonly clock?: () => number; readonly store?: ApprovalConsumeStore } = {}) {
+  constructor(options: { readonly clock?: () => number; readonly store: ApprovalConsumptionPort }) {
     this.clock = options.clock ?? Date.now;
-    this.store = options.store ?? new InMemoryOperationApprovalStore();
+    this.store = options.store;
   }
 
   verify(approval: OperationApprovalInput, intent: OperationIntentLike): ApprovalCheck {
@@ -277,7 +464,7 @@ export class OperationPolicyGate {
     if (!fields.accepted) {
       return fields;
     }
-    if (this.store.isConsumed(approval.id) || !this.store.consumeApproved(approval.id)) {
+    if (!this.store.consume(approval.taskId, operationHash)) {
       return {
         accepted: false,
         reason: `approval ${approval.id} already consumed; single-use replay rejected, re-approval required`,
@@ -296,7 +483,7 @@ export function decideOperation(
   intent: OperationIntentLike,
   metadata: OperationMetadata,
   approval?: OperationApprovalInput,
-  options: { readonly now?: number; readonly store?: ApprovalConsumeStore } = {},
+  options: { readonly now?: number; readonly store?: ApprovalConsumptionPort } = {},
 ): OperationDecision {
   const classified = classifyOperation(intent, metadata);
   if (classified.verdict === 'DENY') {
@@ -333,7 +520,7 @@ export function decideOperation(
     };
   }
   if (options.store !== undefined) {
-    if (options.store.isConsumed(approval.id) || !options.store.consumeApproved(approval.id)) {
+    if (!options.store.consume(approval.taskId, classified.operationHash)) {
       return {
         kind: 'NEEDS_APPROVAL',
         ruleId: classified.ruleId,
