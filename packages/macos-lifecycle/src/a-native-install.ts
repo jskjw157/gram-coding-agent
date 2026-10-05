@@ -16,6 +16,7 @@ import type {
   ClosedSchemaReading,
   InstallPorts,
   InstallResult,
+  RestorePort,
   PriorInstall,
   PublishKind,
   Revalidation,
@@ -206,18 +207,18 @@ export function createNativeInstallPortsAt(options: NativeInstallPortsOptions): 
     readPrior: () => priorFromStorage(storage, acl),
     journal: () => storage.journal,
     publish: () => storage.publish,
-    restore() {
+    restore(): RestorePort {
       return {
-        async restorePrior() {
+        async restorePrior(_prior: PriorInstall): Promise<void> {
           throw new Error('PARTIAL_INSTALL');
         },
-        async removeManifestOwned(kind, expectedBytes) {
+        async removeManifestOwned(kind: 'core' | 'tunnel', expectedBytes: Buffer): Promise<boolean> {
           return storage.removeLiveIfMatches(kind, expectedBytes);
         },
-        async resetExecutionRecords() {
+        async resetExecutionRecords(): Promise<InstallResult> {
           return { ok: false, code: 'PARTIAL_INSTALL' };
         },
-        async ensureExecutionAbsentOnly(isNewInstall) {
+        async ensureExecutionAbsentOnly(isNewInstall: boolean): Promise<InstallResult> {
           return executionState(config, acl, isNewInstall);
         },
       };
