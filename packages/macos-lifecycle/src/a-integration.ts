@@ -1,4 +1,5 @@
 import type { Preview, Result, ServiceConfig } from './contracts.js';
+import { parseConfig } from './config.js';
 import type {
   CliDeps,
   DiagnosticEvidence,
@@ -23,9 +24,9 @@ function fail(code: Result['code']): Result {
 }
 
 function resultOf(result: InstallResult): Result {
-  return result.ok === true && result.code === 'OK'
-    ? { ok: true, code: 'OK' }
-    : { ok: false, code: result.code };
+  if (result.ok === true && result.code === 'OK') return { ok: true, code: 'OK' };
+  if (result.ok === false && result.code !== 'OK') return { ok: false, code: result.code };
+  return { ok: false, code: 'INTERNAL_ERROR' };
 }
 
 function matchesExpected(preview: Preview, request: ExpectedInstallRequest): boolean {
@@ -56,7 +57,9 @@ export interface ReviewedInstallerCliOptions {
  * - status -> D diagnostic evidence
  */
 export function createReviewedInstallerCliDeps(options: ReviewedInstallerCliOptions): CliDeps {
-  const config = options.config;
+  const config = parseConfig(options.config);
+  Object.freeze(config.tunnel);
+  Object.freeze(config);
   const getPreview = options.preview.bind(options);
   const getDiagnostic = options.diagnostic.bind(options);
   const installPorts = options.installPorts;
@@ -64,7 +67,9 @@ export function createReviewedInstallerCliDeps(options: ReviewedInstallerCliOpti
 
   const expected = async (request: ExpectedInstallRequest): Promise<Preview | null> => {
     const current = await getPreview();
-    return matchesExpected(current, request) ? current : null;
+    return matchesExpected(current, request) && current.releaseDigest === config.releaseDigest
+      ? current
+      : null;
   };
 
   return Object.freeze({
