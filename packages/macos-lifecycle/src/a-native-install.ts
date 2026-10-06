@@ -5,7 +5,7 @@ import { preview } from './preflight.js';
 import { inspectInstallation, type InstallFile, type InstallationIO } from './installation-inspection.js';
 import { inspectRelease } from './release-inspection.js';
 import { inspectMacAccount } from './adapters/macos-inspection.js';
-import { inspectMacRegistry } from './adapters/macos-service-probes.js';
+import { inspectMacRegistry, type RegistryObservation } from './adapters/macos-service-probes.js';
 import { createMacInspector } from './adapters/native-inspector.js';
 import { createTrustedFiles, type AclProbe } from './adapters/trusted-files.js';
 import { buildCommittedJournal, buildManifest, canonicalConfigBytes, expectedPlistBytes } from './adapters/install-files.js';
@@ -28,6 +28,7 @@ import {
   type NativeInstallStorage,
 } from './a-native-storage.js';
 import { createSystemServiceHandle, normalizeAbsentSystemServiceOverride } from './a-native-services.js';
+import { createInstalledHealthObserver } from './a-native-observer.js';
 
 const fileMap: Readonly<Record<InstallFile, PublishKind>> = Object.freeze({
   configuration: 'configuration',
@@ -45,6 +46,7 @@ function missingCode(error: unknown, code: string): boolean {
 async function priorFromStorage(
   storage: NativeInstallStorage,
   acl: AclProbe,
+  registryReader: () => Promise<RegistryObservation | null> = inspectMacRegistry,
 ): Promise<PriorInstall> {
   const account = await inspectMacAccount();
   if (account === null || account.admin !== false) throw new Error('ACCOUNT_INVALID');
@@ -56,7 +58,7 @@ async function priorFromStorage(
       if (bytes === null || bytes.length === 0 || bytes.length > limit) throw new Error('FOREIGN_SERVICE');
       return Buffer.from(bytes);
     },
-    registry: inspectMacRegistry,
+    registry: registryReader,
     async verifyRelease(input) {
       try {
         const config = parseConfig(input);
@@ -106,6 +108,55 @@ async function priorFromStorage(
     releaseId: config.releaseId,
     releaseDigest: config.releaseDigest,
   };
+}
+
+async function runningPriorFromStorage(
+  storage: NativeInstallStorage,
+  acl: AclProbe,
+  input: ServiceConfig,
+): Promise<PriorInstall> {
+  const config = parseConfig(input);
+  const before = await inspectMacRegistry();
+  if (before === null
+    || before.jobs.core !== 'present'
+    || before.overrides.core !== false
+    || (config.tunnel.enabled
+      ? before.jobs.tunnel !== 'present' || before.overrides.tunnel !== false
+      : before.jobs.tunnel !== 'absent' || before.overrides.tunnel === true)) {
+    throw new Error('FOREIGN_SERVICE');
+  }
+
+  // Reconstruct the exact stopped/disabled registry snapshot that produced the
+  // review token before start. An absent tunnel may carry the measured inert
+  // explicit enabled/false override; preserve that value in the baseline.
+  const baseline: RegistryObservation = {
+    jobs: { core: 'absent', tunnel: 'absent' },
+    overrides: {
+      core: true,
+      tunnel: config.tunnel.enabled ? true : before.overrides.tunnel,
+    },
+  };
+  const prior = await priorFromStorage(storage, acl, async () => structuredClone(baseline));
+  if (prior.digest === null || prior.releaseId !== config.releaseId
+    || prior.releaseDigest !== config.releaseDigest) throw new Error('FOREIGN_SERVICE');
+
+  const observer = createInstalledHealthObserver(acl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    if (await observer.healthy('core', controller.signal) !== true) throw new Error('FOREIGN_SERVICE');
+    if (config.tunnel.enabled
+      && await observer.healthy('tunnel', controller.signal) !== true) throw new Error('FOREIGN_SERVICE');
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+
+  const after = await inspectMacRegistry();
+  if (after === null || JSON.stringify(after) !== JSON.stringify(before)) {
+    throw new Error('FOREIGN_SERVICE');
+  }
+  return prior;
 }
 
 async function executionState(
@@ -289,5 +340,17 @@ export function createSystemNativeInstallPorts(config: ServiceConfig): InstallPo
     config,
     acl,
     storage: createSystemNativeInstallStorage(acl),
+  });
+}
+
+
+export function createSystemNativeRunningControlPorts(config: ServiceConfig): InstallPorts {
+  const normalized = parseConfig(config);
+  const acl = createSystemBootstrapAclProbe();
+  const storage = createSystemNativeInstallStorage(acl);
+  const base = createNativeInstallPortsAt({ config: normalized, acl, storage });
+  return Object.freeze({
+    ...base,
+    readPrior: () => runningPriorFromStorage(storage, acl, normalized),
   });
 }
