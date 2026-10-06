@@ -111,7 +111,22 @@ APPLY="$("$NODE" "$OPERATOR" apply --config service --expected-config-digest "$P
 APPLY_EXIT=$?
 set -e
 if [[ "$APPLY_EXIT" -ne 0 ]]; then
+  journal_stage='absent'
+  if [[ -f "$ROOT/config/install-journal.json" ]]; then
+    journal_stage="$("$NODE" -e 'try{const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")); const s=j?.stage; process.stdout.write(typeof s==="string"?s:"invalid")}catch{process.stdout.write("invalid")}' "$ROOT/config/install-journal.json")"
+  fi
+  core_job='absent'
+  /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1 && core_job='present'
+  tunnel_job='absent'
+  /bin/launchctl print "system/$TUNNEL_LABEL" >/dev/null 2>&1 && tunnel_job='present'
+  config_present=0; [[ -f "$ROOT/config/service.json" ]] && config_present=1
+  manifest_present=0; [[ -f "$ROOT/config/installation.json" ]] && manifest_present=1
+  core_plist_present=0; [[ -f "$CORE_PLIST" ]] && core_plist_present=1
+  execution_present=0; [[ -f "$ROOT/run/core.execution.json" ]] && execution_present=1
+  circuit_present=0; [[ -f "$ROOT/run/core.circuit.json" ]] && circuit_present=1
+  db_present=0; [[ -f "$ROOT/state/agent.sqlite" ]] && db_present=1
   echo "NATIVE_OPERATOR_EXIT=$APPLY_EXIT NATIVE_RESULT=$APPLY" >&2
+  echo "NATIVE_APPLY_DIAG journal=$journal_stage config=$config_present manifest=$manifest_present core_plist=$core_plist_present core_job=$core_job tunnel_job=$tunnel_job execution=$execution_present circuit=$circuit_present db=$db_present" >&2
   exit 2
 fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$APPLY"; then echo "NATIVE_RESULT=$APPLY" >&2; exit 2; fi
