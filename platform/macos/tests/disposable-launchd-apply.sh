@@ -100,11 +100,11 @@ OPERATOR="$DEST_RELEASE/packages/macos-lifecycle/dist/operator-cli.js"
 
 PREVIEW="$("$NODE" "$OPERATOR" preview --json)"
 printf '%s\n' "$PREVIEW" > "${RUNNER_TEMP:-/tmp}/mac02-native-preview.json"
-PREVIEW_TOKEN="$($NODE -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.configDigest!=="string") process.exit(2); process.stdout.write(j.preview.configDigest)' "$PREVIEW")"
-PREVIOUS="$($NODE -e 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
+PREVIEW_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.configDigest!=="string") process.exit(2); process.stdout.write(j.preview.configDigest)' "$PREVIEW")"
+PREVIOUS="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
 
-APPLY="$($NODE "$OPERATOR" apply --config service --expected-config-digest "$PREVIEW_TOKEN" --expected-install-digest "$PREVIOUS" --json)"
-$NODE -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$APPLY"
+APPLY="$("$NODE" "$OPERATOR" apply --config service --expected-config-digest "$PREVIEW_TOKEN" --expected-install-digest "$PREVIOUS" --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$APPLY"
 
 # B1 apply proves launchd start + owned authenticated Core health internally,
 # then parks the LAB_ONLY installation stopped/disabled before COMMITTED.
@@ -120,6 +120,6 @@ for file in "$ROOT/config/service.json" "$ROOT/config/installation.json" "$ROOT/
 done
 
 POST="$($NODE "$OPERATOR" preview --json)"
-$NODE -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.previousInstallDigest!=="string"||j.preview.previousInstallDigest.length!==64) process.exit(2)' "$POST"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.previousInstallDigest!=="string"||j.preview.previousInstallDigest.length!==64) process.exit(2)' "$POST"
 
 echo "DISPOSABLE_LAUNCHD_APPLY_PASS release_id=$RELEASE_ID release_digest=$EXPECTED_DIGEST runtime_uid=$RUNTIME_UID"
