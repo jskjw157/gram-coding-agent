@@ -106,7 +106,14 @@ PREVIEW_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?
 PREVIOUS="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
 
 echo 'NATIVE_PHASE=apply'
+set +e
 APPLY="$("$NODE" "$OPERATOR" apply --config service --expected-config-digest "$PREVIEW_TOKEN" --expected-install-digest "$PREVIOUS" --json)"
+APPLY_EXIT=$?
+set -e
+if [[ "$APPLY_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$APPLY_EXIT NATIVE_RESULT=$APPLY" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$APPLY"; then echo "NATIVE_RESULT=$APPLY" >&2; exit 2; fi
 
 # B1 apply proves launchd start + owned authenticated Core health internally,
@@ -128,7 +135,14 @@ POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.wr
 POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$POST")"
 
 echo 'NATIVE_PHASE=start'
+set +e
 START="$("$NODE" "$OPERATOR" start --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+START_EXIT=$?
+set -e
+if [[ "$START_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$START_EXIT NATIVE_RESULT=$START" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$START"; then echo "NATIVE_RESULT=$START" >&2; exit 2; fi
 /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1 || { echo 'CORE_START_NOT_REGISTERED' >&2; exit 2; }
 for _ in {1..50}; do
@@ -138,13 +152,27 @@ done
 /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:3847/healthz >/dev/null || { echo 'CORE_START_NOT_HEALTHY' >&2; exit 2; }
 
 echo 'NATIVE_PHASE=restart'
+set +e
 RESTART="$("$NODE" "$OPERATOR" restart --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+RESTART_EXIT=$?
+set -e
+if [[ "$RESTART_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$RESTART_EXIT NATIVE_RESULT=$RESTART" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$RESTART"; then echo "NATIVE_RESULT=$RESTART" >&2; exit 2; fi
 /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1 || { echo 'CORE_RESTART_NOT_REGISTERED' >&2; exit 2; }
 /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:3847/healthz >/dev/null || { echo 'CORE_RESTART_NOT_HEALTHY' >&2; exit 2; }
 
 echo 'NATIVE_PHASE=stop'
+set +e
 STOP="$("$NODE" "$OPERATOR" stop --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+STOP_EXIT=$?
+set -e
+if [[ "$STOP_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$STOP_EXIT NATIVE_RESULT=$STOP" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$STOP"; then echo "NATIVE_RESULT=$STOP" >&2; exit 2; fi
 if /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1; then
   echo 'CORE_STOP_NOT_PARKED' >&2
@@ -157,7 +185,14 @@ POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.wr
 POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$STOPPED")"
 
 echo 'NATIVE_PHASE=uninstall'
+set +e
 UNINSTALL="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+UNINSTALL_EXIT=$?
+set -e
+if [[ "$UNINSTALL_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$UNINSTALL_EXIT NATIVE_RESULT=$UNINSTALL" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$UNINSTALL"; then echo "NATIVE_RESULT=$UNINSTALL" >&2; exit 2; fi
 
 for removed in "$ROOT/config/service.json" "$ROOT/config/installation.json" "$ROOT/config/install-journal.json" "$CORE_PLIST"; do
@@ -177,7 +212,14 @@ EMPTY="$("$NODE" "$OPERATOR" preview --json)"
 "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||j.preview.previousInstallDigest!==null) process.exit(2)' "$EMPTY"
 EMPTY_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$EMPTY")"
 echo 'NATIVE_PHASE=second-uninstall'
+set +e
 SECOND="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$EMPTY_TOKEN" --expected-install-digest none --json)"
+SECOND_EXIT=$?
+set -e
+if [[ "$SECOND_EXIT" -ne 0 ]]; then
+  echo "NATIVE_OPERATOR_EXIT=$SECOND_EXIT NATIVE_RESULT=$SECOND" >&2
+  exit 2
+fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$SECOND"; then echo "NATIVE_RESULT=$SECOND" >&2; exit 2; fi
 
 echo "DISPOSABLE_LAUNCHD_APPLY_UNINSTALL_PASS release_id=$RELEASE_ID release_digest=$EXPECTED_DIGEST runtime_uid=$RUNTIME_UID"
