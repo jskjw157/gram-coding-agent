@@ -1,5 +1,5 @@
 import { canTransitionTaskStatus, type TaskId, type TaskStatus } from '@gram/domain';
-import { RepoLockedError } from '@gram/repo-lock';
+import { isRepoLockedError } from '@gram/repo-lock';
 import type { CompositionAuditPort } from './task-runner-composition.js';
 
 /** Minimal runnable-task snapshot the scheduler may claim or dispatch. */
@@ -48,14 +48,6 @@ const FAILURE_EVENT_TYPE = 'TASK_RUN_FAILED';
 function describeError(error: unknown): { name: string; message: string } {
   if (error instanceof Error) return { name: error.name, message: error.message };
   return { name: typeof error, message: String(error) };
-}
-
-function isRepoLockedError(error: unknown): boolean {
-  if (error instanceof RepoLockedError) return true;
-  if (typeof error === 'object' && error !== null && 'name' in error) {
-    return (error as { name: unknown }).name === 'RepoLockedError';
-  }
-  return false;
 }
 
 /**

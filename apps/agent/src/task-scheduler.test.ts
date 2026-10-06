@@ -626,4 +626,73 @@ describe('TaskScheduler', () => {
     expect(drained).toBe(true);
     expect(entered).toEqual([first.id]);
   });
+
+  it('S5 treats a name-spoofed RepoLockedError without discriminator as a real failure', async () => {
+    const { tasks } = setup();
+    const task = tasks.create({
+      goal: 'Name-spoofed lock error is not a lock signal',
+      taskType: 'CODING',
+      publishMode: 'PULL_REQUEST',
+    });
+    const audit = createAudit();
+    const logger = createLogger();
+    const runner = {
+      run: async (): Promise<void> => {
+        const spoofed = new Error('spoofed lock contention');
+        spoofed.name = 'RepoLockedError';
+        throw spoofed;
+      },
+    };
+    const scheduler = new TaskScheduler({
+      tasks,
+      runner,
+      audit: audit.port,
+      logger: logger.port,
+      now: () => FIXED_NOW,
+    });
+    schedulers.push(scheduler);
+
+    scheduler.tick();
+    await flush();
+
+    expect(tasks.get(task.id)?.status).toBe('FAILED');
+    expect(audit.events).toHaveLength(1);
+    expect(audit.events[0]).toMatchObject({
+      taskId: task.id,
+      eventType: 'TASK_RUN_FAILED',
+      createdAt: FIXED_NOW.toISOString(),
+    });
+    expect(logger.errors).toHaveLength(1);
+  });
+
+  it('retains WAITING_REPO_LOCK for a duck-typed lock signal carrying the shared discriminator', async () => {
+    const { tasks } = setup();
+    const task = tasks.create({
+      goal: 'Discriminated lock signal stays queued',
+      taskType: 'CODING',
+      publishMode: 'PULL_REQUEST',
+    });
+    const audit = createAudit();
+    const logger = createLogger();
+    const runner = {
+      run: async (): Promise<void> => {
+        throw { code: 'REPO_LOCKED', repoId: 100 };
+      },
+    };
+    const scheduler = new TaskScheduler({
+      tasks,
+      runner,
+      audit: audit.port,
+      logger: logger.port,
+      now: () => FIXED_NOW,
+    });
+    schedulers.push(scheduler);
+
+    scheduler.tick();
+    await flush();
+
+    expect(tasks.get(task.id)?.status).toBe('WAITING_REPO_LOCK');
+    expect(audit.events).toHaveLength(0);
+    expect(logger.errors).toHaveLength(0);
+  });
 });
