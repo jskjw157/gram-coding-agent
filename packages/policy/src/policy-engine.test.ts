@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -212,6 +212,70 @@ describe('shell-text syntax fail-closed boundary', () => {
   ] as const)('preserves existing %s filesystem target extraction', (_label, command, targets) => {
     const [operation] = normalizeShellCommand(command, process.cwd());
     expect(operation?.requestedTargets).toEqual(targets);
+  });
+});
+
+
+describe('shell filesystem target expansion fail-closed boundary', () => {
+  it('rejects tilde expansion even when a literal decoy path canonicalizes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, '~'), { recursive: true });
+    writeFileSync(join(root, '~', 'tmpfile'), 'decoy');
+
+    const [before] = normalizeShellCommand('rm ~/tmpfile', root);
+    expect(before?.pathResolutionFailed).toBe(false);
+    expect(before?.canonicalTargets).toEqual([realpathSync(join(root, '~', 'tmpfile'))]);
+    expect(new PolicyEngine().evaluate(before!, { taskId: 'task-1' }).kind).toBe('ALLOW');
+
+    expect(() => normalizeShellCommand('rm ~/tmpfile', root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['rm', 'rm *.log'],
+    ['cp', 'cp *.log copy.log'],
+    ['mv', 'mv *.log moved.log'],
+  ] as const)('rejects unquoted glob expansion for %s filesystem targets', (_label, command) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, '*.log'), 'literal-decoy');
+    writeFileSync(join(root, 'victim.log'), 'victim');
+
+    expect(() => normalizeShellCommand(command, root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ["rm '~/tmpfile'", ['~/tmpfile']],
+    ['rm "*.log"', ['*.log']],
+    ['rm \\*.log', ['*.log']],
+  ] as const)('keeps quoted or escaped filesystem target literal: %s', (command, targets) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    if (targets[0] === '~/tmpfile') {
+      mkdirSync(join(root, '~'), { recursive: true });
+      writeFileSync(join(root, '~', 'tmpfile'), 'literal');
+    } else {
+      writeFileSync(join(root, '*.log'), 'literal');
+    }
+
+    const [operation] = normalizeShellCommand(command, root);
+    expect(operation?.requestedTargets).toEqual(targets);
+    expect(operation?.pathResolutionFailed).toBe(false);
+  });
+
+  it('does not apply shell pathname expansion checks to executable-form requests', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, '*.log'), 'literal');
+
+    const operation = normalizeExecutableCommand('rm', ['*.log'], root);
+    expect(operation.requestedTargets).toEqual(['*.log']);
+    expect(operation.pathResolutionFailed).toBe(false);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe('ALLOW');
   });
 });
 
