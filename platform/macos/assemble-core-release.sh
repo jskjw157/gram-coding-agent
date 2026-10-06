@@ -40,11 +40,11 @@ SOURCE="$TMP/source"
 STAGING="$TMP/staging"
 
 /bin/mkdir -p "$SOURCE/apps" "$SOURCE/packages/macos-lifecycle" "$SOURCE/bin"
-(cd "$REPO" && "$PNPM_BIN" build)
+(cd "$REPO" && "$PNPM_BIN" build) >&2
 # Deploy directly into its final bundle-relative location so pnpm's relative
 # workspace/package symlinks are computed for that exact path. Moving a deploy
 # tree afterwards can turn otherwise-internal links into escaping links.
-(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$SOURCE/apps/agent")
+(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$SOURCE/apps/agent") >&2
 # pnpm legacy deploy adds a convenience self-link for the deployed package
 # under .pnpm/node_modules. The runtime never resolves @gram/agent from itself,
 # and keeping this link would point outside the sealed apps/agent subtree.
