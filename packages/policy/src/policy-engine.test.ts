@@ -223,10 +223,9 @@ describe('shell filesystem target expansion fail-closed boundary', () => {
     mkdirSync(join(root, '~'), { recursive: true });
     writeFileSync(join(root, '~', 'tmpfile'), 'decoy');
 
-    const [before] = normalizeShellCommand('rm ~/tmpfile', root);
-    expect(before?.pathResolutionFailed).toBe(false);
-    expect(before?.canonicalTargets).toEqual([realpathSync(join(root, '~', 'tmpfile'))]);
-    expect(new PolicyEngine().evaluate(before!, { taskId: 'task-1' }).kind).toBe('ALLOW');
+    expect(realpathSync(join(root, '~', 'tmpfile'))).toBe(
+      join(root, '~', 'tmpfile'),
+    );
 
     expect(() => normalizeShellCommand('rm ~/tmpfile', root)).toThrow(
       /unsupported shell syntax/i,
