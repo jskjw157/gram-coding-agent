@@ -120,7 +120,31 @@ for file in "$ROOT/config/service.json" "$ROOT/config/installation.json" "$ROOT/
     || { echo 'COMMITTED_FILE_MODE_INVALID' >&2; exit 2; }
 done
 
-POST="$($NODE "$OPERATOR" preview --json)"
+POST="$("$NODE" "$OPERATOR" preview --json)"
 "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.previousInstallDigest!=="string"||j.preview.previousInstallDigest.length!==64) process.exit(2)' "$POST"
+POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$POST")"
+POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$POST")"
 
-echo "DISPOSABLE_LAUNCHD_APPLY_PASS release_id=$RELEASE_ID release_digest=$EXPECTED_DIGEST runtime_uid=$RUNTIME_UID"
+UNINSTALL="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$UNINSTALL"
+
+for removed in "$ROOT/config/service.json" "$ROOT/config/installation.json" "$ROOT/config/install-journal.json" "$CORE_PLIST"; do
+  [[ ! -e "$removed" ]] || { echo "UNINSTALL_RESIDUAL=$removed" >&2; exit 2; }
+done
+for preserved in "$ROOT/releases/$RELEASE_ID" "$ROOT/run" "$ROOT/state" "$ROOT/secrets" "$ROOT/logs"; do
+  [[ -e "$preserved" ]] || { echo "UNINSTALL_OVERDELETE=$preserved" >&2; exit 2; }
+done
+disabled_output="$(/bin/launchctl print-disabled system)"
+core_override="$(/usr/bin/grep -F "\"$CORE_LABEL\"" <<<"$disabled_output" | /usr/bin/head -n 1 || true)"
+[[ "$core_override" == *'=> false'* || "$core_override" == *'=> enabled'* ]] || {
+  echo "UNINSTALL_OVERRIDE_NOT_NEUTRAL=$core_override" >&2
+  exit 2
+}
+
+EMPTY="$("$NODE" "$OPERATOR" preview --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||j.preview.previousInstallDigest!==null) process.exit(2)' "$EMPTY"
+EMPTY_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$EMPTY")"
+SECOND="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$EMPTY_TOKEN" --expected-install-digest none --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$SECOND"
+
+echo "DISPOSABLE_LAUNCHD_APPLY_UNINSTALL_PASS release_id=$RELEASE_ID release_digest=$EXPECTED_DIGEST runtime_uid=$RUNTIME_UID"
