@@ -36,15 +36,15 @@ SOURCE_COMMIT="$(/usr/bin/git -C "$REPO" rev-parse HEAD)"
 
 TMP="$(/usr/bin/mktemp -d "${TMPDIR:-/var/tmp}/gram-core-release.XXXXXX")"
 trap '/bin/rm -rf "$TMP"' EXIT
-DEPLOY="$TMP/agent-deploy"
 SOURCE="$TMP/source"
 STAGING="$TMP/staging"
 
-(cd "$REPO" && "$PNPM_BIN" build)
-(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$DEPLOY")
-
 /bin/mkdir -p "$SOURCE/apps" "$SOURCE/packages/macos-lifecycle" "$SOURCE/bin"
-/bin/cp -R "$DEPLOY" "$SOURCE/apps/agent"
+(cd "$REPO" && "$PNPM_BIN" build)
+# Deploy directly into its final bundle-relative location so pnpm's relative
+# workspace/package symlinks are computed for that exact path. Moving a deploy
+# tree afterwards can turn otherwise-internal links into escaping links.
+(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$SOURCE/apps/agent")
 /bin/cp -R "$REPO/packages/macos-lifecycle/dist" "$SOURCE/packages/macos-lifecycle/dist"
 /bin/cp "$REPO/pnpm-lock.yaml" "$SOURCE/pnpm-lock.yaml"
 /bin/cp "$NODE_BIN" "$SOURCE/bin/node"
