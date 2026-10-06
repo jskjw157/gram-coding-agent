@@ -2,7 +2,8 @@
 set -euo pipefail
 umask 077
 
-ROOT='/Library/Application Support/HAAR/GramAgent'
+VENDOR_ROOT='/Library/Application Support/HAAR'
+ROOT="$VENDOR_ROOT/GramAgent"
 BOOTSTRAP_DIR="$ROOT/bootstrap/bin"
 HELPER="$BOOTSTRAP_DIR/file-acl"
 CONFIG_DIR="$ROOT/config"
@@ -53,8 +54,10 @@ read -r RUNTIME_UID RUNTIME_GID < <(account_ids) || {
 }
 
 if [[ "$mode" == "--check" ]]; then
-  check_fixed_dir "$BOOTSTRAP_DIR" 0 755 \
-    && check_fixed_file "$HELPER" 0 755 \
+  check_fixed_dir "$VENDOR_ROOT" 0 755 \
+    && check_fixed_dir "$BOOTSTRAP_DIR" 0 755 \
+    && check_fixed_dir "$VENDOR_ROOT" 0 755 \
+  && check_fixed_file "$HELPER" 0 755 \
     && check_fixed_dir "$CONFIG_DIR" 0 755 \
     && check_fixed_dir "$RELEASES_DIR" 0 755 \
     && check_fixed_dir "$RUN_DIR" "$RUNTIME_UID" 700 \
@@ -78,8 +81,8 @@ trap '/bin/rm -rf "$TMP"' EXIT
 /bin/bash "$BUILDER" "$TMP/file-acl" >/dev/null
 
 /bin/mkdir -p "$BOOTSTRAP_DIR" "$CONFIG_DIR" "$RELEASES_DIR" "$RUN_DIR" "$STATE_DIR" "$SECRET_DIR" "$LOG_DIR"
-/usr/sbin/chown root:wheel "$ROOT" "$ROOT/bootstrap" "$BOOTSTRAP_DIR" "$CONFIG_DIR" "$RELEASES_DIR"
-/bin/chmod 0755 "$ROOT" "$ROOT/bootstrap" "$BOOTSTRAP_DIR" "$CONFIG_DIR" "$RELEASES_DIR"
+/usr/sbin/chown root:wheel "$VENDOR_ROOT" "$ROOT" "$ROOT/bootstrap" "$BOOTSTRAP_DIR" "$CONFIG_DIR" "$RELEASES_DIR"
+/bin/chmod 0755 "$VENDOR_ROOT" "$ROOT" "$ROOT/bootstrap" "$BOOTSTRAP_DIR" "$CONFIG_DIR" "$RELEASES_DIR"
 
 /usr/sbin/chown "$RUNTIME_UID:$RUNTIME_GID" "$RUN_DIR" "$STATE_DIR" "$SECRET_DIR" "$LOG_DIR"
 /bin/chmod 0700 "$RUN_DIR" "$STATE_DIR" "$SECRET_DIR" "$LOG_DIR"
