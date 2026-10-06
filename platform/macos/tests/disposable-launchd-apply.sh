@@ -98,7 +98,7 @@ NODE="$DEST_RELEASE/bin/node"
 OPERATOR="$DEST_RELEASE/packages/macos-lifecycle/dist/operator-cli.js"
 [[ -x "$NODE" && -f "$OPERATOR" ]] || { echo 'OPERATOR_MISSING' >&2; exit 2; }
 
-PREVIEW="$(${NODE@Q} ${OPERATOR@Q} preview --json)"
+PREVIEW="$("$NODE" "$OPERATOR" preview --json)"
 printf '%s\n' "$PREVIEW" > "${RUNNER_TEMP:-/tmp}/mac02-native-preview.json"
 PREVIEW_TOKEN="$($NODE -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.configDigest!=="string") process.exit(2); process.stdout.write(j.preview.configDigest)' "$PREVIEW")"
 PREVIOUS="$($NODE -e 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
