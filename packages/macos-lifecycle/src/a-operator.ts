@@ -1,7 +1,7 @@
 import type { Preview, Result, ServiceConfig } from './contracts.js';
 import type { CliDeps, ExpectedInstallRequest, LocalControlAction } from './cli-contracts.js';
 import { preview } from './preflight.js';
-import { createMacInspector } from './adapters/native-inspector.js';
+import { createMacInspector, installPaths } from './adapters/native-inspector.js';
 import { createInstalledRuntimeReviewSource, createSystemBootstrapAclProbe } from './a-system-sources.js';
 import { readSystemCandidateConfig } from './a-candidate-config.js';
 import { createSystemNativeInstallPorts } from './a-native-install.js';
@@ -10,6 +10,8 @@ import { apply } from './install-service.js';
 import { control } from './local-control.js';
 import { root } from './contracts.js';
 import { inspectMacAccount } from './adapters/macos-inspection.js';
+import { inspectMacRegistry } from './adapters/macos-service-probes.js';
+import { probeTrustedPath } from './adapters/trusted-presence.js';
 import { bindReviewedCoreRuntime } from './adapters/runtime-authority.js';
 import { createReviewedLocalControlPorts } from './a-integration.js';
 
@@ -29,6 +31,23 @@ async function reviewedPreview(
     return await preview(config, config.releaseDigest, createMacInspector(acl));
   } catch {
     return refusedPreview('INTERNAL_ERROR');
+  }
+}
+
+
+async function confirmedNoManagedInstallation(
+  acl: ReturnType<typeof createSystemBootstrapAclProbe>,
+): Promise<boolean> {
+  try {
+    for (const relative of Object.values(installPaths)) {
+      if (await probeTrustedPath('/', 0, acl, relative) !== 'absent') return false;
+    }
+    const registry = await inspectMacRegistry();
+    return registry !== null
+      && registry.jobs.core === 'absent'
+      && registry.jobs.tunnel === 'absent';
+  } catch {
+    return false;
   }
 }
 
@@ -78,6 +97,13 @@ export function createSystemOperatorCliDeps(output: CliDeps['output']): CliDeps 
         : { ok: false, code: result.code };
     },
     async control(action: LocalControlAction, request: ExpectedInstallRequest): Promise<Result> {
+      // R3 narrow idempotence: an already-uninstalled system may retain a
+      // launchd disabled override, which is not an installation identity.
+      // Only uninstall can succeed in this state, and it performs no mutation.
+      if (action === 'uninstall' && await confirmedNoManagedInstallation(acl)) {
+        return { ok: true, code: 'OK' };
+      }
+
       const config = await candidate();
       if (config === null) return unavailable();
       const current = await reviewedPreview(config, acl);
