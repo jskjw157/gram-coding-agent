@@ -101,7 +101,8 @@ export async function inspectInstallation(account: LocalAccount, io: Installatio
         if (present[role]) {
           if (!bytes || firstRegistry.overrides[role] !== true || hashes[role] !== sha(bytes)
             || !bytes.equals(Buffer.from(renderPlist(config, role)))) refuse();
-        } else if (presence[role] !== 'absent' || hashes[role] !== null || firstRegistry.overrides[role] !== null) refuse();
+        } else if (presence[role] !== 'absent' || hashes[role] !== null
+          || firstRegistry.overrides[role] === true) refuse();
       }
       const journal = snapshots.get('journal');
       if (journal) {
