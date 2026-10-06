@@ -134,6 +134,22 @@ jobs:
           test -x "$out/file-acl"
           test "$(/usr/bin/stat -f '%Lp' "$out/file-acl")" = "755"
           /usr/bin/grep -Eq '^BOOTSTRAP_HELPER_BUILT source_sha256=[a-f0-9]{64} binary_sha256=[a-f0-9]{64}$' "$RUNNER_TEMP/bootstrap-helper.log"
+      - name: Probe per-service launchd disabled override semantics
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          label='com.haar.gram-agent.ci-override-probe'
+          sudo /bin/launchctl enable "system/$label"
+          output="$(sudo /bin/launchctl print-disabled system)"
+          if /usr/bin/grep -Fq "\"$label\" => false" <<<"$output"; then
+            echo 'LAUNCHD_ENABLE_LEAVES_FALSE_OVERRIDE=true'
+          elif /usr/bin/grep -Fq "\"$label\"" <<<"$output"; then
+            echo 'LAUNCHD_ENABLE_OVERRIDE_FORMAT=unexpected' >&2
+            exit 1
+          else
+            echo 'LAUNCHD_ENABLE_REMOVES_OVERRIDE=true'
+          fi
       - name: Assemble and smoke-test self-contained core release
         if: runner.os == 'macOS'
         shell: bash
