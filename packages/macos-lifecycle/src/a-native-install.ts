@@ -142,7 +142,7 @@ async function runningPriorFromStorage(
 
   const observer = createInstalledHealthObserver(acl);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const timer = setTimeout(() => controller.abort(), 60_000);
   try {
     if (await observer.healthy('core', controller.signal) !== true) throw new Error('FOREIGN_SERVICE');
     if (config.tunnel.enabled
