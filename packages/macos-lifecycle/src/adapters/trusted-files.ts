@@ -42,6 +42,18 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
     || !Number.isSafeInteger(ownerUid) || ownerUid < 0 || ownerUid >= 0xffff_ffff) unsafe();
   const prefixParts = prefix === '' ? [] : relativeParts(prefix);
   type Snapshot = { path: string; file: FileHandle; stat: BigIntStats };
+  // A createTrustedFiles() instance is one bounded review session. Reuse an
+  // ACL verdict only while the exact descriptor/path stat identity remains
+  // byte-for-byte equivalent. Any owner/mode/link/size/mtime/ctime/inode drift
+  // invalidates the cache and invokes the trusted ACL helper again.
+  const aclCache = new Map<string, BigIntStats>();
+  const trustedAcl = async (path: string, file: FileHandle, stat: BigIntStats): Promise<boolean> => {
+    const cached = aclCache.get(path);
+    if (cached !== undefined && same(cached, stat)) return true;
+    if (await acl(file) !== true) return false;
+    aclCache.set(path, stat);
+    return true;
+  };
   async function checked<T>(parts: readonly string[], directory: boolean, use: (file: FileHandle, stat: BigIntStats, path: string) => Promise<T>): Promise<T> {
     const held: Snapshot[] = [];
     try {
@@ -56,7 +68,7 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
         const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
           | (isDir ? constants.O_DIRECTORY : 0));
         held.push({ path, file, stat: before });
-        if (!same(before, await file.stat({ bigint: true })) || await acl(file) !== true
+        if (!same(before, await file.stat({ bigint: true })) || await trustedAcl(path, file, before) !== true
           || !same(before, await file.stat({ bigint: true }))
           || !same(before, await lstat(path, { bigint: true }))) unsafe();
       }
