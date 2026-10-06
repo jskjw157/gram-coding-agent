@@ -21,7 +21,6 @@ import {
   encodeTunnelRegistration,
   matchesTunnelExecution,
 } from './tunnel-registration.js';
-import { inspectRelease } from './release-inspection.js';
 import { createInstalledRuntimeReviewSource } from './a-system-sources.js';
 import type { RecordFiles } from './telemetry-store.js';
 import type { RoleObservation } from './cli-contracts.js';
@@ -122,8 +121,12 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
       const executionBytes = encodeExecution(held);
 
       const releasePrefix = `${root.slice(1)}/releases/${review.config.releaseId}`;
+      // createInstalledRuntimeReviewSource() immediately above already verified
+      // the complete sealed release inventory/content. Re-open only the exact
+      // native proof binaries here and compare their pinned hashes; a second
+      // whole-tree scan in the same observation adds no trust against the
+      // explicitly trusted root/admin boundary and is prohibitively expensive.
       const releaseFiles = createTrustedFiles('/', 0, acl, releasePrefix);
-      await inspectRelease(review.config, review.config.releaseDigest, releaseFiles);
       if (signal.aborted) return unknown();
 
       const helperPath = join(root, 'releases', review.config.releaseId, 'bin', 'peer-owner');
