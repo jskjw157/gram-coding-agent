@@ -134,6 +134,67 @@ jobs:
           test -x "$out/file-acl"
           test "$(/usr/bin/stat -f '%Lp' "$out/file-acl")" = "755"
           /usr/bin/grep -Eq '^BOOTSTRAP_HELPER_BUILT source_sha256=[a-f0-9]{64} binary_sha256=[a-f0-9]{64}
+      - name: Assemble and smoke-test self-contained core release
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          git checkout -- pnpm-lock.yaml
+          release="$RUNNER_TEMP/core-release"
+          release_id="ci-${GITHUB_SHA:0:12}"
+          bash platform/macos/assemble-core-release.sh "$release_id" "$release" | tee "$RUNNER_TEMP/core-release.json"
+          test -x "$release/bin/node"
+          test -f "$release/release.json"
+          test -f "$release/apps/agent/dist/main.js"
+          test -f "$release/packages/macos-lifecycle/dist/supervisor-cli.js"
+          test -f "$release/packages/macos-lifecycle/dist/operator-cli.js"
+
+          smoke="$RUNNER_TEMP/core-smoke"
+          mkdir -p "$smoke/state" "$smoke/secrets"
+          chmod 700 "$smoke/state" "$smoke/secrets"
+          printf '%s\n' 'SYNTHETIC_CI_INTERNAL_SECRET' > "$smoke/secrets/mcp-internal-secret"
+          chmod 600 "$smoke/secrets/mcp-internal-secret"
+
+          GRAM_AGENT_STATE_DIR="$smoke/state" GRAM_AGENT_SECRET_DIR="$smoke/secrets" \
+            "$release/bin/node" "$release/apps/agent/dist/main.js" \
+            >"$RUNNER_TEMP/core-smoke.stdout" 2>"$RUNNER_TEMP/core-smoke.stderr" &
+          core_pid=$!
+          cleanup() {
+            kill "$core_pid" 2>/dev/null || true
+            wait "$core_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          healthy=0
+          for _ in {1..50}; do
+            if /usr/bin/curl -fsS --max-time 1 http://127.0.0.1:3847/healthz >"$RUNNER_TEMP/health.json"; then
+              healthy=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$healthy" -eq 1
+          /usr/bin/grep -q '"status":"healthy"' "$RUNNER_TEMP/health.json"
+          test "$(/usr/bin/curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3847/mcp)" = "401"
+          cleanup
+          trap - EXIT
+
+          set +e
+          "$release/bin/node" "$release/packages/macos-lifecycle/dist/supervisor-cli.js" \
+            --role core --config '/Library/Application Support/HAAR/GramAgent/config/service.json' \
+            >/dev/null 2>/dev/null
+          supervisor_code=$?
+          set -e
+          test "$supervisor_code" -eq 78
+
+          set +e
+          "$release/bin/node" "$release/packages/macos-lifecycle/dist/operator-cli.js" preview --json \
+            >"$RUNNER_TEMP/operator-preview.json" 2>/dev/null
+          operator_code=$?
+          set -e
+          test "$operator_code" -eq 2
+          /usr/bin/grep -q '"mode":"LAB_ONLY"' "$RUNNER_TEMP/operator-preview.json"
+          /usr/bin/grep -q '"businessReadiness":"UNAVAILABLE"' "$RUNNER_TEMP/operator-preview.json"
  "$RUNNER_TEMP/bootstrap-helper.log"
       - name: Assemble and smoke-test self-contained core release
         if: runner.os == 'macOS'
