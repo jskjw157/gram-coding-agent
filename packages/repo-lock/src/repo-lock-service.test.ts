@@ -9,7 +9,7 @@ import {
   runMigrations,
   TaskRepository,
 } from '@gram/persistence';
-import { RepoLockedError, RepoLockLostError, RepoLockService } from './repo-lock-service.js';
+import { RepoLockedError, RepoLockLostError, RepoLockService, isRepoLockedError } from './repo-lock-service.js';
 
 const roots: string[] = [];
 const databases: Array<{ close(): void }> = [];
@@ -266,5 +266,44 @@ describe('RepoLockService', () => {
     expect(scheduler.clearInterval).toHaveBeenCalledTimes(1);
 
     await lease.release();
+  });
+});
+
+describe('RepoLockedError discriminator', () => {
+  it('exposes code, repoId, name, and byte-identical message', () => {
+    const error = new RepoLockedError(7);
+    expect(error.code).toBe('REPO_LOCKED');
+    expect(error.repoId).toBe(7);
+    expect(error.name).toBe('RepoLockedError');
+    expect(error.message).toBe('Repository 7 is locked by another task');
+  });
+
+  it('S1 returns true for a same-realm RepoLockedError', () => {
+    expect(isRepoLockedError(new RepoLockedError(1))).toBe(true);
+  });
+
+  it('S2 returns true for a plain structural match that is not an instance', () => {
+    const candidate = { code: 'REPO_LOCKED', repoId: 42 };
+    expect(candidate instanceof RepoLockedError).toBe(false);
+    expect(isRepoLockedError(candidate)).toBe(true);
+  });
+
+  it('S3 returns false for ordinary and name-spoofed errors', () => {
+    expect(isRepoLockedError(new Error('nope'))).toBe(false);
+    const spoof = new Error('spoof');
+    spoof.name = 'RepoLockedError';
+    expect(isRepoLockedError(spoof)).toBe(false);
+  });
+
+  it('S4 returns false for non-objects, missing, and mistyped shapes', () => {
+    expect(isRepoLockedError(null)).toBe(false);
+    expect(isRepoLockedError(undefined)).toBe(false);
+    expect(isRepoLockedError('REPO_LOCKED')).toBe(false);
+    expect(isRepoLockedError(42)).toBe(false);
+    expect(isRepoLockedError({ code: 'REPO_LOCKED' })).toBe(false);
+    expect(isRepoLockedError({ code: 'REPO_LOCKED', repoId: '42' })).toBe(false);
+    expect(isRepoLockedError({ code: 'REPO_LOCKED', repoId: null })).toBe(false);
+    expect(isRepoLockedError({ code: 'REPO_LOCKED', repoId: undefined })).toBe(false);
+    expect(isRepoLockedError({ code: 'SOMETHING_ELSE', repoId: 42 })).toBe(false);
   });
 });

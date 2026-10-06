@@ -24,10 +24,23 @@ const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 
 export class RepoLockedError extends Error {
+  readonly code = 'REPO_LOCKED';
+  readonly repoId: number;
   constructor(repoId: number) {
     super(`Repository ${repoId} is locked by another task`);
     this.name = 'RepoLockedError';
+    this.repoId = repoId;
   }
+}
+
+export function isRepoLockedError(error: unknown): boolean {
+  if (error instanceof RepoLockedError) return true;
+  if (typeof error !== 'object' || error === null) return false;
+  if (!('code' in error)) return false;
+  if (error.code !== 'REPO_LOCKED') return false;
+  if (!('repoId' in error)) return false;
+  if (typeof error.repoId !== 'number') return false;
+  return true;
 }
 
 export class RepoLockLostError extends Error {
