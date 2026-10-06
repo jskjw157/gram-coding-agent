@@ -122,6 +122,7 @@ jobs:
           bash -n platform/macos/build-bootstrap-helper.sh
           bash -n platform/macos/provision-bootstrap.sh
           node --check platform/macos/stage-candidate-config.mjs
+          bash -n platform/macos/tests/disposable-launchd-apply.sh
       - name: Build independent bootstrap ACL helper on Apple Silicon
         if: runner.os == 'macOS'
         shell: bash
@@ -225,3 +226,13 @@ jobs:
           test "$operator_code" -eq 2
           /usr/bin/grep -q '"mode":"LAB_ONLY"' "$RUNNER_TEMP/operator-preview.json"
           /usr/bin/grep -q '"businessReadiness":"UNAVAILABLE"' "$RUNNER_TEMP/operator-preview.json"
+      - name: Disposable real launchd apply acceptance
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          digest="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(typeof j.digest!=="string") process.exit(2); process.stdout.write(j.digest)' "$RUNNER_TEMP/core-release.json")"
+          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" /bin/bash \
+            platform/macos/tests/disposable-launchd-apply.sh \
+            "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/bootstrap-helper/file-acl" "$digest"
