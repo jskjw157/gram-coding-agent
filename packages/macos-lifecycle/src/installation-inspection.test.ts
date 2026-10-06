@@ -74,14 +74,28 @@ describe('installation identity from bounded trusted bytes', () => {
     const f = await fixture(); await f.put(key, '{}');
     await expect(inspectInstallation(account, f.io)).rejects.toThrow(rejected);
   });
-  it('refuses a registered job or enabled override even with no disk files', async () => {
+  it('refuses a registered job or residual disabled override with no disk files', async () => {
     for (const registry of [
       { jobs: { core: 'present', tunnel: 'absent' }, overrides: { core: null, tunnel: null } },
-      { jobs: { core: 'absent', tunnel: 'absent' }, overrides: { core: false, tunnel: null } },
+      { jobs: { core: 'absent', tunnel: 'absent' }, overrides: { core: true, tunnel: null } },
     ] as RegistryObservation[]) {
       const f = await fixture(); f.setRegistry(registry);
       await expect(inspectInstallation(account, f.io)).rejects.toThrow(rejected);
     }
+  });
+  it('accepts an inert explicit enabled override after a complete uninstall', async () => {
+    const f = await fixture();
+    f.setRegistry({
+      jobs: { core: 'absent', tunnel: 'absent' },
+      overrides: { core: false, tunnel: null },
+    });
+    expect(await inspectInstallation(account, f.io)).toEqual({
+      owned: true,
+      safePaths: true,
+      digest: null,
+      present: { core: false, tunnel: false },
+      enabled: { core: false, tunnel: false },
+    });
   });
   it.each([false, true])('verifies stopped installation with tunnel=%s without mutating bytes or reading secrets', async tunnel => {
     const f = await fixture(true, tunnel); const before = await f.snapshot();
