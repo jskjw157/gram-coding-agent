@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApprovalService, type ApprovalRecord, type ApprovalStore } from './approval-service.js';
 import { normalizeExecutableCommand, normalizeShellCommand } from './command-parser.js';
@@ -272,12 +272,11 @@ describe('shell filesystem target expansion fail-closed boundary', () => {
   ] as const)('keeps quoted or escaped filesystem target literal: %s', (command, targets) => {
     const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
     tempDirs.push(root);
-    if (targets[0] === '~/tmpfile') {
-      mkdirSync(join(root, '~'), { recursive: true });
-      writeFileSync(join(root, '~', 'tmpfile'), 'literal');
-    } else {
-      writeFileSync(join(root, '*.log'), 'literal');
-    }
+    const literalTarget = targets[0];
+    if (literalTarget === undefined) throw new Error('literal target missing');
+    const literalPath = join(root, ...literalTarget.split('/'));
+    mkdirSync(dirname(literalPath), { recursive: true });
+    writeFileSync(literalPath, 'literal');
 
     const [operation] = normalizeShellCommand(command, root);
     expect(operation?.requestedTargets).toEqual(targets);
