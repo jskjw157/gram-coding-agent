@@ -55,7 +55,7 @@ async function boundedHealth(
   role: Role,
   observer: ReturnType<typeof createInstalledHealthObserver>,
 ): Promise<boolean> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + 60_000;
   do {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2_500);
