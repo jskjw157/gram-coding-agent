@@ -15,6 +15,85 @@ export interface NormalizedOperation {
   pathResolutionFailed: boolean;
 }
 
+const UNSUPPORTED_SHELL_SYNTAX_REASON =
+  'Unsupported shell syntax: redirection and dynamic command substitution are not supported';
+
+export class UnsupportedShellSyntaxError extends Error {
+  constructor() {
+    super(UNSUPPORTED_SHELL_SYNTAX_REASON);
+    this.name = 'UnsupportedShellSyntaxError';
+  }
+}
+
+function isDollar(char: string): boolean {
+  return char.charCodeAt(0) === 36;
+}
+
+function isBacktick(char: string): boolean {
+  return char.charCodeAt(0) === 96;
+}
+
+/**
+ * Reject shell syntax whose side effects are not modeled by this parser.
+ * Redirection is active outside quotes. Dynamic command substitution remains
+ * active inside double quotes, but single quotes and backslash escapes keep
+ * their contents literal under the parser's existing escaping model.
+ */
+function assertSupportedShellSyntax(command: string): void {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === undefined) break;
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (
+        (isDollar(char) && command[index + 1] === '(') ||
+        isBacktick(char)
+      ) {
+        throw new UnsupportedShellSyntaxError();
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '>' || char === '<') {
+      throw new UnsupportedShellSyntaxError();
+    }
+
+    if (
+      (isDollar(char) && command[index + 1] === '(') ||
+      isBacktick(char)
+    ) {
+      throw new UnsupportedShellSyntaxError();
+    }
+  }
+}
+
 interface CommandSegment {
   text: string;
   precededBy: ShellSeparator;
@@ -183,6 +262,7 @@ function canonicalizeTargets(
 }
 
 export function normalizeShellCommand(command: string, cwd: string): NormalizedOperation[] {
+  assertSupportedShellSyntax(command);
   const normalizedCwd = resolve(cwd);
   return splitShellComposition(command).flatMap((segment) => {
     const unwrapped = unwrapCommand(tokenize(segment.text));
