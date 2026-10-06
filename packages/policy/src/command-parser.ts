@@ -29,6 +29,10 @@ function isDollar(char: string): boolean {
   return char.charCodeAt(0) === 36;
 }
 
+function isBacktick(char: string): boolean {
+  return char.charCodeAt(0) === 96;
+}
+
 /**
  * Reject shell syntax whose side effects are not modeled by this parser.
  * Redirection is active outside quotes. Dynamic command substitution remains
@@ -63,7 +67,10 @@ function assertSupportedShellSyntax(command: string): void {
         quote = null;
         continue;
       }
-      if (isDollar(char) && command[index + 1] === '(') {
+      if (
+        (isDollar(char) && command[index + 1] === '(') ||
+        isBacktick(char)
+      ) {
         throw new UnsupportedShellSyntaxError();
       }
       continue;
@@ -78,7 +85,10 @@ function assertSupportedShellSyntax(command: string): void {
       throw new UnsupportedShellSyntaxError();
     }
 
-    if (isDollar(char) && command[index + 1] === '(') {
+    if (
+      (isDollar(char) && command[index + 1] === '(') ||
+      isBacktick(char)
+    ) {
       throw new UnsupportedShellSyntaxError();
     }
   }
