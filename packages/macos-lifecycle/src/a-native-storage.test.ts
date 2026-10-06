@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,6 +38,19 @@ describe('A fixed native install storage', () => {
     expect(await f.storage.publish.readStaged('configuration')).toBeNull();
     expect(await f.storage.publish.readLive('configuration')).toEqual(bytes);
     expect(await f.storage.presence('configuration')).toBe('file');
+  });
+
+  it('publishes nonsecret service metadata as owner-writable but runtime-readable 0644', async () => {
+    const f = await fixture();
+    const bytes = Buffer.from('metadata');
+    for (const kind of ['configuration', 'manifest', 'journal', 'core'] as const) {
+      await f.storage.publish.stageFile(kind, bytes);
+      await f.storage.publish.publishFile(kind, bytes);
+    }
+    expect((await stat(`${f.anchor}/app/config/service.json`)).mode & 0o777).toBe(0o644);
+    expect((await stat(`${f.anchor}/app/config/installation.json`)).mode & 0o777).toBe(0o644);
+    expect((await stat(`${f.anchor}/app/config/install-journal.json`)).mode & 0o777).toBe(0o644);
+    expect((await stat(`${f.anchor}/Library/LaunchDaemons/com.haar.gram-agent.core.plist`)).mode & 0o777).toBe(0o644);
   });
 
   it('uses a durable fixed install lock and never steals an existing lock', async () => {
