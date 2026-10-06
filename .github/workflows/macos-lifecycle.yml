@@ -143,13 +143,19 @@ jobs:
           label='com.haar.gram-agent.ci-override-probe'
           sudo /bin/launchctl enable "system/$label"
           output="$(sudo /bin/launchctl print-disabled system)"
-          if /usr/bin/grep -Fq "\"$label\" => false" <<<"$output"; then
-            echo 'LAUNCHD_ENABLE_LEAVES_FALSE_OVERRIDE=true'
-          elif /usr/bin/grep -Fq "\"$label\"" <<<"$output"; then
-            echo 'LAUNCHD_ENABLE_OVERRIDE_FORMAT=unexpected' >&2
+          line="$(/usr/bin/grep -F "\"$label\"" <<<"$output" | /usr/bin/head -n 1 || true)"
+          if [[ -z "$line" ]]; then
+            echo 'LAUNCHD_ENABLE_REMOVES_OVERRIDE=true'
+          elif [[ "$line" == *'=> false'* || "$line" == *'=> enabled'* ]]; then
+            echo 'LAUNCHD_ENABLE_LEAVES_ENABLED_OVERRIDE=true'
+            echo "LAUNCHD_OVERRIDE_LINE=$line"
+          elif [[ "$line" == *'=> true'* || "$line" == *'=> disabled'* ]]; then
+            echo 'LAUNCHD_ENABLE_LEFT_DISABLED_OVERRIDE=true' >&2
+            echo "LAUNCHD_OVERRIDE_LINE=$line" >&2
             exit 1
           else
-            echo 'LAUNCHD_ENABLE_REMOVES_OVERRIDE=true'
+            echo "LAUNCHD_OVERRIDE_LINE=$line" >&2
+            exit 1
           fi
       - name: Assemble and smoke-test self-contained core release
         if: runner.os == 'macOS'
