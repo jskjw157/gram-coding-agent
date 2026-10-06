@@ -3,7 +3,7 @@ import type { CliDeps, ExpectedInstallRequest, LocalControlAction } from './cli-
 import { preview, reviewToken } from './preflight.js';
 import { createMacInspector, installPaths } from './adapters/native-inspector.js';
 import { createInstalledRuntimeReviewSource, createSystemBootstrapAclProbe } from './a-system-sources.js';
-import { readSystemCandidateConfig } from './a-candidate-config.js';
+import { readSystemCandidateConfigMetadata } from './a-candidate-config.js';
 import { createSystemNativeInstallPorts, createSystemNativeRunningControlPorts } from './a-native-install.js';
 import { createSystemDiagnosticEvidence } from './a-native-diagnostic.js';
 import { apply } from './install-service.js';
@@ -74,7 +74,7 @@ export function createSystemOperatorCliDeps(output: CliDeps['output']): CliDeps 
   const acl = createSystemBootstrapAclProbe();
 
   const candidate = async (): Promise<ServiceConfig | null> => {
-    try { return await readSystemCandidateConfig(acl); }
+    try { return await readSystemCandidateConfigMetadata(acl); }
     catch { return null; }
   };
 
