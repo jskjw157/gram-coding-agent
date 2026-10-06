@@ -173,7 +173,21 @@ jobs:
             fi
             sleep 0.1
           done
-          test "$healthy" -eq 1
+          if [[ "$healthy" -ne 1 ]]; then
+            echo 'CORE_SMOKE_FAILED' >&2
+            if [[ -s "$RUNNER_TEMP/core-smoke.stderr" ]]; then
+              /bin/cat "$RUNNER_TEMP/core-smoke.stderr" >&2
+            fi
+            if [[ -s "$RUNNER_TEMP/core-smoke.stdout" ]]; then
+              /bin/cat "$RUNNER_TEMP/core-smoke.stdout" >&2
+            fi
+            set +e
+            wait "$core_pid"
+            core_exit=$?
+            set -e
+            echo "CORE_SMOKE_EXIT=$core_exit" >&2
+            exit 1
+          fi
           /usr/bin/grep -q '"status":"healthy"' "$RUNNER_TEMP/health.json"
           test "$(/usr/bin/curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3847/mcp)" = "401"
           cleanup
