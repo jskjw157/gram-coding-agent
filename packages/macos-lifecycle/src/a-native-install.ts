@@ -27,7 +27,7 @@ import {
   createSystemNativeInstallStorage,
   type NativeInstallStorage,
 } from './a-native-storage.js';
-import { createSystemServiceHandle } from './a-native-services.js';
+import { createSystemServiceHandle, normalizeAbsentSystemServiceOverride } from './a-native-services.js';
 
 const fileMap: Readonly<Record<InstallFile, PublishKind>> = Object.freeze({
   configuration: 'configuration',
@@ -254,6 +254,8 @@ export function createNativeInstallPortsAt(options: NativeInstallPortsOptions): 
             };
           }
 
+          const normalized = await normalizeAbsentSystemServiceOverride(kind);
+          if (normalized.ok !== true) return false;
           if (await storage.removeLiveIfMatches(kind, expectedBytes) !== true) return false;
           if (cleanup === null) return true;
 
