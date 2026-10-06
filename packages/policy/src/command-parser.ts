@@ -193,8 +193,487 @@ function tokenize(segment: string): ShellToken[] {
       continue;
     }
     if (quote !== null) {
-      if (char === quote) quote = null;
-      else buffer += char;
+      if (char === quote) {
+        quote = null;
+      } else {
+        if (quote === '"' && char === '
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      flush();
+      continue;
+    }
+
+    if (
+      (char === '~' && buffer.length === 0) ||
+      char === '*' ||
+      char === '?' ||
+      char === '[' ||
+      char === '
+    buffer += char;
+  }
+  flush();
+  return tokens;
+}
+
+function unwrapCommand(tokens: ShellToken[]): UnwrappedCommand | null {
+  let offset = 0;
+  if (tokens[offset]?.value === 'sudo') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-')) offset += 1;
+      else break;
+    }
+  }
+
+  if (tokens[offset]?.value === 'env') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-') || token?.includes('=')) offset += 1;
+      else break;
+    }
+  }
+
+  const executable = tokens[offset]?.value;
+  if (executable === undefined) return null;
+  const argTokens = tokens.slice(offset + 1);
+  return {
+    executable,
+    args: argTokens.map((token) => token.value),
+    argPathnameExpansion: argTokens.map((token) => token.pathnameExpansion),
+  };
+}
+
+function requestedPathTargetIndexes(executable: string, args: readonly string[]): number[] {
+  const indexes: number[] = [];
+  if (executable === 'rm' || executable === 'rmdir' || executable === 'cp' || executable === 'mv') {
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+    return indexes;
+  }
+  if (executable === 'chmod' || executable === 'chown') {
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
+function requestedPathTargets(executable: string, args: readonly string[]): string[] {
+  return requestedPathTargetIndexes(executable, args).flatMap((index) => {
+    const value = args[index];
+    return value === undefined ? [] : [value];
+  });
+}
+
+function canonicalizeTargets(
+  requestedTargets: readonly string[],
+  cwd: string,
+): { canonicalTargets: string[]; pathResolutionFailed: boolean } {
+  const canonicalTargets: string[] = [];
+  let pathResolutionFailed = false;
+
+  for (const requested of requestedTargets) {
+    const absolute = isAbsolute(requested) ? resolve(requested) : resolve(cwd, requested);
+    try {
+      canonicalTargets.push(realpathSync(absolute));
+    } catch {
+      canonicalTargets.push(absolute);
+      pathResolutionFailed = true;
+    }
+  }
+  return { canonicalTargets, pathResolutionFailed };
+}
+
+export function normalizeShellCommand(command: string, cwd: string): NormalizedOperation[] {
+  assertSupportedShellSyntax(command);
+  const normalizedCwd = resolve(cwd);
+  return splitShellComposition(command).flatMap((segment) => {
+    const unwrapped = unwrapCommand(tokenize(segment.text));
+    if (unwrapped === null) return [];
+    const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
+    if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const requestedTargets = targetIndexes.flatMap((index) => {
+      const value = unwrapped.args[index];
+      return value === undefined ? [] : [value];
+    });
+    const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(requestedTargets, normalizedCwd);
+    return [{
+      type: 'SHELL_COMMAND' as const,
+      raw: segment.text,
+      executable: unwrapped.executable,
+      args: unwrapped.args,
+      cwd: normalizedCwd,
+      precededBy: segment.precededBy,
+      requestedTargets,
+      canonicalTargets,
+      pathResolutionFailed,
+    }];
+  });
+}
+
+
+export function normalizeExecutableCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): NormalizedOperation {
+  if (executable.trim().length === 0) {
+    throw new Error('Executable must not be empty');
+  }
+
+  const normalizedCwd = resolve(cwd);
+  const requestedTargets = requestedPathTargets(executable, args);
+  const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(
+    requestedTargets,
+    normalizedCwd,
+  );
+
+  return {
+    type: 'SHELL_COMMAND',
+    raw: [executable, ...args].join(' '),
+    executable,
+    args: [...args],
+    cwd: normalizedCwd,
+    precededBy: null,
+    requestedTargets,
+    canonicalTargets,
+    pathResolutionFailed,
+  };
+}
+) pathnameExpansion = true;
+        buffer += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      flush();
+      continue;
+    }
+
+    if (
+      (char === '~' && buffer.length === 0) ||
+      char === '*' ||
+      char === '?' ||
+      char === '['
+    ) {
+      pathnameExpansion = true;
+    }
+    buffer += char;
+  }
+  flush();
+  return tokens;
+}
+
+function unwrapCommand(tokens: ShellToken[]): UnwrappedCommand | null {
+  let offset = 0;
+  if (tokens[offset]?.value === 'sudo') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-')) offset += 1;
+      else break;
+    }
+  }
+
+  if (tokens[offset]?.value === 'env') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-') || token?.includes('=')) offset += 1;
+      else break;
+    }
+  }
+
+  const executable = tokens[offset]?.value;
+  if (executable === undefined) return null;
+  const argTokens = tokens.slice(offset + 1);
+  return {
+    executable,
+    args: argTokens.map((token) => token.value),
+    argPathnameExpansion: argTokens.map((token) => token.pathnameExpansion),
+  };
+}
+
+function requestedPathTargetIndexes(executable: string, args: readonly string[]): number[] {
+  const indexes: number[] = [];
+  if (executable === 'rm' || executable === 'rmdir' || executable === 'cp' || executable === 'mv') {
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+    return indexes;
+  }
+  if (executable === 'chmod' || executable === 'chown') {
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
+function requestedPathTargets(executable: string, args: readonly string[]): string[] {
+  return requestedPathTargetIndexes(executable, args).flatMap((index) => {
+    const value = args[index];
+    return value === undefined ? [] : [value];
+  });
+}
+
+function canonicalizeTargets(
+  requestedTargets: readonly string[],
+  cwd: string,
+): { canonicalTargets: string[]; pathResolutionFailed: boolean } {
+  const canonicalTargets: string[] = [];
+  let pathResolutionFailed = false;
+
+  for (const requested of requestedTargets) {
+    const absolute = isAbsolute(requested) ? resolve(requested) : resolve(cwd, requested);
+    try {
+      canonicalTargets.push(realpathSync(absolute));
+    } catch {
+      canonicalTargets.push(absolute);
+      pathResolutionFailed = true;
+    }
+  }
+  return { canonicalTargets, pathResolutionFailed };
+}
+
+export function normalizeShellCommand(command: string, cwd: string): NormalizedOperation[] {
+  assertSupportedShellSyntax(command);
+  const normalizedCwd = resolve(cwd);
+  return splitShellComposition(command).flatMap((segment) => {
+    const unwrapped = unwrapCommand(tokenize(segment.text));
+    if (unwrapped === null) return [];
+    const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
+    if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const requestedTargets = targetIndexes.flatMap((index) => {
+      const value = unwrapped.args[index];
+      return value === undefined ? [] : [value];
+    });
+    const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(requestedTargets, normalizedCwd);
+    return [{
+      type: 'SHELL_COMMAND' as const,
+      raw: segment.text,
+      executable: unwrapped.executable,
+      args: unwrapped.args,
+      cwd: normalizedCwd,
+      precededBy: segment.precededBy,
+      requestedTargets,
+      canonicalTargets,
+      pathResolutionFailed,
+    }];
+  });
+}
+
+
+export function normalizeExecutableCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): NormalizedOperation {
+  if (executable.trim().length === 0) {
+    throw new Error('Executable must not be empty');
+  }
+
+  const normalizedCwd = resolve(cwd);
+  const requestedTargets = requestedPathTargets(executable, args);
+  const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(
+    requestedTargets,
+    normalizedCwd,
+  );
+
+  return {
+    type: 'SHELL_COMMAND',
+    raw: [executable, ...args].join(' '),
+    executable,
+    args: [...args],
+    cwd: normalizedCwd,
+    precededBy: null,
+    requestedTargets,
+    canonicalTargets,
+    pathResolutionFailed,
+  };
+}
+ ||
+      char === '{'
+    ) {
+      pathnameExpansion = true;
+    }
+    buffer += char;
+  }
+  flush();
+  return tokens;
+}
+
+function unwrapCommand(tokens: ShellToken[]): UnwrappedCommand | null {
+  let offset = 0;
+  if (tokens[offset]?.value === 'sudo') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-')) offset += 1;
+      else break;
+    }
+  }
+
+  if (tokens[offset]?.value === 'env') {
+    offset += 1;
+    while (offset < tokens.length) {
+      const token = tokens[offset]?.value;
+      if (token === '--') {
+        offset += 1;
+        break;
+      }
+      if (token?.startsWith('-') || token?.includes('=')) offset += 1;
+      else break;
+    }
+  }
+
+  const executable = tokens[offset]?.value;
+  if (executable === undefined) return null;
+  const argTokens = tokens.slice(offset + 1);
+  return {
+    executable,
+    args: argTokens.map((token) => token.value),
+    argPathnameExpansion: argTokens.map((token) => token.pathnameExpansion),
+  };
+}
+
+function requestedPathTargetIndexes(executable: string, args: readonly string[]): number[] {
+  const indexes: number[] = [];
+  if (executable === 'rm' || executable === 'rmdir' || executable === 'cp' || executable === 'mv') {
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+    return indexes;
+  }
+  if (executable === 'chmod' || executable === 'chown') {
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+  }
+  return indexes;
+}
+
+function requestedPathTargets(executable: string, args: readonly string[]): string[] {
+  return requestedPathTargetIndexes(executable, args).flatMap((index) => {
+    const value = args[index];
+    return value === undefined ? [] : [value];
+  });
+}
+
+function canonicalizeTargets(
+  requestedTargets: readonly string[],
+  cwd: string,
+): { canonicalTargets: string[]; pathResolutionFailed: boolean } {
+  const canonicalTargets: string[] = [];
+  let pathResolutionFailed = false;
+
+  for (const requested of requestedTargets) {
+    const absolute = isAbsolute(requested) ? resolve(requested) : resolve(cwd, requested);
+    try {
+      canonicalTargets.push(realpathSync(absolute));
+    } catch {
+      canonicalTargets.push(absolute);
+      pathResolutionFailed = true;
+    }
+  }
+  return { canonicalTargets, pathResolutionFailed };
+}
+
+export function normalizeShellCommand(command: string, cwd: string): NormalizedOperation[] {
+  assertSupportedShellSyntax(command);
+  const normalizedCwd = resolve(cwd);
+  return splitShellComposition(command).flatMap((segment) => {
+    const unwrapped = unwrapCommand(tokenize(segment.text));
+    if (unwrapped === null) return [];
+    const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
+    if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const requestedTargets = targetIndexes.flatMap((index) => {
+      const value = unwrapped.args[index];
+      return value === undefined ? [] : [value];
+    });
+    const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(requestedTargets, normalizedCwd);
+    return [{
+      type: 'SHELL_COMMAND' as const,
+      raw: segment.text,
+      executable: unwrapped.executable,
+      args: unwrapped.args,
+      cwd: normalizedCwd,
+      precededBy: segment.precededBy,
+      requestedTargets,
+      canonicalTargets,
+      pathResolutionFailed,
+    }];
+  });
+}
+
+
+export function normalizeExecutableCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): NormalizedOperation {
+  if (executable.trim().length === 0) {
+    throw new Error('Executable must not be empty');
+  }
+
+  const normalizedCwd = resolve(cwd);
+  const requestedTargets = requestedPathTargets(executable, args);
+  const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(
+    requestedTargets,
+    normalizedCwd,
+  );
+
+  return {
+    type: 'SHELL_COMMAND',
+    raw: [executable, ...args].join(' '),
+    executable,
+    args: [...args],
+    cwd: normalizedCwd,
+    precededBy: null,
+    requestedTargets,
+    canonicalTargets,
+    pathResolutionFailed,
+  };
+}
+) pathnameExpansion = true;
+        buffer += char;
+      }
       continue;
     }
     if (char === "'" || char === '"') {
