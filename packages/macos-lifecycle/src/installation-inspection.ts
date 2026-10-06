@@ -75,8 +75,12 @@ export async function inspectInstallation(account: LocalAccount, io: Installatio
     };
     const present = { core: false, tunnel: false };
     if (presence.manifest === 'absent') {
+      // macOS launchctl has no per-service "delete override" operation.
+      // `launchctl enable system/<label>` leaves an explicit enabled/false
+      // override. With no job and no managed bytes this is inert and is the
+      // canonical post-uninstall state; disabled/true remains residual state.
       if (files.some(key => presence[key] !== 'absent')
-        || roles.some(role => firstRegistry.overrides[role] !== null)) refuse();
+        || roles.some(role => firstRegistry.overrides[role] === true)) refuse();
     } else {
       if (presence.configuration !== 'file' || presence.core !== 'file') refuse();
       for (const key of files) if (presence[key] === 'file') snapshots.set(key, await read(key));
