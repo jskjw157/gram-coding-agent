@@ -97,6 +97,20 @@ describe('installation identity from bounded trusted bytes', () => {
       enabled: { core: false, tunnel: false },
     });
   });
+  it('accepts inert enabled override for an absent tunnel role on a core-only install', async () => {
+    const f = await fixture(true, false);
+    f.setRegistry({
+      jobs: { core: 'absent', tunnel: 'absent' },
+      overrides: { core: true, tunnel: false },
+    });
+    const evidence = await inspectInstallation(account, f.io);
+    expect(evidence).toMatchObject({
+      owned: true,
+      present: { core: true, tunnel: false },
+      enabled: { core: false, tunnel: false },
+    });
+  });
+
   it.each([false, true])('verifies stopped installation with tunnel=%s without mutating bytes or reading secrets', async tunnel => {
     const f = await fixture(true, tunnel); const before = await f.snapshot();
     const evidence = await inspectInstallation(account, f.io);
