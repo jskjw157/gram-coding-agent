@@ -29,6 +29,23 @@ function data(value: unknown): Record<string, unknown> {
 function isDigest(value: unknown): value is string {
   return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 }
+export function reviewToken(
+  config: ServiceConfig,
+  releaseDigest: string,
+  previousInstallDigest: string | null,
+): string {
+  const normalized = parseConfig(config);
+  if (!isDigest(releaseDigest) || releaseDigest !== normalized.releaseDigest
+    || !(previousInstallDigest === null || isDigest(previousInstallDigest))) {
+    throw new Error('INVALID_CONFIG');
+  }
+  return createHash('sha256').update(JSON.stringify({
+    config: normalized,
+    releaseDigest,
+    previousInstallDigest,
+  }), 'utf8').digest('hex');
+}
+
 function accountNumber(value: unknown, minimum: number): boolean {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value < 0xffff_ffff;
 }
@@ -96,9 +113,7 @@ export async function preview(config: ServiceConfig, expectedDigest: string, ins
     const code = firstRefusal(facts);
     if (code !== 'OK' || !(previousInstallDigest === null || isDigest(previousInstallDigest))) return refused(code);
     // This preview field is the composite review token, not configDigest(config).
-    const reviewDigest = createHash('sha256').update(JSON.stringify({
-      config: normalized, releaseDigest: expectedDigest, previousInstallDigest,
-    }), 'utf8').digest('hex');
+    const reviewDigest = reviewToken(normalized, expectedDigest, previousInstallDigest);
     return { ok: true, code: 'OK', configDigest: reviewDigest, previousInstallDigest,
       releaseDigest: expectedDigest, roles };
   } catch {
