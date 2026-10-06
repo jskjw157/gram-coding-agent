@@ -248,9 +248,27 @@ describe('shell filesystem target expansion fail-closed boundary', () => {
   });
 
   it.each([
+    ['parameter expansion', 'rm $HOME/tmpfile', '$HOME/tmpfile'],
+    ['double-quoted parameter expansion', 'rm "${HOME}/tmpfile"', '${HOME}/tmpfile'],
+    ['brace expansion', 'rm file{1,2}.log', 'file{1,2}.log'],
+  ] as const)('rejects %s when a literal decoy target exists', (_label, command, literalTarget) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    const targetPath = join(root, ...literalTarget.split('/'));
+    mkdirSync(join(targetPath, '..'), { recursive: true });
+    writeFileSync(targetPath, 'literal-decoy');
+
+    expect(() => normalizeShellCommand(command, root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+  it.each([
     ["rm '~/tmpfile'", ['~/tmpfile']],
     ['rm "*.log"', ['*.log']],
     ['rm \\*.log', ['*.log']],
+    ["rm '$HOME/tmpfile'", ['$HOME/tmpfile']],
+    ['rm "\\$HOME/tmpfile"', ['$HOME/tmpfile']],
+    ["rm 'file{1,2}.log'", ['file{1,2}.log']],
   ] as const)('keeps quoted or escaped filesystem target literal: %s', (command, targets) => {
     const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
     tempDirs.push(root);
