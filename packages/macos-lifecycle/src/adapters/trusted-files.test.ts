@@ -63,6 +63,22 @@ describe('descriptor-bound trusted files', () => {
     await createTrustedFiles(root, uid, probe).read('sub/file.txt', 64);
     expect(directories).toBeGreaterThanOrEqual(2); expect(files).toBeGreaterThanOrEqual(1);
   });
+  it('reuses ACL evidence only while the exact stat identity is unchanged', async () => {
+    let calls = 0;
+    const probe: AclProbe = async () => { calls++; return true; };
+    const files = createTrustedFiles(root, uid, probe);
+    await files.read('sub/file.txt', 64);
+    const first = calls;
+    expect(first).toBeGreaterThanOrEqual(3);
+
+    await files.hash('sub/file.txt', 64);
+    expect(calls).toBe(first);
+
+    await chmod(join(root, 'sub'), 0o755);
+    await files.read('sub/file.txt', 64);
+    expect(calls).toBeGreaterThan(first);
+  });
+
   it('rejects path replacement while the original file descriptor is open', async () => {
     let changed = false;
     const probe: AclProbe = async handle => {
