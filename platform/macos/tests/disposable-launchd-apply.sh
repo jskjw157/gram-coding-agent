@@ -18,7 +18,8 @@ fi
 SOURCE_RELEASE="$1"
 ACL_HELPER="$2"
 EXPECTED_DIGEST="$3"
-ROOT='/Library/Application Support/HAAR/GramAgent'
+VENDOR_ROOT='/Library/Application Support/HAAR'
+ROOT="$VENDOR_ROOT/GramAgent"
 CORE_LABEL='com.haar.gram-agent.core'
 TUNNEL_LABEL='com.haar.gram-agent.tunnel'
 CORE_PLIST="/Library/LaunchDaemons/$CORE_LABEL.plist"
@@ -74,8 +75,8 @@ RELEASE_ID="$(/usr/bin/plutil -extract releaseId raw -o - "$SOURCE_RELEASE/relea
 [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo 'INVALID_RELEASE_ID' >&2; exit 2; }
 DEST_RELEASE="$ROOT/releases/$RELEASE_ID"
 /bin/mkdir -p "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap/bin" "$ROOT/run" "$ROOT/state" "$ROOT/secrets" "$ROOT/logs"
-/usr/sbin/chown root:wheel "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
-/bin/chmod 0755 "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
+/usr/sbin/chown root:wheel "$VENDOR_ROOT" "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
+/bin/chmod 0755 "$VENDOR_ROOT" "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
 /usr/bin/ditto "$SOURCE_RELEASE" "$DEST_RELEASE"
 /usr/sbin/chown -R root:wheel "$DEST_RELEASE"
 /usr/bin/install -o root -g wheel -m 0755 "$ACL_HELPER" "$ROOT/bootstrap/bin/file-acl"
