@@ -1,10 +1,10 @@
 import type { Preview, Result, ServiceConfig } from './contracts.js';
 import type { CliDeps, ExpectedInstallRequest, LocalControlAction } from './cli-contracts.js';
-import { preview } from './preflight.js';
+import { preview, reviewToken } from './preflight.js';
 import { createMacInspector, installPaths } from './adapters/native-inspector.js';
 import { createInstalledRuntimeReviewSource, createSystemBootstrapAclProbe } from './a-system-sources.js';
 import { readSystemCandidateConfig } from './a-candidate-config.js';
-import { createSystemNativeInstallPorts } from './a-native-install.js';
+import { createSystemNativeInstallPorts, createSystemNativeRunningControlPorts } from './a-native-install.js';
 import { createSystemDiagnosticEvidence } from './a-native-diagnostic.js';
 import { apply } from './install-service.js';
 import { control } from './local-control.js';
@@ -107,8 +107,24 @@ export function createSystemOperatorCliDeps(output: CliDeps['output']): CliDeps 
       const config = await candidate();
       if (config === null) return unavailable();
       const current = await reviewedPreview(config, acl);
-      if (!matchesExpected(current, request)) return unavailable('CONFIG_CHANGED');
       let ports = createSystemNativeInstallPorts(config);
+      if (!matchesExpected(current, request)) {
+        if (action !== 'stop' && action !== 'restart' && action !== 'uninstall') {
+          return unavailable('CONFIG_CHANGED');
+        }
+        try {
+          const running = createSystemNativeRunningControlPorts(config);
+          const prior = await running.readPrior();
+          if (prior.digest === null
+            || request.expectedInstallDigest !== prior.digest
+            || request.expectedPreviewDigest !== reviewToken(config, config.releaseDigest, prior.digest)) {
+            return unavailable('CONFIG_CHANGED');
+          }
+          ports = running;
+        } catch {
+          return unavailable('CONFIG_CHANGED');
+        }
+      }
       if (action === 'reset-failure') {
         const account = await inspectMacAccount();
         if (account === null || account.admin !== false) return unavailable('ACCOUNT_INVALID');
