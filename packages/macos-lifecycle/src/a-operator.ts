@@ -2,12 +2,16 @@ import type { Preview, Result, ServiceConfig } from './contracts.js';
 import type { CliDeps, ExpectedInstallRequest, LocalControlAction } from './cli-contracts.js';
 import { preview } from './preflight.js';
 import { createMacInspector } from './adapters/native-inspector.js';
-import { createSystemBootstrapAclProbe } from './a-system-sources.js';
+import { createInstalledRuntimeReviewSource, createSystemBootstrapAclProbe } from './a-system-sources.js';
 import { readSystemCandidateConfig } from './a-candidate-config.js';
 import { createSystemNativeInstallPorts } from './a-native-install.js';
 import { createSystemDiagnosticEvidence } from './a-native-diagnostic.js';
 import { apply } from './install-service.js';
 import { control } from './local-control.js';
+import { root } from './contracts.js';
+import { inspectMacAccount } from './adapters/macos-inspection.js';
+import { bindReviewedCoreRuntime } from './adapters/runtime-authority.js';
+import { createReviewedLocalControlPorts } from './a-integration.js';
 
 function unavailable(code: Result['code'] = 'INVALID_CONFIG'): Result {
   return { ok: false, code };
@@ -78,7 +82,31 @@ export function createSystemOperatorCliDeps(output: CliDeps['output']): CliDeps 
       if (config === null) return unavailable();
       const current = await reviewedPreview(config, acl);
       if (!matchesExpected(current, request)) return unavailable('CONFIG_CHANGED');
-      const result = await control(action, createSystemNativeInstallPorts(config));
+      let ports = createSystemNativeInstallPorts(config);
+      if (action === 'reset-failure') {
+        const account = await inspectMacAccount();
+        if (account === null || account.admin !== false) return unavailable('ACCOUNT_INVALID');
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5_000);
+        try {
+          const review = await createInstalledRuntimeReviewSource({
+            anchor: '/',
+            relative: root.slice(1),
+            ownerUid: 0,
+            runtimeUid: account.uid,
+            runtimeGid: account.gid,
+            acl,
+          }).read(controller.signal);
+          if (review === null || controller.signal.aborted) return unavailable('PARTIAL_INSTALL');
+          const runtime = await bindReviewedCoreRuntime(review, acl, controller.signal);
+          if (runtime === null || controller.signal.aborted) return unavailable('PARTIAL_INSTALL');
+          ports = createReviewedLocalControlPorts(ports, runtime);
+        } finally {
+          clearTimeout(timer);
+          controller.abort();
+        }
+      }
+      const result = await control(action, ports);
       return result.ok === true && result.code === 'OK'
         ? { ok: true, code: 'OK' }
         : { ok: false, code: result.code };
