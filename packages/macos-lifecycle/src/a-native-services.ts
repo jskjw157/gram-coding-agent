@@ -3,10 +3,12 @@ import type { Role } from './contracts.js';
 import type { InstallResult, ServiceHandle } from './installation-transaction/contracts.js';
 import {
   createLaunchctlServices,
+  launchctlVector,
   LAUNCHCTL_BIN,
   type LaunchctlObservation,
   type LaunchctlRunner,
 } from './adapters/launchctl.js';
+import { inspectMacRegistry } from './adapters/macos-service-probes.js';
 import type { AclProbe } from './adapters/trusted-files.js';
 import { createInstalledHealthObserver } from './a-native-observer.js';
 
@@ -96,4 +98,38 @@ export function createSystemServiceHandle(acl: AclProbe): ServiceHandle {
       return await boundedHealth(role, observer);
     },
   });
+}
+
+
+/**
+ * macOS has no per-label "delete disabled override" primitive. Measured on
+ * hosted macOS: `launchctl enable system/<label>` leaves an explicit
+ * enabled/false override. Normalize a stopped/absent fixed service to that
+ * inert state before removing its plist, then verify both job absence and the
+ * exact enabled override. No bootstrap or arbitrary label is possible here.
+ */
+export async function normalizeAbsentSystemServiceOverride(role: Role): Promise<InstallResult> {
+  try {
+    const runner = createSystemLaunchctlRunner();
+    const services = createLaunchctlServices(runner);
+    if (await services.inspect(role) !== 'absent') return { ok: false, code: 'PARTIAL_INSTALL' };
+
+    const result = await runner(launchctlVector('enable', role));
+    if (result.code !== 0) {
+      if (/permission|not authorized|operation not permitted/i.test(result.stderr)) {
+        return { ok: false, code: 'NOT_AUTHORIZED' };
+      }
+      return { ok: false, code: 'PARTIAL_INSTALL' };
+    }
+
+    const registry = await inspectMacRegistry();
+    if (registry === null
+      || registry.jobs[role] !== 'absent'
+      || registry.overrides[role] !== false) {
+      return { ok: false, code: 'PARTIAL_INSTALL' };
+    }
+    return { ok: true, code: 'OK' };
+  } catch {
+    return { ok: false, code: 'PARTIAL_INSTALL' };
+  }
 }
