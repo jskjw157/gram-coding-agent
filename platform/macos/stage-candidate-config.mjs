@@ -79,7 +79,7 @@ async function main() {
   const temporary = join(CONFIG_DIR, '.candidate-service.json.write');
   let handle;
   try {
-    handle = await open(temporary, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    handle = await open(temporary, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
     await handle.writeFile(output);
     await handle.sync();
     await rename(temporary, TARGET);
