@@ -120,12 +120,12 @@ async function createExact(
   const file = await open(
     path,
     constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o600,
+    0o644,
   );
   try {
     const stat = await file.stat({ bigint: true });
     if (!stat.isFile() || stat.uid !== directory.stat.uid || stat.nlink !== 1n
-      || (stat.mode & 0o7777n) !== 0o600n) throw new Error('UNSAFE_PATH');
+      || (stat.mode & 0o7777n) !== 0o644n) throw new Error('UNSAFE_PATH');
     await file.writeFile(bytes);
     await file.sync();
     const ready = await file.stat({ bigint: true });
