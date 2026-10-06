@@ -45,6 +45,16 @@ STAGING="$TMP/staging"
 # workspace/package symlinks are computed for that exact path. Moving a deploy
 # tree afterwards can turn otherwise-internal links into escaping links.
 (cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$SOURCE/apps/agent")
+# pnpm legacy deploy adds a convenience self-link for the deployed package
+# under .pnpm/node_modules. The runtime never resolves @gram/agent from itself,
+# and keeping this link would point outside the sealed apps/agent subtree.
+self_link="$SOURCE/apps/agent/node_modules/.pnpm/node_modules/@gram/agent"
+if [[ -L "$self_link" ]]; then
+  /bin/rm "$self_link"
+elif [[ -e "$self_link" ]]; then
+  echo 'UNEXPECTED_AGENT_SELF_ENTRY' >&2
+  exit 2
+fi
 /bin/cp -R "$REPO/packages/macos-lifecycle/dist" "$SOURCE/packages/macos-lifecycle/dist"
 /bin/cp "$REPO/pnpm-lock.yaml" "$SOURCE/pnpm-lock.yaml"
 /bin/cp "$NODE_BIN" "$SOURCE/bin/node"
