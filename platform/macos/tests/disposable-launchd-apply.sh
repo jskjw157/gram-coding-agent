@@ -125,6 +125,32 @@ POST="$("$NODE" "$OPERATOR" preview --json)"
 POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$POST")"
 POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$POST")"
 
+START="$("$NODE" "$OPERATOR" start --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$START"
+/bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1 || { echo 'CORE_START_NOT_REGISTERED' >&2; exit 2; }
+for _ in {1..50}; do
+  if /usr/bin/curl -fsS --max-time 1 http://127.0.0.1:3847/healthz >/dev/null; then break; fi
+  sleep 0.1
+done
+/usr/bin/curl -fsS --max-time 2 http://127.0.0.1:3847/healthz >/dev/null || { echo 'CORE_START_NOT_HEALTHY' >&2; exit 2; }
+
+RESTART="$("$NODE" "$OPERATOR" restart --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$RESTART"
+/bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1 || { echo 'CORE_RESTART_NOT_REGISTERED' >&2; exit 2; }
+/usr/bin/curl -fsS --max-time 2 http://127.0.0.1:3847/healthz >/dev/null || { echo 'CORE_RESTART_NOT_HEALTHY' >&2; exit 2; }
+
+STOP="$("$NODE" "$OPERATOR" stop --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
+"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$STOP"
+if /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1; then
+  echo 'CORE_STOP_NOT_PARKED' >&2
+  exit 2
+fi
+
+STOPPED="$("$NODE" "$OPERATOR" preview --json)"
+"$NODE" -e 'const a=JSON.parse(process.argv[1]); const b=JSON.parse(process.argv[2]); if(!a.preview?.ok||a.preview.configDigest!==b.preview.configDigest||a.preview.previousInstallDigest!==b.preview.previousInstallDigest) process.exit(2)' "$STOPPED" "$POST"
+POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$STOPPED")"
+POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$STOPPED")"
+
 UNINSTALL="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$POST_TOKEN" --expected-install-digest "$POST_INSTALL" --json)"
 "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$UNINSTALL"
 
