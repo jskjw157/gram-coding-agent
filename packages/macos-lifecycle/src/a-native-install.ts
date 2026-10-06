@@ -8,6 +8,7 @@ import { inspectMacAccount } from './adapters/macos-inspection.js';
 import { inspectMacRegistry } from './adapters/macos-service-probes.js';
 import { createMacInspector } from './adapters/native-inspector.js';
 import { createTrustedFiles, type AclProbe } from './adapters/trusted-files.js';
+import { buildCommittedJournal, buildManifest, canonicalConfigBytes, expectedPlistBytes } from './adapters/install-files.js';
 import { inspectRuntimeDirectories } from './adapters/runtime-directories.js';
 import { createExecutionFilesAt } from './adapters/execution-files.js';
 import { createRuntimeStores } from './adapters/runtime-stores.js';
@@ -214,7 +215,73 @@ export function createNativeInstallPortsAt(options: NativeInstallPortsOptions): 
           throw new Error('PARTIAL_INSTALL');
         },
         async removeManifestOwned(kind: 'core' | 'tunnel', expectedBytes: Buffer): Promise<boolean> {
-          return storage.removeLiveIfMatches(kind, expectedBytes);
+          const finalRole = config.tunnel.enabled ? 'tunnel' : 'core';
+          if (kind === finalRole) {
+            const account = await inspectMacAccount();
+            if (account === null || account.admin !== false) return false;
+            const configBytes = canonicalConfigBytes(config);
+            const corePlist = expectedPlistBytes(config, 'core');
+            const tunnelPlist = expectedPlistBytes(config, 'tunnel');
+            if (corePlist === null) return false;
+            const manifest = buildManifest({
+              runtime: { name: 'gram-agent', uid: account.uid, gid: account.gid },
+              configBytes,
+              releaseId: config.releaseId,
+              releaseDigest: config.releaseDigest,
+              corePlist,
+              tunnelPlist,
+            });
+            const journalBytes = buildCommittedJournal(manifest.bytes);
+            const expectedMetadata: readonly [PublishKind, Buffer][] = [
+              ['configuration', configBytes],
+              ['manifest', manifest.bytes],
+              ['journal', journalBytes],
+            ];
+            for (const [metadataKind, expected] of expectedMetadata) {
+              const current = await storage.readLive(metadataKind);
+              if (current === null || !current.equals(expected)) return false;
+            }
+          }
+
+          if (await storage.removeLiveIfMatches(kind, expectedBytes) !== true) return false;
+          if (kind !== finalRole) return true;
+
+          for (const [metadataKind, expected] of [
+            ['journal', buildCommittedJournal(buildManifest({
+              runtime: {
+                name: 'gram-agent',
+                uid: (await inspectMacAccount())?.uid ?? 0,
+                gid: (await inspectMacAccount())?.gid ?? 0,
+              },
+              configBytes: canonicalConfigBytes(config),
+              releaseId: config.releaseId,
+              releaseDigest: config.releaseDigest,
+              corePlist: expectedPlistBytes(config, 'core') as Buffer,
+              tunnelPlist: expectedPlistBytes(config, 'tunnel'),
+            }).bytes)],
+          ] as const) {
+            void metadataKind;
+            void expected;
+          }
+
+          const account = await inspectMacAccount();
+          if (account === null || account.admin !== false) return false;
+          const configBytes = canonicalConfigBytes(config);
+          const corePlist = expectedPlistBytes(config, 'core');
+          const tunnelPlist = expectedPlistBytes(config, 'tunnel');
+          if (corePlist === null) return false;
+          const manifest = buildManifest({
+            runtime: { name: 'gram-agent', uid: account.uid, gid: account.gid },
+            configBytes,
+            releaseId: config.releaseId,
+            releaseDigest: config.releaseDigest,
+            corePlist,
+            tunnelPlist,
+          });
+          const journalBytes = buildCommittedJournal(manifest.bytes);
+          return await storage.removeLiveIfMatches('journal', journalBytes)
+            && await storage.removeLiveIfMatches('manifest', manifest.bytes)
+            && await storage.removeLiveIfMatches('configuration', configBytes);
         },
         async resetExecutionRecords(): Promise<InstallResult> {
           return { ok: false, code: 'PARTIAL_INSTALL' };
