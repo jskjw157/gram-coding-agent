@@ -33,7 +33,7 @@ export interface NativeInstallStorage {
   lock(): Promise<LockSession>;
   readLive(kind: PublishKind): Promise<Buffer | null>;
   presence(kind: PublishKind): Promise<'absent' | 'file'>;
-  removeLiveIfMatches(kind: 'core' | 'tunnel', expected: Buffer): Promise<boolean>;
+  removeLiveIfMatches(kind: PublishKind, expected: Buffer): Promise<boolean>;
 }
 
 const productionLayout = (acl: AclProbe): NativeInstallStorageLayout => ({
@@ -242,7 +242,7 @@ export function createNativeInstallStorageAt(
       if (value === 'directory') throw new Error('UNSAFE_PATH');
       return value;
     },
-    async removeLiveIfMatches(kind: 'core' | 'tunnel', expected: Buffer) {
+    async removeLiveIfMatches(kind: PublishKind, expected: Buffer) {
       const liveRelative = pathFor(layout, kind);
       const current = await readRelative(layout, liveRelative);
       if (current === null) return true;
