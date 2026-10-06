@@ -1,0 +1,244 @@
+name: macos-lifecycle
+on:
+  pull_request:
+    paths:
+      - 'packages/macos-lifecycle/**'
+      - 'platform/macos/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - 'tsconfig.base.json'
+      - 'vitest.config.mts'
+      - 'eslint.config.mjs'
+      - '.github/workflows/macos-lifecycle.yml'
+      - 'docs/operations/macos-service-lifecycle.md'
+permissions:
+  contents: read
+jobs:
+  lifecycle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Verify native runtime
+        shell: bash
+        run: |
+          node -e "console.log(JSON.stringify({platform:process.platform,arch:process.arch,node:process.version})); if(process.platform==='darwin' && process.arch!=='arm64') process.exit(1)"
+      - name: Frozen install in an isolated exact-head worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach "$RUNNER_TEMP/mac02" HEAD
+          cd "$RUNNER_TEMP/mac02"
+          pnpm install --frozen-lockfile
+          python3 - <<'PY'
+          import pathlib, subprocess
+          before = subprocess.check_output(['git', 'show', 'HEAD:pnpm-lock.yaml'])
+          after = pathlib.Path('pnpm-lock.yaml').read_bytes()
+          empty = b'  packages/macos-lifecycle: {}\n\n'
+          assert after == before or (after.count(empty) == 1 and after.replace(empty, b'', 1) == before), 'unrelated lockfile change'
+          print('Locked resolutions unchanged; only an empty workspace importer may be normalized.')
+          PY
+      - name: Behavioral tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          pnpm --filter @gram/macos-lifecycle test > "$RUNNER_TEMP/mac02-tests.log" 2>&1 || { tail -120 "$RUNNER_TEMP/mac02-tests.log"; exit 1; }
+          tail -22 "$RUNNER_TEMP/mac02-tests.log"
+      - name: Rollback lane regressions (review/lanes collection)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          cat > "$RUNNER_TEMP/mac02-lane.vitest.config.ts" <<'TS'
+          import { defineConfig } from 'vitest/config';
+          export default defineConfig({ test: {
+            name: 'rollback-lane', environment: 'node',
+            include: ['review/lanes/rollback-regressions.test.ts'],
+          } });
+          TS
+          pnpm exec vitest run --config "$RUNNER_TEMP/mac02-lane.vitest.config.ts" --root "$RUNNER_TEMP/mac02"
+      - name: Root lint types tests and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          pnpm lint
+          pnpm typecheck
+          pnpm test > "$RUNNER_TEMP/mac02-root-tests.log" 2>&1 || { tail -160 "$RUNNER_TEMP/mac02-root-tests.log"; exit 1; }
+          tail -22 "$RUNNER_TEMP/mac02-root-tests.log"
+          pnpm build
+          git diff --check
+          test ! -d packages/macos-lifecycle/dist/test-support
+          test -z "$(find packages/macos-lifecycle/dist -name '*.test.js' -print)"
+      - name: Validate compiled renderer output without installing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          node --input-type=module <<'JS'
+          import { mkdirSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { parseConfig, renderPlist } from './packages/macos-lifecycle/dist/index.js';
+          const dir = join(process.env.RUNNER_TEMP, 'mac02-plists');
+          mkdirSync(dir, { recursive: true });
+          const base = { schemaVersion: 1, mode: 'LAB_ONLY', runtimeUser: 'gram-agent',
+            releaseId: 'lab-001', releaseDigest: 'a'.repeat(64), tunnel: { enabled: false } };
+          writeFileSync(join(dir, 'core.plist'), renderPlist(parseConfig(base), 'core'));
+          writeFileSync(join(dir, 'tunnel.plist'), renderPlist(parseConfig({ ...base,
+            tunnel: { enabled: true, compatibilityDigest: 'b'.repeat(64), credentialRef: 'test-tunnel-key' }
+          }), 'tunnel'));
+          JS
+          python3 platform/macos/tests/verify-plist.py "$RUNNER_TEMP/mac02-plists"
+      - name: Collect sealed release packaging contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          node --test platform/macos/package-release.test.mjs
+      - name: Native Apple plist syntax check only
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          /usr/bin/plutil -lint "$RUNNER_TEMP/mac02-plists/core.plist" "$RUNNER_TEMP/mac02-plists/tunnel.plist"
+      - name: Validate bootstrap scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          bash -n platform/macos/build-bootstrap-helper.sh
+          bash -n platform/macos/provision-bootstrap.sh
+          node --check platform/macos/stage-candidate-config.mjs
+          bash -n platform/macos/tests/disposable-launchd-apply.sh
+      - name: Build independent bootstrap ACL helper on Apple Silicon
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          out="$RUNNER_TEMP/bootstrap-helper"
+          mkdir "$out"
+          bash platform/macos/build-bootstrap-helper.sh "$out/file-acl" | tee "$RUNNER_TEMP/bootstrap-helper.log"
+          test -x "$out/file-acl"
+          test "$(/usr/bin/stat -f '%Lp' "$out/file-acl")" = "755"
+          /usr/bin/grep -Eq '^BOOTSTRAP_HELPER_BUILT source_sha256=[a-f0-9]{64} binary_sha256=[a-f0-9]{64}$' "$RUNNER_TEMP/bootstrap-helper.log"
+      - name: Probe per-service launchd disabled override semantics
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          label='com.haar.gram-agent.ci-override-probe'
+          sudo /bin/launchctl enable "system/$label"
+          output="$(sudo /bin/launchctl print-disabled system)"
+          line="$(/usr/bin/grep -F "\"$label\"" <<<"$output" | /usr/bin/head -n 1 || true)"
+          if [[ -z "$line" ]]; then
+            echo 'LAUNCHD_ENABLE_REMOVES_OVERRIDE=true'
+          elif [[ "$line" == *'=> false'* || "$line" == *'=> enabled'* ]]; then
+            echo 'LAUNCHD_ENABLE_LEAVES_ENABLED_OVERRIDE=true'
+            echo "LAUNCHD_OVERRIDE_LINE=$line"
+          elif [[ "$line" == *'=> true'* || "$line" == *'=> disabled'* ]]; then
+            echo 'LAUNCHD_ENABLE_LEFT_DISABLED_OVERRIDE=true' >&2
+            echo "LAUNCHD_OVERRIDE_LINE=$line" >&2
+            exit 1
+          else
+            echo "LAUNCHD_OVERRIDE_LINE=$line" >&2
+            exit 1
+          fi
+      - name: Assemble and smoke-test self-contained core release
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          git checkout -- pnpm-lock.yaml
+          release="$RUNNER_TEMP/core-release"
+          release_id="ci-${GITHUB_SHA:0:12}"
+          bash platform/macos/assemble-core-release.sh "$release_id" "$release" | tee "$RUNNER_TEMP/core-release.json"
+          test -x "$release/bin/node"
+          test -f "$release/release.json"
+          test -f "$release/apps/agent/dist/main.js"
+          test -f "$release/packages/macos-lifecycle/dist/supervisor-cli.js"
+          test -f "$release/packages/macos-lifecycle/dist/operator-cli.js"
+
+          smoke="$RUNNER_TEMP/core-smoke"
+          mkdir -p "$smoke/state" "$smoke/secrets"
+          chmod 700 "$smoke/state" "$smoke/secrets"
+          printf '%s\n' 'SYNTHETIC_CI_INTERNAL_SECRET' > "$smoke/secrets/mcp-internal-secret"
+          chmod 600 "$smoke/secrets/mcp-internal-secret"
+
+          GRAM_AGENT_STATE_DIR="$smoke/state" GRAM_AGENT_SECRET_DIR="$smoke/secrets" \
+            "$release/bin/node" "$release/apps/agent/dist/main.js" \
+            >"$RUNNER_TEMP/core-smoke.stdout" 2>"$RUNNER_TEMP/core-smoke.stderr" &
+          core_pid=$!
+          cleanup() {
+            kill "$core_pid" 2>/dev/null || true
+            wait "$core_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          healthy=0
+          for _ in {1..50}; do
+            if /usr/bin/curl -fsS --max-time 1 http://127.0.0.1:3847/healthz >"$RUNNER_TEMP/health.json"; then
+              healthy=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [[ "$healthy" -ne 1 ]]; then
+            echo 'CORE_SMOKE_FAILED' >&2
+            if [[ -s "$RUNNER_TEMP/core-smoke.stderr" ]]; then
+              /bin/cat "$RUNNER_TEMP/core-smoke.stderr" >&2
+            fi
+            if [[ -s "$RUNNER_TEMP/core-smoke.stdout" ]]; then
+              /bin/cat "$RUNNER_TEMP/core-smoke.stdout" >&2
+            fi
+            set +e
+            wait "$core_pid"
+            core_exit=$?
+            set -e
+            echo "CORE_SMOKE_EXIT=$core_exit" >&2
+            exit 1
+          fi
+          /usr/bin/grep -q '"status":"healthy"' "$RUNNER_TEMP/health.json"
+          test "$(/usr/bin/curl -sS --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:3847/mcp)" = "401"
+          cleanup
+          trap - EXIT
+
+          set +e
+          "$release/bin/node" "$release/packages/macos-lifecycle/dist/supervisor-cli.js" \
+            --role core --config '/Library/Application Support/HAAR/GramAgent/config/service.json' \
+            >/dev/null 2>/dev/null
+          supervisor_code=$?
+          set -e
+          test "$supervisor_code" -eq 78
+
+          set +e
+          "$release/bin/node" "$release/packages/macos-lifecycle/dist/operator-cli.js" preview --json \
+            >"$RUNNER_TEMP/operator-preview.json" 2>/dev/null
+          operator_code=$?
+          set -e
+          test "$operator_code" -eq 2
+          /usr/bin/grep -q '"mode":"LAB_ONLY"' "$RUNNER_TEMP/operator-preview.json"
+          /usr/bin/grep -q '"businessReadiness":"UNAVAILABLE"' "$RUNNER_TEMP/operator-preview.json"
+      - name: Disposable real launchd apply acceptance
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac02"
+          digest="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(typeof j.digest!=="string") process.exit(2); process.stdout.write(j.digest)' "$RUNNER_TEMP/core-release.json")"
+          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" /bin/bash \
+            platform/macos/tests/disposable-launchd-apply.sh \
+            "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/bootstrap-helper/file-acl" "$digest"
