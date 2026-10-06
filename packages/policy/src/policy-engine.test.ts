@@ -8,6 +8,7 @@ import { PolicyEngine, type PolicyContext } from './policy-engine.js';
 
 const tempDirs: string[] = [];
 const risk = { ALLOW: 0, NEEDS_APPROVAL: 1, DENY: 2 } as const;
+const BACKTICK = String.fromCharCode(96);
 
 function decide(command: string, context: PolicyContext = { taskId: 'task-1', protectedBranches: ['main'] }) {
   const engine = new PolicyEngine();
@@ -156,6 +157,11 @@ describe('shell-text syntax fail-closed boundary', () => {
     ],
     ['command substitution', 'echo $(touch /tmp/probe)'],
     ['double-quoted command substitution', 'echo "$(touch /tmp/probe)"'],
+    ['backtick command substitution', `echo ${BACKTICK}touch /tmp/probe${BACKTICK}`],
+    [
+      'double-quoted backtick command substitution',
+      `echo "a ${BACKTICK}touch /tmp/probe${BACKTICK} c"`,
+    ],
   ] as const)('rejects %s before classification', (_label, command) => {
     expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
       /unsupported shell syntax/i,
@@ -170,6 +176,16 @@ describe('shell-text syntax fail-closed boundary', () => {
       'single-quoted command-substitution literal',
       "echo '$(touch /tmp/probe)'",
       ['$(touch /tmp/probe)'],
+    ],
+    [
+      'single-quoted backtick literal',
+      `echo '${BACKTICK}touch /tmp/probe${BACKTICK}'`,
+      [`${BACKTICK}touch /tmp/probe${BACKTICK}`],
+    ],
+    [
+      'escaped backtick literal',
+      `echo a\\${BACKTICK}b`,
+      [`a${BACKTICK}b`],
     ],
   ] as const)('keeps %s literal', (_label, command, expectedArgs) => {
     const [operation] = normalizeShellCommand(command, process.cwd());
