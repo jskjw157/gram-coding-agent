@@ -310,7 +310,15 @@ export function normalizeShellCommand(command: string, cwd: string): NormalizedO
   assertSupportedShellSyntax(command);
   const normalizedCwd = resolve(cwd);
   return splitShellComposition(command).flatMap((segment) => {
-    const unwrapped = unwrapCommand(tokenize(segment.text));
+    const tokens = tokenize(segment.text);
+    // Policy decisions and operation hashes must describe the exact argv that
+    // Bash will execute. Any dynamic expansion would make the parsed literal
+    // tokens differ from runtime argv, so shellText fails closed before
+    // command unwrapping, classification, approval lookup or hashing.
+    if (tokens.some((token) => token.pathnameExpansion)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const unwrapped = unwrapCommand(tokens);
     if (unwrapped === null) return [];
     const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
     if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {

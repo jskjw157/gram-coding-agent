@@ -52,10 +52,54 @@ describe('Policy Engine v1 rule matrix', () => {
     ['git push --all origin', 'NEEDS_APPROVAL'],
     ['git push --force --all origin', 'DENY'],
     ['git push --mirror origin', 'DENY'],
-    ['git push --force origin refs/heads/*:refs/heads/*', 'DENY'],
-    ['git push origin refs/heads/*:refs/heads/*', 'NEEDS_APPROVAL'],
   ] as const)('%s -> %s', (command, expected) => {
     expect(decide(command).kind).toBe(expected);
+  });
+
+
+  it.each([
+    ['parameter expansion', 'git push origin HEAD:$BRANCH'],
+    ['double-quoted parameter expansion', 'git push origin "HEAD:$BRANCH"'],
+    ['glob expansion', 'git add *.ts'],
+    ['brace expansion', 'git push origin HEAD:{main,feature}'],
+    ['tilde expansion', 'git show ~/ref'],
+  ] as const)('rejects policy-sensitive shell %s before hashing', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it('preserves literal wildcard/ref arguments when the shell cannot expand them', () => {
+    expect(decide("git push origin 'refs/heads/*:refs/heads/*'").kind).toBe(
+      'NEEDS_APPROVAL',
+    );
+    expect(
+      decide("git push --force origin 'refs/heads/*:refs/heads/*'").kind,
+    ).toBe('DENY');
+
+    const engine = new PolicyEngine();
+    const normal = normalizeExecutableCommand(
+      'git',
+      ['push', 'origin', 'refs/heads/*:refs/heads/*'],
+      process.cwd(),
+    );
+    const forced = normalizeExecutableCommand(
+      'git',
+      ['push', '--force', 'origin', 'refs/heads/*:refs/heads/*'],
+      process.cwd(),
+    );
+    expect(engine.evaluate(normal, { taskId: 'task-1', protectedBranches: ['main'] }).kind)
+      .toBe('NEEDS_APPROVAL');
+    expect(engine.evaluate(forced, { taskId: 'task-1', protectedBranches: ['main'] }).kind)
+      .toBe('DENY');
+  });
+
+  it.each([
+    ["git push origin 'HEAD:$BRANCH'", 'HEAD:$BRANCH'],
+    ['git push origin HEAD:\\$BRANCH', 'HEAD:$BRANCH'],
+  ] as const)('keeps literal parameter marker when quoted or escaped: %s', (command, expected) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.args.at(-1)).toBe(expected);
   });
 
   it('requires the direct-main grant for protected destinations expressed as refspecs', () => {

@@ -172,6 +172,31 @@ describe('CommandRunner policy gate', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+
+  it('rejects dynamic shell arguments before approval, evidence, or spawn', async () => {
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      ...ports,
+    });
+
+    await expect(
+      runner.run(request('git push origin HEAD:$BRANCH')),
+    ).rejects.toThrow(/unsupported shell syntax/i);
+
+    expect(consume).not.toHaveBeenCalled();
+    expect(ports.commandRuns.start).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('keeps executable-form redirect-looking arguments literal', async () => {
     const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
       exitCode: 0,
