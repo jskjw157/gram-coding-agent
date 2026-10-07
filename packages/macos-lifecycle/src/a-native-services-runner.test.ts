@@ -81,7 +81,7 @@ describe('fixed launchctl stop completion window', () => {
     expect(seen.map(call => call.options.timeout)).toEqual([5000, 5000, 30000, 5000]);
   });
 
-  it('fails a hung bootout at thirty seconds and still performs one strict absence check', async () => {
+  it('fails a hung bootout at the shared thirty-second deadline without dispatching a later print', async () => {
     let result: InstallResult | undefined;
     const seen = harness(argv => argv[1] === 'print' ? present('core') : { afterMs: argv[1] === 'bootout' ? null : 0 });
     const work = createSystemServiceHandle(async () => true).stop('core').then(value => { result = value; });
@@ -89,7 +89,7 @@ describe('fixed launchctl stop completion window', () => {
     expect(result).toBeUndefined(); expect(seen).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(1); await work;
     expect(result).toEqual({ ok: false, code: 'PARTIAL_INSTALL' });
-    expect(commands(seen)).toEqual(['print', 'disable', 'bootout', 'print'].map(action => launchctlVector(action as LaunchctlAction, 'core')));
+    expect(commands(seen)).toEqual(['print', 'disable', 'bootout'].map(action => launchctlVector(action as LaunchctlAction, 'core')));
     expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
   });
 
@@ -196,8 +196,26 @@ describe('system service handle retains strict launchctl stop semantics', () => 
     expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
   });
 
+  it('does not upgrade a completed bootout with final still present to success', async () => {
+    const seen = harness(argv => argv[1] === 'print' ? present('core') : { afterMs: 0 });
+    let result: InstallResult | undefined;
+    const work = createSystemServiceHandle(async () => true).stop('core').then(value => { result = value; });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1); await work;
+    expect(result).toEqual({ ok: false, code: 'PARTIAL_INSTALL' });
+    expect(commands(seen).slice(0, 4)).toEqual(['print', 'disable', 'bootout', 'print']
+      .map(action => launchctlVector(action as LaunchctlAction, 'core')));
+    expect(commands(seen).slice(4)).toEqual(seen.slice(4).map(() => launchctlVector('print', 'core')));
+    expect(seen.slice(3).map(call => call.options.timeout)).toEqual(Array.from({ length: 150 }, () => 5000));
+    expect(vi.getTimerCount()).toBe(0);
+    const count = seen.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(seen).toHaveLength(count);
+    expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
+  });
+
   it.each([
-    { name: 'still present', reply: present('core'), code: 'PARTIAL_INSTALL' },
     { name: 'parse error', reply: { afterMs: 0, stdout: 'SYNTHETIC_PRIVATE_PARSE' }, code: 'PARTIAL_INSTALL' },
     { name: 'inexact absence', reply: { ...absent('core'), stderr: `Could not find service "${labels.core}" in domain for system\nextra\n` }, code: 'PARTIAL_INSTALL' },
     { name: 'permission error', reply: { afterMs: 0, error: failure({ code: 1 }), stderr: 'Operation not permitted SYNTHETIC_PRIVATE' }, code: 'NOT_AUTHORIZED' },
