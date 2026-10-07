@@ -16,7 +16,7 @@ export interface NormalizedOperation {
 }
 
 const UNSUPPORTED_SHELL_SYNTAX_REASON =
-  'Unsupported shell syntax: redirection and dynamic command substitution are not supported';
+  'Unsupported shell syntax: redirection and dynamic shell expansion are not supported';
 
 export class UnsupportedShellSyntaxError extends Error {
   constructor() {
@@ -156,15 +156,30 @@ function splitShellComposition(command: string): CommandSegment[] {
   return segments;
 }
 
-function tokenize(segment: string): string[] {
-  const tokens: string[] = [];
+interface ShellToken {
+  value: string;
+  pathnameExpansion: boolean;
+}
+
+interface UnwrappedCommand {
+  executable: string;
+  args: string[];
+  argPathnameExpansion: boolean[];
+}
+
+function tokenize(segment: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
   let buffer = '';
   let quote: "'" | '"' | null = null;
   let escaped = false;
+  let pathnameExpansion = false;
 
   const flush = () => {
-    if (buffer.length > 0) tokens.push(buffer);
+    if (buffer.length > 0) {
+      tokens.push({ value: buffer, pathnameExpansion });
+    }
     buffer = '';
+    pathnameExpansion = false;
   };
 
   for (const char of segment) {
@@ -178,8 +193,12 @@ function tokenize(segment: string): string[] {
       continue;
     }
     if (quote !== null) {
-      if (char === quote) quote = null;
-      else buffer += char;
+      if (char === quote) {
+        quote = null;
+      } else {
+        if (quote === '"' && isDollar(char)) pathnameExpansion = true;
+        buffer += char;
+      }
       continue;
     }
     if (char === "'" || char === '"') {
@@ -190,18 +209,29 @@ function tokenize(segment: string): string[] {
       flush();
       continue;
     }
+
+    if (
+      (char === '~' && buffer.length === 0) ||
+      char === '*' ||
+      char === '?' ||
+      char === '[' ||
+      isDollar(char) ||
+      char === '{'
+    ) {
+      pathnameExpansion = true;
+    }
     buffer += char;
   }
   flush();
   return tokens;
 }
 
-function unwrapCommand(tokens: string[]): { executable: string; args: string[] } | null {
+function unwrapCommand(tokens: ShellToken[]): UnwrappedCommand | null {
   let offset = 0;
-  if (tokens[offset] === 'sudo') {
+  if (tokens[offset]?.value === 'sudo') {
     offset += 1;
     while (offset < tokens.length) {
-      const token = tokens[offset];
+      const token = tokens[offset]?.value;
       if (token === '--') {
         offset += 1;
         break;
@@ -211,10 +241,10 @@ function unwrapCommand(tokens: string[]): { executable: string; args: string[] }
     }
   }
 
-  if (tokens[offset] === 'env') {
+  if (tokens[offset]?.value === 'env') {
     offset += 1;
     while (offset < tokens.length) {
-      const token = tokens[offset];
+      const token = tokens[offset]?.value;
       if (token === '--') {
         offset += 1;
         break;
@@ -224,22 +254,37 @@ function unwrapCommand(tokens: string[]): { executable: string; args: string[] }
     }
   }
 
-  const executable = tokens[offset];
+  const executable = tokens[offset]?.value;
   if (executable === undefined) return null;
-  return { executable, args: tokens.slice(offset + 1) };
+  const argTokens = tokens.slice(offset + 1);
+  return {
+    executable,
+    args: argTokens.map((token) => token.value),
+    argPathnameExpansion: argTokens.map((token) => token.pathnameExpansion),
+  };
+}
+
+function requestedPathTargetIndexes(executable: string, args: readonly string[]): number[] {
+  const indexes: number[] = [];
+  if (executable === 'rm' || executable === 'rmdir' || executable === 'cp' || executable === 'mv') {
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+    return indexes;
+  }
+  if (executable === 'chmod' || executable === 'chown') {
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+  }
+  return indexes;
 }
 
 function requestedPathTargets(executable: string, args: readonly string[]): string[] {
-  if (executable === 'rm' || executable === 'rmdir') {
-    return args.filter((argument) => !argument.startsWith('-'));
-  }
-  if (executable === 'chmod' || executable === 'chown') {
-    return args.slice(1).filter((argument) => !argument.startsWith('-'));
-  }
-  if (executable === 'cp' || executable === 'mv') {
-    return args.filter((argument) => !argument.startsWith('-'));
-  }
-  return [];
+  return requestedPathTargetIndexes(executable, args).flatMap((index) => {
+    const value = args[index];
+    return value === undefined ? [] : [value];
+  });
 }
 
 function canonicalizeTargets(
@@ -267,7 +312,14 @@ export function normalizeShellCommand(command: string, cwd: string): NormalizedO
   return splitShellComposition(command).flatMap((segment) => {
     const unwrapped = unwrapCommand(tokenize(segment.text));
     if (unwrapped === null) return [];
-    const requestedTargets = requestedPathTargets(unwrapped.executable, unwrapped.args);
+    const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
+    if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const requestedTargets = targetIndexes.flatMap((index) => {
+      const value = unwrapped.args[index];
+      return value === undefined ? [] : [value];
+    });
     const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(requestedTargets, normalizedCwd);
     return [{
       type: 'SHELL_COMMAND' as const,
