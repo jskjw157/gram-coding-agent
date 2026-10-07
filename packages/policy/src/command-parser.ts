@@ -16,7 +16,7 @@ export interface NormalizedOperation {
 }
 
 const UNSUPPORTED_SHELL_SYNTAX_REASON =
-  'Unsupported shell syntax: redirection and dynamic shell expansion are not supported';
+  'Unsupported shell syntax: redirection, dynamic shell expansion, and unmodeled composition are not supported';
 
 export class UnsupportedShellSyntaxError extends Error {
   constructor() {
@@ -48,6 +48,9 @@ function assertSupportedShellSyntax(command: string): void {
     if (char === undefined) break;
 
     if (escaped) {
+      if (char === '\n' || char === '\r') {
+        throw new UnsupportedShellSyntaxError();
+      }
       escaped = false;
       continue;
     }
@@ -79,6 +82,18 @@ function assertSupportedShellSyntax(command: string): void {
     if (char === "'" || char === '"') {
       quote = char;
       continue;
+    }
+
+    if (char === '\n' || char === '\r') {
+      throw new UnsupportedShellSyntaxError();
+    }
+
+    if (char === '&') {
+      if (command[index + 1] === '&') {
+        index += 1;
+        continue;
+      }
+      throw new UnsupportedShellSyntaxError();
     }
 
     if (char === '>' || char === '<') {
