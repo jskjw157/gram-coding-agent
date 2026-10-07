@@ -42,6 +42,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
+  lchmodSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -309,13 +310,21 @@ function buildManifest({ releaseId, sourceCommit, lockDigest, schemaCompatibilit
   return { releaseJson, digest: sha256Hex(Buffer.from(releaseJson, 'utf8')) };
 }
 
+function createReleaseSymlink(target, path) {
+  symlinkSync(target, path);
+  // Darwin applies umask to the link and checks its own mode for readlink.
+  // The root-owned release must remain readable by the non-admin runtime;
+  // lchmod changes the link itself without following or changing its target.
+  if (process.platform === 'darwin') lchmodSync(path, 0o755);
+}
+
 function writeTree(root, files) {
   const byPath = [...files].sort((a, b) => (a.path < b.path ? -1 : 1));
   for (const file of byPath) {
     const target = join(root, file.path);
     mkdirSync(dirname(target), { recursive: true });
     if ('target' in file) {
-      symlinkSync(file.target, target);
+      createReleaseSymlink(file.target, target);
     } else {
       writeFileSync(target, file.bytes);
       chmodSync(target, file.executable ? 0o755 : 0o644);
@@ -407,7 +416,7 @@ function copyTree(fromDir, toDir) {
     const to = join(toDir, name);
     const st = lstatSync(from);
     if (st.isSymbolicLink()) {
-      symlinkSync(readlinkSync(from), to);
+      createReleaseSymlink(readlinkSync(from), to);
     } else if (st.isDirectory()) {
       copyTree(from, to);
       chmodSync(to, 0o755);
