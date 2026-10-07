@@ -24,23 +24,29 @@ export function createSystemLaunchctlRunner(): LaunchctlRunner {
         || argv.some(value => typeof value !== 'string' || value.length === 0 || value.length > 4096)) {
         return { code: 255, stdout: '', stderr: '' };
       }
+      const fixedBootout = (['core', 'tunnel'] as const).some(role => {
+        const expected = launchctlVector('bootout', role);
+        return argv.length === expected.length && expected.every((value, index) => argv[index] === value);
+      });
       return await new Promise(resolve => {
         execFile(
           LAUNCHCTL_BIN,
           [...argv.slice(1)],
           {
             encoding: 'utf8',
-            timeout: 5_000,
+            // Fixed jobs render ExitTimeOut=30 in launchd-plist.ts. Allow that
+            // stop window only for their exact bootout vectors.
+            timeout: fixedBootout ? 30_000 : 5_000,
             killSignal: 'SIGKILL',
             maxBuffer: MAX_OUTPUT,
             shell: false,
             env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C', LANG: 'C' },
           },
           (error, stdout, stderr) => {
-            const rawCode = error && typeof error.code === 'number' ? error.code : 0;
-            const code = Number.isSafeInteger(rawCode) && rawCode >= 0 && rawCode <= 255
-              ? rawCode
-              : 255;
+            const rawCode = error?.code;
+            const code = error === null ? 0
+              : error?.killed !== true && error?.signal == null && typeof rawCode === 'number'
+                && Number.isSafeInteger(rawCode) && rawCode >= 1 && rawCode <= 255 ? rawCode : 255;
             resolve({
               code,
               stdout: typeof stdout === 'string' ? stdout : '',
