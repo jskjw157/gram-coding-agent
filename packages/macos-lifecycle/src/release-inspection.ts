@@ -79,11 +79,14 @@ function verifyLinks(inventory: InventoryEntry[]): void {
  * execute a release, read credentials, follow a link or authorize installation.
  * Tool metadata is not runtime tool-surface proof; Task 4 must check that too.
  */
-export async function inspectRelease(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles): Promise<ReleaseEvidence> {
+export async function inspectRelease(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles, signal?: AbortSignal): Promise<ReleaseEvidence> {
+  const checkActive = () => { if (signal?.aborted) refuse(); };
   try {
+    checkActive();
     const normalized = parseConfig(config);
     if (!digest(expectedDigest) || expectedDigest !== normalized.releaseDigest) refuse();
     const bytes = await files.read('release.json', 1024 * 1024);
+    checkActive();
     if (sha(bytes) !== expectedDigest) refuse();
     const m = record(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown);
     exact(m, ['schemaVersion', 'releaseId', 'sourceCommit', 'lockDigest', 'files', 'coreTools', 'schemaCompatibility',
@@ -104,7 +107,10 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
     }
     const lock = map.get('pnpm-lock.yaml');
     if (!lock || !('sha256' in lock) || lock.sha256 !== m.lockDigest) refuse();
-    const before = await files.inventory(); const leaves = before.filter(e => e.kind !== 'directory' && e.path !== 'release.json');
+    checkActive();
+    const before = await files.inventory();
+    checkActive();
+    const leaves = before.filter(e => e.kind !== 'directory' && e.path !== 'release.json');
     if (leaves.length !== entries.length) refuse();
     for (const e of before) {
       if (e.path === 'release.json') { if (e.kind !== 'file' || e.executable) refuse(); continue; }
@@ -118,11 +124,27 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
       }
     }
     verifyLinks(before);
-    for (const e of entries) {
-      if ('sha256' in e && await files.hash(e.path, 256 * 1024 * 1024) !== e.sha256) refuse();
-    }
-    if (JSON.stringify(await files.inventory()) !== JSON.stringify(before)
-      || sha(await files.read('release.json', 1024 * 1024)) !== expectedDigest) refuse();
+    let next = 0; let failed = false;
+    const hashWorker = async () => {
+      while (!failed && !signal?.aborted) {
+        const e = entries[next++];
+        if (e === undefined) return;
+        if (!('sha256' in e)) continue;
+        try { if (await files.hash(e.path, 256 * 1024 * 1024) !== e.sha256) failed = true; }
+        catch { failed = true; }
+      }
+    };
+    // Stop new dispatch on refusal, but let each started trusted read close its
+    // descriptors before reporting failure or cancellation to the caller.
+    const hashes = await Promise.allSettled([hashWorker(), hashWorker()]);
+    checkActive();
+    if (failed || hashes.some(result => result.status === 'rejected')) refuse();
+    const after = await files.inventory();
+    checkActive();
+    if (JSON.stringify(after) !== JSON.stringify(before)) refuse();
+    const finalBytes = await files.read('release.json', 1024 * 1024);
+    checkActive();
+    if (sha(finalBytes) !== expectedDigest) refuse();
     return { verified: true, safePaths: true, digest: expectedDigest, sourceCommit: m.sourceCommit,
       lockDigest: m.lockDigest, entries: entries.map(e => e.path).sort() };
   } catch { return refuse(); }

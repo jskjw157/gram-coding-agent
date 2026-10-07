@@ -11,6 +11,8 @@ import {
 import { inspectMacRegistry } from './adapters/macos-service-probes.js';
 import type { AclProbe } from './adapters/trusted-files.js';
 import { createInstalledHealthObserver } from './a-native-observer.js';
+import { abortable } from './health-probe.js';
+import { RELEASE_REVIEW_TIMEOUT_MS } from './release-review-budget.js';
 
 const MAX_OUTPUT = 1024 * 1024;
 
@@ -57,18 +59,23 @@ async function boundedHealth(
   role: Role,
   observer: ReturnType<typeof createInstalledHealthObserver>,
 ): Promise<boolean> {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + RELEASE_REVIEW_TIMEOUT_MS;
   do {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2_500);
+    // This observes a complete sealed release, not just a short HTTP request.
+    // Every retry shares the same overall deadline, including its backoff.
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
     try {
-      if (await observer.healthy(role, controller.signal) === true) return true;
+      if (await abortable(observer.healthy(role, controller.signal), controller.signal) === true
+        && Date.now() < deadline) return true;
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
     } finally {
       clearTimeout(timer);
       controller.abort();
     }
     if (Date.now() >= deadline) break;
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, Math.min(200, deadline - Date.now())));
   } while (Date.now() < deadline);
   return false;
 }

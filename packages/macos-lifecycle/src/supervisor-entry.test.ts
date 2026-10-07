@@ -57,12 +57,25 @@ describe('fixed supervisor invocation and cancellation', () => {
     events.emit('SIGINT'); await Promise.resolve(); expect(signal.aborted).toBe(true); expect(settled).toBe(false);
     stopped.resolve(1); expect(await work).toBe(1); expect(events.eventNames()).toEqual([]);
   });
+  it('runs a valid session after a 21-second sealed-release preparation', async () => {
+    vi.useFakeTimers(); const events = new EventEmitter(); let runs = 0;
+    const work = runSupervisorEntry(args, { async prepare() {
+      await new Promise<void>(resolve => setTimeout(resolve, 21000));
+      return { async run() { runs++; return 0; } };
+    } }, events);
+    await vi.advanceTimersByTimeAsync(21000);
+    expect(await work).toBe(0); expect(runs).toBe(1); expect(events.eventNames()).toEqual([]);
+  });
   it('bounds bootstrap waiting and never runs a timed-out late session', async () => {
     vi.useFakeTimers(); const events = new EventEmitter(); const ready = deferred<Awaited<ReturnType<SupervisorBootstrap['prepare']>>>(); let runs = 0;
     const work = runSupervisorEntry(args, { async prepare() { return ready.promise; } }, events);
     const observed = work.then(value => value as unknown, (error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(10001); expect(await observed).toBe(78);
-    ready.resolve({ async run() { runs++; return 0; } }); await Promise.resolve(); await Promise.resolve();
+    let settled = false; void observed.then(() => { settled = true; });
+    try {
+      await vi.advanceTimersByTimeAsync(59999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(await observed).toBe(78);
+    } finally { ready.resolve({ async run() { runs++; return 0; } }); await observed; }
+    await Promise.resolve(); await Promise.resolve();
     expect(runs).toBe(0); expect(events.eventNames()).toEqual([]);
   });
   it.each([2, -1, NaN, '0'])('does not accept an invalid runtime exit result: %s', async value => {

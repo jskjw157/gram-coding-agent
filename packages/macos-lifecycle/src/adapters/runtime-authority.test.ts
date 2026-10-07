@@ -1,8 +1,10 @@
 import { chmod, link, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configDigest } from '../config.js';
+import * as releaseInspection from '../release-inspection.js';
 import { bindReviewedCoreRuntime, bindReviewedCoreRuntimeAt, type RuntimeReview } from './runtime-authority.js';
+import * as runtimeDirectories from './runtime-directories.js';
 import { fixture, hash, snapshot } from '../test-support/runtime/fixture.js';
 const roots: string[] = [];
 async function setup() { const f = await fixture(); roots.push(f.anchor); return f; }
@@ -11,6 +13,68 @@ async function bind(f: Awaited<ReturnType<typeof setup>>) {
   return bindReviewedCoreRuntimeAt(f.layout, f.review, f.acl, f.environment, signal());
 }
 afterEach(async () => { for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true }); });
+describe('sealed-release review deadlines with a synthetic directory witness', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  function deferred() {
+    let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+  }
+  async function pendingReview(stage: 'bind' | 'acquire', parent: AbortSignal) {
+    const f = await setup();
+    // Isolate deadline composition from the runner's UID. Release/config bytes,
+    // executable pins and execution records still use the actual file adapters.
+    f.environment.account = async () => ({ name: 'gram-agent', uid: 501, gid: 20, admin: false, groupsComplete: true });
+    f.environment.identity = () => ({ uid: 501, gid: 20, groups: [20] });
+    vi.spyOn(runtimeDirectories, 'inspectRuntimeDirectories').mockResolvedValue({
+      runPolicy: f.runPolicy, logsPolicy: { ...f.runPolicy, relative: f.layout.relative + '/logs' },
+      async verify() {},
+    });
+    const runtime = stage === 'acquire' ? await bind(f) : null;
+    if (stage === 'acquire') {
+      if (!runtime) throw new Error('binding');
+      await runtime.execution.acquire('core', 'review-budget', f.review.configDigest, f.review.config.releaseDigest);
+    }
+    const entered = deferred(); const resume = deferred(); const drained = deferred();
+    const inspect = releaseInspection.inspectRelease; let active: AbortSignal | undefined;
+    vi.spyOn(releaseInspection, 'inspectRelease').mockImplementationOnce(async (...args) => {
+      active = args[3]; entered.resolve();
+      try { await resume.promise; return await inspect(...args); }
+      finally { drained.resolve(); }
+    });
+    vi.useFakeTimers(); let settled = false;
+    const work = runtime === null
+      ? bindReviewedCoreRuntimeAt(f.layout, f.review, f.acl, f.environment, parent)
+      : runtime.authority.acquire(f.review.config, parent);
+    void work.then(() => { settled = true; });
+    await Promise.race([entered.promise, work.then(() => { throw new Error('REVIEW_NOT_ENTERED'); })]);
+    return { work, signal: () => active, settled: () => settled,
+      resume: () => resume.resolve(), async finish() { resume.resolve(); await work; await drained.promise; } };
+  }
+  it.each(['bind', 'acquire'] as const)('accepts a valid 21-second %s review', async stage => {
+    const f = await pendingReview(stage, signal());
+    try {
+      await vi.advanceTimersByTimeAsync(21000); expect(f.settled()).toBe(false);
+      expect(f.signal()).toBeInstanceOf(AbortSignal); expect(f.signal()?.aborted).toBe(false);
+      f.resume(); expect(await f.work).not.toBeNull();
+    } finally { await f.finish(); }
+  });
+  it.each(['bind', 'acquire'] as const)('honors earlier parent cancellation during a %s review', async stage => {
+    const parent = new AbortController(); const f = await pendingReview(stage, parent.signal);
+    try {
+      await vi.advanceTimersByTimeAsync(21000); expect(f.settled()).toBe(false);
+      parent.abort(); expect(await f.work).toBeNull(); expect(f.signal()?.aborted).toBe(true);
+      f.resume(); expect(await f.work).toBeNull();
+    } finally { await f.finish(); }
+  });
+  it.each(['bind', 'acquire'] as const)('refuses a late %s review at the 60-second deadline', async stage => {
+    const f = await pendingReview(stage, signal());
+    try {
+      await vi.advanceTimersByTimeAsync(59999); expect(f.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(await f.work).toBeNull(); expect(f.signal()?.aborted).toBe(true);
+      f.resume(); expect(await f.work).toBeNull();
+    } finally { await f.finish(); }
+  });
+});
 describe('reviewed runtime binding over actual files (synthetic host/account/bootstrap ACL)', () => {
   it('has no permissive default without independent review and bootstrap trust', async () => {
     expect(await bindReviewedCoreRuntime()).toBeNull();

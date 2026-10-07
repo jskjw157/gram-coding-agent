@@ -176,7 +176,7 @@ export function createInstalledRuntimeReviewSource(
           layout.acl,
           `${layout.relative}/releases/${config.releaseId}`,
         );
-        await inspectRelease(config, config.releaseDigest, releaseFiles);
+        await inspectRelease(config, config.releaseDigest, releaseFiles, signal);
         if (signal.aborted) return null;
         const releaseBytes = await releaseFiles.read('release.json', 1024 * 1024);
         if (signal.aborted || shaBytes(releaseBytes) !== config.releaseDigest) return null;
