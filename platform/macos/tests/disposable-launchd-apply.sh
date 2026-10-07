@@ -127,6 +127,48 @@ if [[ "$APPLY_EXIT" -ne 0 ]]; then
   db_present=0; [[ -f "$ROOT/state/agent.sqlite" ]] && db_present=1
   echo "NATIVE_OPERATOR_EXIT=$APPLY_EXIT NATIVE_RESULT=$APPLY" >&2
   echo "NATIVE_APPLY_DIAG journal=$journal_stage config=$config_present manifest=$manifest_present core_plist=$core_plist_present core_job=$core_job tunnel_job=$tunnel_job execution=$execution_present circuit=$circuit_present db=$db_present" >&2
+  # Read installed review once as the runtime user, without provisioning or
+  # starting a session. Force exit at the deadline even if a scan ignores abort.
+  if ! /usr/bin/sudo -u gram-agent "$NODE" --input-type=module 2>/dev/null <<'NATIVE_REVIEW_PROBE'
+import { writeSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
+import { pathToFileURL } from 'node:url';
+
+const started = performance.now();
+const controller = new AbortController();
+const timer = setTimeout(() => {
+  controller.abort();
+  finish('TIMEOUT', false);
+}, 60_000);
+
+function finish(result, reviewOk) {
+  clearTimeout(timer);
+  try {
+    writeSync(1, `NATIVE_REVIEW_DIAG ${JSON.stringify({
+      result,
+      review_ok: reviewOk,
+      elapsed_ms: Math.round(performance.now() - started),
+      uid: process.getuid(),
+      gid: process.getgid(),
+      aborted: controller.signal.aborted,
+    })}\n`);
+  } finally {
+    process.exit(0);
+  }
+}
+
+try {
+  const source = new URL('../packages/macos-lifecycle/dist/a-system-sources.js', pathToFileURL(process.execPath));
+  const { createSystemBootstrapSources } = await import(source.href);
+  const review = await createSystemBootstrapSources().review.read(controller.signal);
+  finish(review === null ? 'REFUSED' : 'READY', review !== null);
+} catch {
+  finish('ERROR', false);
+}
+NATIVE_REVIEW_PROBE
+  then
+    echo 'NATIVE_REVIEW_DIAG {"result":"ERROR","review_ok":false,"elapsed_ms":0,"uid":null,"gid":null,"aborted":false}' >&2
+  fi
   exit 2
 fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$APPLY"; then echo "NATIVE_RESULT=$APPLY" >&2; exit 2; fi
