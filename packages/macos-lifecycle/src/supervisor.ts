@@ -2,6 +2,7 @@ import { parseConfig } from './config.js';
 import type { Clock, OwnedChild, Role, SafeCode, ServiceConfig } from './contracts.js';
 import { copyCoreChild, type CoreEvidence } from './health-probe.js';
 import type { HistorySnapshot, LifecycleStore } from './lifecycle-store.js';
+import { CORE_HEALTH_PROBE_TIMEOUT_MS, CORE_STARTUP_TIMEOUT_MS } from './release-review-budget.js';
 import { parseStatus, type ServiceState } from './telemetry.js';
 import type { TelemetryStore } from './telemetry-store.js';
 
@@ -42,7 +43,7 @@ export interface SupervisorDeps {
   };
 }
 const CADENCE = 5000;
-const STARTUP = 60000;
+const STARTUP = CORE_STARTUP_TIMEOUT_MS;
 const STOP = 20000;
 export function dependencyDelayMs(attempt: number): number {
   if (!Number.isSafeInteger(attempt) || attempt < 0) throw new Error('INVALID_HISTORY');
@@ -241,9 +242,10 @@ export async function runSupervisor(role: Role, input: ServiceConfig, deps: Supe
           const remaining = STARTUP - (now() - started);
           if (!healthyOnce && remaining <= 0) break;
           let evidence: CoreEvidence | null = null;
-          try { evidence = await limited(healthyOnce ? 10000 : Math.min(10000, remaining), activeSignal,
+          try { evidence = await limited(healthyOnce ? CORE_HEALTH_PROBE_TIMEOUT_MS : Math.min(CORE_HEALTH_PROBE_TIMEOUT_MS, remaining), activeSignal,
             s => deps.core.probe(owned as OwnedChild, s)); } catch { /* UNKNOWN, never raw error text. */ }
           if (signal.aborted || exited || unsafeChild) break;
+          if (!healthyOnce && now() - started >= STARTUP) break;
           if (evidence?.state === 'BLOCKED' && (evidence.code === 'AUTH_BLOCKED' || evidence.code === 'TOOL_SURFACE_MISMATCH')) {
             blocked = evidence.code; intentional = true; break;
           }

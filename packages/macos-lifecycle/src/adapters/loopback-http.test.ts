@@ -1,15 +1,21 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createConnection, type Socket } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { createConnection, Socket } from 'node:net';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OwnedChild } from '../contracts.js';
 import { probeCore, type CoreCredentials, type CoreConnections } from '../health-probe.js';
 import { bindOwnedConnection, createLoopbackConnections, type ConnectedPeerVerifier } from './loopback-http.js';
 import { createMcpHttpServer } from '../../../mcp/src/server.js';
+vi.mock('node:net', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:net')>();
+  return { ...actual, createConnection: vi.fn(actual.createConnection) };
+});
 const sockets: Socket[] = []; const servers: Server[] = [];
 const child = (): OwnedChild => ({ role: 'core', pid: process.pid, uid: 501, startIdentity: 'start-1',
   generation: 'generation-1', releaseDigest: 'a'.repeat(64) });
 const signal = () => new AbortController().signal;
 const secret = 'SYNTHETIC_LOCAL_AUTH';
+function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 function verifier(): ConnectedPeerVerifier { return { async current() { return true; }, async verify() { return 'OWNED'; } }; }
 function credential(value = secret) { let uses = 0; const port: CoreCredentials = {
   async withValue(use) { uses++; return use(value); } }; return { port, uses: () => uses }; }
@@ -31,7 +37,7 @@ async function fixture(handler?: (req: IncomingMessage, res: ServerResponse) => 
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('fixture address');
   return { port: address.port, requests, bytes: () => bytes, accepted: () => accepted, acceptedOnce };
 }
-afterEach(async () => { for (const socket of sockets.splice(0)) socket.destroy();
+afterEach(async () => { vi.useRealTimers(); for (const socket of sockets.splice(0)) socket.destroy();
   for (const server of servers.splice(0)) await new Promise<void>((resolve, reject) => server.close(e => e ? reject(e) : resolve())); });
 describe('same-socket credential boundary (synthetic verifier, not native ownership proof)', () => {
   it.each(['FOREIGN', 'UNKNOWN'] as const)('sends zero bytes to a %s actual TCP peer', async verdict => {
@@ -110,6 +116,117 @@ describe('same-socket credential boundary (synthetic verifier, not native owners
     await expect(c.request('health', credential().port, undefined, signal())).rejects.toThrow(/^HEALTH_UNKNOWN$/);
     expect(Date.now() - begin).toBeGreaterThanOrEqual(1800); expect(Date.now() - begin).toBeLessThan(6000);
   }, 8000);
+  it('allows sequential ownership binding checks whose individual work is below two seconds', async () => {
+    const f = await fixture(); const socket = await connected(f.port); const v = verifier(); let checks = 0;
+    v.current = async () => { checks++; await delay(750); return true; };
+    v.verify = async () => { checks++; await delay(750); return 'OWNED'; };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const binding = bindOwnedConnection(socket, child(), v, signal());
+    await vi.advanceTimersByTimeAsync(2250);
+    const c = await binding;
+    try { expect(c).not.toBeNull(); expect(checks).toBe(3); expect(f.bytes()).toBe(0); }
+    finally { c?.close(); }
+  });
+  it('keeps all ownership checks around slow credential preparation before starting the HTTP clock', async () => {
+    const received = deferred(); let reply: (() => void) | undefined;
+    const f = await fixture((_req, res) => { reply = () => res.end('{}'); received.resolve(); });
+    const socket = await connected(f.port); const v = verifier(); const controller = new AbortController();
+    const c = await bindOwnedConnection(socket, child(), v, controller.signal); if (!c) throw new Error('binding');
+    const trace: string[] = []; let settled = false;
+    v.current = async () => { trace.push('current'); await delay(400); return true; };
+    v.verify = async () => { trace.push('peer'); await delay(400); return 'OWNED'; };
+    const cdt: CoreCredentials = { async withValue(use) { trace.push('credential'); await delay(700); return use(secret); } };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const outcome = c.request('initialize', cdt, undefined, controller.signal).then(
+      value => { settled = true; return value; }, error => { settled = true; return error as Error; });
+    try {
+      await vi.advanceTimersByTimeAsync(3100);
+      expect(settled).toBe(false); await received.promise;
+      expect(trace).toEqual(['current', 'peer', 'current', 'credential', 'current', 'peer', 'current']);
+      expect(f.accepted()).toBe(1); expect(f.requests).toHaveLength(1);
+      expect(f.requests[0]?.headers['x-gram-agent-auth']).toBe(secret);
+      reply?.(); expect(await outcome).toMatchObject({ status: 200 }); expect(socket.destroyed).toBe(true);
+    } finally { controller.abort(); reply?.(); c.close(); await outcome; }
+  });
+  it.each(['silent', 'trickle'])('limits a %s HTTP response to two seconds from wire start after ownership preparation', async mode => {
+    const received = deferred(); let response: ServerResponse | undefined;
+    const f = await fixture((_req, res) => { response = res; if (mode === 'trickle') res.write('{'); received.resolve(); });
+    const socket = await connected(f.port); const v = verifier(); const controller = new AbortController();
+    const c = await bindOwnedConnection(socket, child(), v, controller.signal); if (!c) throw new Error('binding');
+    v.current = async () => { await delay(500); return true; };
+    v.verify = async () => { await delay(500); return 'OWNED'; };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
+    const outcome = c.request('health', credential().port, undefined, controller.signal).then(
+      () => { settled = true; return undefined; }, error => { settled = true; return error as Error; });
+    try {
+      await vi.advanceTimersByTimeAsync(1500); await received.promise;
+      await vi.advanceTimersByTimeAsync(1000); if (mode === 'trickle') response?.write(' ');
+      await vi.advanceTimersByTimeAsync(999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(await outcome).toEqual(new Error('HEALTH_UNKNOWN'));
+      expect(socket.destroyed).toBe(true);
+    } finally { controller.abort(); c.close(); await outcome; }
+  });
+  it.each(['binding', 'credential', 'recheck'] as const)('bounds standalone %s work without treating preparation as HTTP time', async phase => {
+    const f = await fixture(); const socket = await connected(f.port); const v = verifier();
+    const controller = new AbortController(); const entered = deferred(); const gate = deferred();
+    const stalled = async () => { entered.resolve(); await gate.promise; return true; };
+    const c = phase === 'binding' ? null : await bindOwnedConnection(socket, child(), v, controller.signal);
+    if (phase !== 'binding' && !c) throw new Error('binding');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
+    if (phase !== 'credential') v.current = stalled;
+    const cdt: CoreCredentials = { async withValue(use) { await stalled(); return use(secret); } };
+    const work = phase === 'binding' ? bindOwnedConnection(socket, child(), v, controller.signal)
+      : phase === 'recheck' ? c?.isCurrent() : c?.request('initialize', cdt, undefined, controller.signal);
+    const outcome = Promise.resolve(work).then(value => { settled = true; return value; }, error => { settled = true; return error as Error; });
+    try {
+      await entered.promise; await vi.advanceTimersByTimeAsync(59_999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(settled).toBe(true);
+      expect(await outcome).toEqual(phase === 'binding' ? null : phase === 'recheck' ? false : new Error('HEALTH_UNKNOWN'));
+      expect(socket.destroyed).toBe(true); expect(f.bytes()).toBe(0);
+    } finally { controller.abort(); gate.resolve(); c?.close(); await outcome; }
+  });
+  it.each(['binding', 'credential', 'recheck'] as const)('honors an earlier parent abort during %s and never writes after late completion', async phase => {
+    const f = await fixture(); const socket = await connected(f.port); const v = verifier();
+    const controller = new AbortController(); const entered = deferred(); const gate = deferred();
+    const stalled = async () => { entered.resolve(); await gate.promise; return true; };
+    const c = phase === 'binding' ? null : await bindOwnedConnection(socket, child(), v, controller.signal);
+    if (phase !== 'binding' && !c) throw new Error('binding');
+    if (phase !== 'credential') v.current = stalled;
+    const cdt: CoreCredentials = { async withValue(use) { await stalled(); return use(secret); } };
+    const work = phase === 'binding' ? bindOwnedConnection(socket, child(), v, controller.signal)
+      : phase === 'recheck' ? c?.isCurrent() : c?.request('initialize', cdt, undefined, controller.signal);
+    const outcome = Promise.resolve(work).catch(error => error as Error);
+    await entered.promise; controller.abort('SYNTHETIC_ABORT_SECRET'); gate.resolve();
+    expect(await outcome).toEqual(phase === 'binding' ? null : phase === 'recheck' ? false : new Error('HEALTH_UNKNOWN'));
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(socket.destroyed).toBe(true); expect(f.bytes()).toBe(0); expect(f.requests).toHaveLength(0);
+  });
+  it('closes the actual request socket when its parent aborts during wire I/O', async () => {
+    const received = deferred(); const f = await fixture(() => received.resolve());
+    const socket = await connected(f.port); const controller = new AbortController();
+    const c = await bindOwnedConnection(socket, child(), verifier(), controller.signal); if (!c) throw new Error('binding');
+    const check = expect(c.request('health', credential().port, undefined, controller.signal)).rejects.toThrow(/^HEALTH_UNKNOWN$/);
+    await received.promise; controller.abort('SYNTHETIC_ABORT_SECRET'); await check;
+    expect(socket.destroyed).toBe(true); expect(f.accepted()).toBe(1); expect(f.requests).toHaveLength(1);
+  });
+  it('starts the TCP connect deadline after local ownership preparation and destroys a stalled socket at two seconds', async () => {
+    const socket = new Socket(); sockets.push(socket); const v = verifier();
+    const controller = new AbortController(); let settled = false;
+    v.current = async () => { await delay(1500); return true; };
+    vi.mocked(createConnection).mockReturnValueOnce(socket);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const outcome = createLoopbackConnections(v).openOwnedConnection(child(), 3847, controller.signal).then(value => {
+      settled = true; return value;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(createConnection).toHaveBeenLastCalledWith({ host: '127.0.0.1', port: 3847 });
+      await vi.advanceTimersByTimeAsync(1999); expect(settled).toBe(false); expect(socket.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(await outcome).toBeNull(); expect(socket.destroyed).toBe(true);
+    } finally { controller.abort(); await outcome; }
+  });
   it('does not expose an abort reason or write after a delayed broker returns', async () => {
     const f = await fixture(); const controller = new AbortController(); let release: (() => void) | undefined;
     const entered = new Promise<void>(resolve => { release = resolve; }); let resume: (() => void) | undefined;

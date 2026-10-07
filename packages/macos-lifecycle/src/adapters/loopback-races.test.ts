@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { createConnection, type Socket } from 'node:net';
 import type { OwnedChild } from '../contracts.js';
@@ -23,6 +23,7 @@ async function fixture() {
   return { socket, bytes: () => bytes };
 }
 afterEach(async () => {
+  vi.useRealTimers();
   for (const socket of sockets.splice(0)) socket.destroy();
   for (const server of servers.splice(0)) await new Promise<void>(resolve => server.close(() => resolve()));
 });
@@ -47,9 +48,15 @@ it('bounds a hung binding verifier without relying on a caller deadline', async 
   const f = await fixture(); const controller = new AbortController();
   const verifier: ConnectedPeerVerifier = { async current() { return true; },
     async verify() { return new Promise(() => undefined); } };
-  const guard = setTimeout(() => controller.abort(), 3500); const begin = Date.now();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  let settled = false;
+  const binding = bindOwnedConnection(f.socket, child(), verifier, controller.signal).then(value => {
+    settled = true; return value;
+  });
   try {
-    expect(await bindOwnedConnection(f.socket, child(), verifier, controller.signal)).toBeNull();
-    expect(Date.now() - begin).toBeLessThan(3000); expect(f.bytes()).toBe(0);
-  } finally { clearTimeout(guard); }
-}, 6000);
+    await vi.advanceTimersByTimeAsync(59_999); expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await binding).toBeNull(); expect(controller.signal.aborted).toBe(false);
+    expect(f.socket.destroyed).toBe(true); expect(f.bytes()).toBe(0);
+  } finally { controller.abort(); await binding; }
+});
