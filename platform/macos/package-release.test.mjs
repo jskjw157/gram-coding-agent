@@ -8,10 +8,12 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { packageRelease, publishRelease } from './package-release.mjs';
 
 const sha = (v) => createHash('sha256').update(v).digest('hex');
@@ -230,4 +232,66 @@ test('publication: staging and final are separate; existing output is protected'
   assert.equal(readFileSync(join(destDir, 'release.json'), 'utf8'), out.releaseJson);
   assert.throws(() => publishRelease({ stagingDir, destDir }), /OUTPUT_EXISTS/);
   assert.equal(readFileSync(join(destDir, 'release.json'), 'utf8'), out.releaseJson);
+});
+
+const readableSymlinkCase = 'publication preserves readable declared symlinks under umask 077';
+test(readableSymlinkCase, () => {
+  if (process.env.GRAM_TEST_RELEASE_SYMLINK_UMASK !== '077') {
+    const parentUmask = process.umask();
+    const env = { ...process.env, GRAM_TEST_RELEASE_SYMLINK_UMASK: '077' };
+    // Start a fresh test runner instead of inheriting the parent worker protocol.
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath,
+      ['--test', '--test-name-pattern', `^${readableSymlinkCase}$`, fileURLToPath(import.meta.url)],
+      { env, encoding: 'utf8', timeout: 20_000 });
+    assert.equal(process.umask(), parentUmask, 'the parent umask must remain unchanged');
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stdout + child.stderr);
+    return;
+  }
+
+  const originalUmask = process.umask(0o077);
+  let source;
+  let outputRoot;
+  try {
+    source = writeSource();
+    outputRoot = mkdtempSync(join(tmpdir(), 'mac02-readable-links-'));
+    const link = { path: 'apps/agent/node_modules/entry', target: '../dist/main.js' };
+    const targetPath = 'apps/agent/dist/main.js';
+    const targetBytes = readFileSync(join(source, targetPath));
+    const targetMode = lstatSync(join(source, targetPath)).mode & 0o7777;
+    assert.equal(targetMode, 0o644);
+    mkdirSync(join(source, 'apps/agent/node_modules'), { recursive: true });
+    symlinkSync(link.target, join(source, link.path));
+
+    const out = pack(source, { stagingDir: join(outputRoot, 'staging'), additionalLinks: [link] });
+    assert.deepEqual(JSON.parse(out.releaseJson).files.find(entry => entry.path === link.path), link);
+    assert.equal(out.digest, sha(out.releaseJson));
+    const destDir = join(outputRoot, 'published');
+    const published = publishRelease({ stagingDir: out.stagingDir, destDir });
+    assert.equal(published.digest, out.digest);
+
+    const readBits = {};
+    for (const [name, directory] of [['staging', out.stagingDir], ['published', destDir]]) {
+      const stat = lstatSync(join(directory, link.path));
+      assert.ok(stat.isSymbolicLink(), `${name} must retain the declared symlink`);
+      assert.equal(readlinkSync(join(directory, link.path)), link.target);
+      readBits[name] = stat.mode & 0o444;
+      assert.deepEqual(readFileSync(join(directory, targetPath)), targetBytes);
+      assert.equal(lstatSync(join(directory, targetPath)).mode & 0o7777, targetMode);
+      assert.equal(readFileSync(join(directory, 'release.json'), 'utf8'), out.releaseJson);
+    }
+    assert.deepEqual(readFileSync(join(source, targetPath)), targetBytes);
+    assert.equal(lstatSync(join(source, targetPath)).mode & 0o7777, targetMode);
+    assert.equal(process.umask(), 0o077, 'packaging must preserve the restrictive umask');
+    assert.deepEqual(readBits, { staging: 0o444, published: 0o444 },
+      'both packaged symlinks must permit readlink by the runtime user');
+  } finally {
+    try {
+      if (source) rmSync(source, { recursive: true, force: true });
+      if (outputRoot) rmSync(outputRoot, { recursive: true, force: true });
+    } finally {
+      process.umask(originalUmask);
+    }
+  }
 });
