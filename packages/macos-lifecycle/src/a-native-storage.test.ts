@@ -1,6 +1,8 @@
 import { chmod, mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNativeInstallStorageAt } from './a-native-storage.js';
 
@@ -27,6 +29,62 @@ async function fixture() {
 }
 
 describe('A fixed native install storage', () => {
+  const restrictiveUmaskCase = 'writes readable metadata while retaining a restrictive inherited umask';
+  it(restrictiveUmaskCase, async () => {
+    // umask is process-wide. Only the dedicated child changes it, so parallel
+    // test workers and the rest of this suite keep their original permissions.
+    if (process.env.GRAM_TEST_METADATA_UMASK !== '077') {
+      const cli = new URL('vitest.mjs', import.meta.resolve('vitest/package.json'));
+      const child = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+        process.umask(0o077);
+        process.env.GRAM_TEST_METADATA_UMASK = '077';
+        process.argv = [process.execPath, ${JSON.stringify(fileURLToPath(cli))},
+          'run', 'src/a-native-storage.test.ts', '--testNamePattern',
+          ${JSON.stringify(restrictiveUmaskCase)}, '--maxWorkers', '1'];
+        await import(${JSON.stringify(cli.href)});
+      `], {
+        cwd: fileURLToPath(new URL('../', import.meta.url)),
+        encoding: 'utf8',
+        timeout: 20_000,
+      });
+      expect(child.error).toBeUndefined();
+      expect(child.status, child.stdout + child.stderr).toBe(0);
+      return;
+    }
+
+    expect(process.umask()).toBe(0o077);
+    const f = await fixture();
+    const lock = await f.storage.lock();
+    expect(lock.acquired).toBe(true);
+    try {
+      expect((await stat(`${f.anchor}/app/config/install.lock`)).mode & 0o7777).toBe(0o600);
+      const prepared = Buffer.from('{"schemaVersion":1,"stage":"PREPARED"}');
+      await f.storage.journal.writeStage('PREPARED', prepared);
+      expect(await f.storage.journal.read()).toEqual(prepared);
+
+      const files = [
+        ['configuration', 'app/config/service.json'],
+        ['manifest', 'app/config/installation.json'],
+        ['core', 'Library/LaunchDaemons/com.haar.gram-agent.core.plist'],
+        ['tunnel', 'Library/LaunchDaemons/com.haar.gram-agent.tunnel.plist'],
+      ] as const;
+      const bytes = Buffer.from('nonsecret-metadata');
+      for (const [kind, relative] of files) {
+        await f.storage.publish.stageFile(kind, bytes);
+        await f.storage.publish.publishFile(kind, bytes);
+        expect(await f.storage.publish.readLive(kind)).toEqual(bytes);
+        const published = await stat(join(f.anchor, relative));
+        expect(published.mode & 0o7777).toBe(0o644);
+        expect(published.uid).toBe(process.getuid?.() ?? 0);
+        expect(published.nlink).toBe(1);
+      }
+      expect((await stat(`${f.anchor}/app/config/install-journal.json`)).mode & 0o7777).toBe(0o644);
+      expect(process.umask()).toBe(0o077);
+    } finally {
+      await lock.release();
+    }
+  });
+
   it('stages and publishes exact fixed files without caller-selected paths', async () => {
     const f = await fixture();
     const bytes = Buffer.from('{"schemaVersion":1}');

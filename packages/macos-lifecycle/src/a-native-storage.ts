@@ -120,11 +120,18 @@ async function createExact(
   const file = await open(
     path,
     constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-    0o644,
+    0o600,
   );
   try {
+    const created = await file.stat({ bigint: true });
+    if (!created.isFile() || created.uid !== directory.stat.uid || created.nlink !== 1n
+      || (created.mode & 0o7777n) !== 0o600n) throw new Error('UNSAFE_PATH');
+    // Set nonsecret metadata permissions on the verified new descriptor so a
+    // restrictive inherited umask stays in force for locks and other files.
+    await file.chmod(0o644);
     const stat = await file.stat({ bigint: true });
-    if (!stat.isFile() || stat.uid !== directory.stat.uid || stat.nlink !== 1n
+    if (!stat.isFile() || stat.dev !== created.dev || stat.ino !== created.ino
+      || stat.uid !== created.uid || stat.gid !== created.gid || stat.nlink !== 1n
       || (stat.mode & 0o7777n) !== 0o644n) throw new Error('UNSAFE_PATH');
     await file.writeFile(bytes);
     await file.sync();
