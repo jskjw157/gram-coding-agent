@@ -339,6 +339,45 @@ describe('shell filesystem target expansion fail-closed boundary', () => {
   });
 });
 
+
+describe('shell composition fail-closed boundary', () => {
+  it.each([
+    ['background separator', 'echo ok & rm -rf /'],
+    ['pipe-stderr separator', 'echo ok |& rm -rf /'],
+    ['newline separator', 'echo ok\nrm -rf /'],
+    ['CRLF separator', 'echo ok\r\nrm -rf /'],
+    ['escaped newline continuation', 'echo ok\\\nrm -rf /'],
+  ] as const)('rejects unsupported %s before classification', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['double-quoted ampersand', 'echo "a&b"', ['a&b']],
+    ['single-quoted ampersand', "echo 'a&b'", ['a&b']],
+    ['escaped ampersand', 'echo a\\&b', ['a&b']],
+    ['single-quoted newline', "echo 'a\nb'", ['a\nb']],
+    ['double-quoted newline', 'echo "a\nb"', ['a\nb']],
+  ] as const)('keeps supported literal composition marker: %s', (_label, command, expectedArgs) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.executable).toBe('echo');
+    expect(operation?.args).toEqual(expectedArgs);
+  });
+
+  it('keeps composition-looking executable-form arguments literal', () => {
+    const operation = normalizeExecutableCommand(
+      'echo',
+      ['a&b', 'a\nb'],
+      process.cwd(),
+    );
+    expect(operation.args).toEqual(['a&b', 'a\nb']);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe(
+      'ALLOW',
+    );
+  });
+});
+
 describe('path-sensitive normalization', () => {
   it('retains requested and canonical filesystem targets', () => {
     const root = mkdtempSync(join(tmpdir(), 'gram-policy-'));
