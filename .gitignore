@@ -1,0 +1,29 @@
+# Installed dependencies and local package-manager cache.
+node_modules/
+.pnpm-store/
+
+# Generated TypeScript output; keep source fixtures named dist visible.
+/apps/*/dist/
+/packages/*/dist/
+*.tsbuildinfo
+
+# Verification reports.
+/coverage/
+/apps/*/coverage/
+/packages/*/coverage/
+
+# Local logs; log fixtures are source inputs.
+*.log
+!**/fixtures/**/*.log
+
+# Local environment values; keep distributable examples visible.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Isolated development checkouts and execution notes.
+/.worktrees/
+/worktrees/
+/.superpowers/
