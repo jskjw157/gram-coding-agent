@@ -513,6 +513,20 @@ describe('M2 deterministic vertical slice', () => {
         Date.parse(auditRows[0]!.createdAt),
       ).toBeLessThanOrEqual(Date.parse(auditRows[1]!.createdAt));
 
+      const observationRows = database.prepare(`
+        SELECT created_at AS createdAt, payload_json AS payloadJson
+        FROM audit_events
+        WHERE task_id = ? AND event_type = 'CI_OBSERVATION_STARTED'
+        ORDER BY id
+      `).all(created.id) as Array<{ createdAt: string; payloadJson: string }>;
+      expect(observationRows).toHaveLength(2);
+      expect(observationRows.map((row) => JSON.parse(row.payloadJson))).toEqual([
+        { pullRequestId: pr!.id, headSha: published!.sha },
+        { pullRequestId: pr!.id, headSha: published!.sha },
+      ]);
+      expect(Date.parse(auditRows[1]!.createdAt)).toBeLessThan(Date.parse(pr!.createdAt));
+      expect(Date.parse(pr!.createdAt)).toBeLessThanOrEqual(Date.parse(observationRows[0]!.createdAt));
+
       const persistedCommands = database
         .prepare(
           `SELECT executable, args_json AS argsJson, status
