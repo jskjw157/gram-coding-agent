@@ -356,7 +356,7 @@ async function diagnoseRuntime(source, acl, review) {
       code: event.code, attempt: event.attemptCount, age_ms: Date.now() - event.observedAtMs,
     })),
   });
-  if (registration === null || controller.signal.aborted) return;
+  if (registration === null || controller.signal.aborted) return held;
   const releasePrefix = `${fixedRoot.slice(1)}/releases/${review.config.releaseId}`;
   const releaseFiles = createTrustedFiles('/', 0, acl, releasePrefix);
   const nodePath = `${fixedRoot}/releases/${review.config.releaseId}/bin/node`;
@@ -382,6 +382,107 @@ async function diagnoseRuntime(source, acl, review) {
     observer_inode_safe_integer: Number.isSafeInteger(observerNode.ino),
     observer_numeric_identity_exact: BigInt(observerNode.ino) === node.ino && BigInt(observerNode.dev) === node.dev,
   });
+  return held;
+}
+
+async function diagnoseSelfProof(source, acl, review, initialHeld) {
+  // Read-only post-compensation probe of THIS diagnostic process, not the prior
+  // Core child. It cannot establish which earlier startup phase failed.
+  const emitStage = (stage, event, fields = {}) => emit('NATIVE_SELF_PROOF_DIAG', {
+    stage, event, ...fields, aborted: controller.signal.aborted,
+  });
+  if (initialHeld?.schemaVersion !== 1 || initialHeld.role !== 'core' || initialHeld.state !== 'HELD'
+    || initialHeld.configDigest !== review.configDigest
+    || initialHeld.releaseDigest !== review.config.releaseDigest || controller.signal.aborted) {
+    emitStage('gate', 'SKIPPED', { held_match: false });
+    return;
+  }
+  const [{ bindReviewedCoreRuntime }, { encodeExecution }, { createTrustedFiles },
+    { createNativePeerProof }, { coreStartIdentity }] = await Promise.all([
+    import(new URL('adapters/runtime-authority.js', source).href),
+    import(new URL('execution-lease.js', source).href),
+    import(new URL('adapters/trusted-files.js', source).href),
+    import(new URL('adapters/owned-process.js', source).href),
+    import(new URL('core-registration.js', source).href),
+  ]);
+  const expectedHeld = encodeExecution(initialHeld);
+  async function observe(stage, use) {
+    const began = performance.now();
+    emitStage(stage, 'START');
+    try {
+      const value = await use();
+      emitStage(stage, 'DONE', { ok: value !== null && value !== false,
+        elapsed_ms: Math.round(performance.now() - began) });
+      return value;
+    } catch {
+      emitStage(stage, 'ERROR', { ok: false, elapsed_ms: Math.round(performance.now() - began) });
+      return null;
+    }
+  }
+  const runtime = await observe('bind', () => bindReviewedCoreRuntime(review, acl, controller.signal));
+  if (!runtime || controller.signal.aborted) return;
+  const heldUnchanged = async () => !controller.signal.aborted
+    && expectedHeld.equals(encodeExecution(await runtime.execution.read('core')))
+    && !controller.signal.aborted;
+  if (!await heldUnchanged()) { emitStage('gate', 'SKIPPED', { held_match: false }); return; }
+  // This authority method validates and reads an already HELD record. It is
+  // NOT ExecutionLeaseStore.acquire and never initializes, acquires or releases
+  // a reservation. No session, credential, HTTP or Core launch follows it.
+  const grant = await observe('grant', () => runtime.authority.acquire(review.config, controller.signal));
+  if (!grant || controller.signal.aborted) return;
+  if (!await heldUnchanged()) { emitStage('gate', 'SKIPPED', { held_match: false }); return; }
+  const fixedRoot = '/Library/Application Support/HAAR/GramAgent';
+  const releasePrefix = fixedRoot.slice(1) + '/releases/' + review.config.releaseId;
+  const nodePath = '/' + releasePrefix + '/bin/node';
+  const helperPath = '/' + releasePrefix + '/bin/peer-owner';
+  const files = createTrustedFiles('/', 0, acl, releasePrefix);
+  const same = (a, b) => ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs']
+    .every(key => a[key] === b[key]);
+  const safeExecutable = value => value.isFile() && value.uid === 0n && value.nlink === 1n
+    && (value.mode & 0o6022n) === 0n && (value.mode & 0o111n) !== 0n;
+  emitStage('identity', 'START');
+  const node = await lstat(nodePath, { bigint: true });
+  const self = await lstat(process.execPath, { bigint: true });
+  const helper = await lstat(helperPath, { bigint: true });
+  const identityOk = process.execPath === nodePath && safeExecutable(node) && safeExecutable(helper)
+    && same(node, self) && grant.configDigest === review.configDigest
+    && grant.account.name === 'gram-agent' && grant.account.admin === false
+    && grant.account.uid === process.getuid() && grant.account.gid === process.getgid()
+    && grant.executable.dev === node.dev && grant.executable.ino === node.ino;
+  const pinsOk = identityOk
+    && await files.hash('bin/node', 256 * 1024 * 1024) === review.nodeDigest
+    && await files.hash('bin/peer-owner', 256 * 1024 * 1024) === review.peerOwnerDigest
+    && same(node, await lstat(nodePath, { bigint: true }))
+    && same(helper, await lstat(helperPath, { bigint: true }));
+  emitStage('identity', 'DONE', { identity_ok: identityOk, pins_ok: pinsOk });
+  if (!pinsOk || !await heldUnchanged()) { emitStage('capture', 'SKIPPED'); return; }
+  const request = Object.freeze({ pid: process.pid, uid: grant.account.uid,
+    executable: Object.freeze({ dev: node.dev, ino: node.ino }) });
+  const validCapture = value => {
+    try {
+      if (value === null || typeof value?.sec !== 'string' || typeof value?.usec !== 'string') return false;
+      coreStartIdentity(value.sec + '.' + value.usec);
+      return true;
+    } catch { return false; }
+  };
+  const wrapped = await observe('wrapped_capture', async () => {
+    const value = await grant.proof.capture(request, controller.signal);
+    return validCapture(value) ? value : null;
+  });
+  if (controller.signal.aborted || !await heldUnchanged()) { emitStage('bare_capture', 'SKIPPED'); return; }
+  const helperStillPinned = await files.hash('bin/peer-owner', 256 * 1024 * 1024) === review.peerOwnerDigest
+    && same(helper, await lstat(helperPath, { bigint: true }));
+  if (!helperStillPinned || controller.signal.aborted) { emitStage('bare_capture', 'SKIPPED'); return; }
+  const bare = await observe('bare_capture', async () => {
+    const value = await createNativePeerProof(helperPath).capture(request, controller.signal);
+    return validCapture(value) ? value : null;
+  });
+  emitStage('comparison', 'DONE', { wrapped_ok: wrapped !== null, bare_ok: bare !== null,
+    same_capture: wrapped !== null && bare !== null && wrapped.sec === bare.sec && wrapped.usec === bare.usec,
+    held_unchanged: await heldUnchanged(),
+    helper_unchanged: await files.hash('bin/peer-owner', 256 * 1024 * 1024) === review.peerOwnerDigest
+      && same(helper, await lstat(helperPath, { bigint: true })),
+    node_unchanged: same(node, await lstat(nodePath, { bigint: true })) });
 }
 
 try {
@@ -394,7 +495,10 @@ try {
     diagnosticsStarted = performance.now();
     try {
       if (review === null) await diagnose(source, sources.acl);
-      else await diagnoseRuntime(source, sources.acl, review);
+      else {
+        const held = await diagnoseRuntime(source, sources.acl, review);
+        await diagnoseSelfProof(source, sources.acl, review, held);
+      }
       diagnosticsComplete = true;
     } catch { /* Preserve the review result; report incomplete diagnostics. */ }
   }
