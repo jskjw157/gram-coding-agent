@@ -99,11 +99,200 @@ NODE="$DEST_RELEASE/bin/node"
 OPERATOR="$DEST_RELEASE/packages/macos-lifecycle/dist/operator-cli.js"
 [[ -x "$NODE" && -f "$OPERATOR" ]] || { echo 'OPERATOR_MISSING' >&2; exit 2; }
 
-echo 'NATIVE_PHASE=preview'
-PREVIEW="$("$NODE" "$OPERATOR" preview --json)"
+preview_snapshot() {
+  # Failure-only observation. Never retry the preview or change its result.
+  if ! "$NODE" --input-type=module - "$1" "$2" 2>/dev/null <<'NATIVE_PREVIEW_SNAPSHOT'
+import { execFile } from 'node:child_process';
+import { writeSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const phases = { initial: 'INITIAL', 'post-apply': 'POST_APPLY',
+  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL' };
+const failures = { preview: 'PREVIEW', assertion: 'ASSERTION' };
+const phase = Object.hasOwn(phases, process.argv[2]) ? phases[process.argv[2]] : null;
+const failure = Object.hasOwn(failures, process.argv[3]) ? failures[process.argv[3]] : null;
+const prefix = phase !== null && failure !== null ? phase + '_' + failure : null;
+const stage = prefix === null ? null : {
+  done: prefix + '_DONE', timeout: prefix + '_TIMEOUT', error: prefix + '_ERROR',
+};
+const snapshot = {
+  ports: { core: 'unknown', tunnel: 'unknown' },
+  tcp_states: { core: [], tunnel: [] },
+  registry: null,
+};
+let finished = false;
+let timer;
+function finish(kind) {
+  if (finished) return;
+  finished = true;
+  clearTimeout(timer);
+  try {
+    writeSync(1, 'NATIVE_PREVIEW_SYSTEM_DIAG ' + JSON.stringify({
+      stage: stage?.[kind] ?? 'UNKNOWN_ERROR', ...snapshot,
+    }) + '\n');
+  } finally {
+    process.exit(0);
+  }
+}
+// One hard deadline covers imports and both read-only observations.
+timer = setTimeout(() => finish('timeout'), 10_000);
+
+function netstat() {
+  return new Promise(resolve => {
+    execFile('/usr/sbin/netstat', ['-an', '-p', 'tcp'], {
+      encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024, shell: false,
+      env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C', LANG: 'C' },
+    }, (error, stdout, stderr) => {
+      const rawCode = error?.code;
+      const code = error === null ? 0
+        : error?.killed !== true && error?.signal == null && typeof rawCode === 'number'
+          && Number.isSafeInteger(rawCode) && rawCode >= 1 && rawCode <= 255 ? rawCode : 255;
+      resolve({ code, stdout: typeof stdout === 'string' ? stdout : '',
+        stderr: typeof stderr === 'string' ? stderr : '' });
+    });
+  });
+}
+
+try {
+  if (stage === null) finish('error');
+  const source = new URL('../packages/macos-lifecycle/dist/adapters/macos-service-probes.js',
+    pathToFileURL(process.execPath));
+  const { inspectMacRegistry, parseTcpSnapshot } = await import(source.href);
+  const results = await Promise.allSettled([
+    (async () => {
+      const value = await inspectMacRegistry();
+      const roles = ['core', 'tunnel'];
+      if (value !== null && roles.every(role =>
+        ['absent', 'present'].includes(value?.jobs?.[role])
+        && (value?.overrides?.[role] === null || typeof value?.overrides?.[role] === 'boolean'))) {
+        snapshot.registry = {
+          jobs: { core: value.jobs.core, tunnel: value.jobs.tunnel },
+          overrides: { core: value.overrides.core, tunnel: value.overrides.tunnel },
+        };
+      }
+    })(),
+    (async () => {
+      const raw = await netstat();
+      const ports = parseTcpSnapshot(raw);
+      snapshot.ports = { core: ports.core, tunnel: ports.tunnel };
+      // Decode target-port states only after the production parser accepts
+      // the complete table. Never emit native text, addresses, or PIDs.
+      if (ports.core === 'unknown' || ports.tunnel === 'unknown') return;
+      const recognized = new Set(['CLOSED', 'LISTEN', 'SYN_SENT', 'SYN_RECEIVED',
+        'ESTABLISHED', 'CLOSE_WAIT', 'FIN_WAIT_1', 'CLOSING', 'LAST_ACK', 'FIN_WAIT_2', 'TIME_WAIT']);
+      const found = { core: new Set(), tunnel: new Set() };
+      for (const line of raw.stdout.split('\n').map(value => value.trim()).filter(Boolean).slice(2)) {
+        const fields = line.split(/[ \t]+/u);
+        const endpoint = fields[3];
+        const port = Number(endpoint.slice(endpoint.lastIndexOf('.') + 1));
+        const role = port === 3847 ? 'core' : port === 8080 ? 'tunnel' : null;
+        if (role !== null && recognized.has(fields[5])) found[role].add(fields[5]);
+      }
+      snapshot.tcp_states = { core: [...found.core].sort(), tunnel: [...found.tunnel].sort() };
+    })(),
+  ]);
+  finish(results.every(result => result.status === 'fulfilled') ? 'done' : 'error');
+} catch {
+  finish('error');
+}
+NATIVE_PREVIEW_SNAPSHOT
+  then
+    echo 'NATIVE_PREVIEW_SYSTEM_DIAG {"stage":"PROCESS_ERROR","ports":{"core":"unknown","tunnel":"unknown"},"tcp_states":{"core":[],"tunnel":[]},"registry":null}'
+  fi
+}
+
+preview_summary() {
+  if ! "$NODE" --input-type=module - "$1" "$2" "$3" "$4" "$5" 2>/dev/null <<'NATIVE_PREVIEW_SUMMARY'
+const codes = new Set(['OK', 'UNSUPPORTED_HOST', 'INVALID_CONFIG', 'ACCOUNT_INVALID',
+  'UNTRUSTED_RELEASE', 'UNSAFE_PATH', 'FOREIGN_SERVICE', 'PORT_IN_USE', 'CONFIG_CHANGED',
+  'BUSY', 'AUTH_BLOCKED', 'HEALTH_UNKNOWN', 'TOOL_SURFACE_MISMATCH', 'RESTART_BUDGET',
+  'INVALID_HISTORY', 'ROLLBACK_BLOCKED_SCHEMA', 'PARTIAL_INSTALL', 'NOT_AUTHORIZED',
+  'TUNNEL_COMPATIBILITY_REQUIRED', 'INTERNAL_ERROR']);
+function preview(value) {
+  try {
+    if (typeof value !== 'string' || Buffer.byteLength(value) > 65_536) return null;
+    const parsed = JSON.parse(value)?.preview;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+const phases = { initial: 'INITIAL', 'post-apply': 'POST_APPLY',
+  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL' };
+const phase = Object.hasOwn(phases, process.argv[2]) ? phases[process.argv[2]] : 'UNKNOWN';
+const current = preview(process.argv[4]);
+const prior = preview(process.argv[6]);
+const comparisonPresent = phase === 'POST_STOP' && process.argv[5] === 'true';
+const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+const exit = Number(process.argv[3]);
+process.stdout.write('NATIVE_PREVIEW_DIAG ' + JSON.stringify({
+  phase,
+  exit: Number.isSafeInteger(exit) && exit >= 0 && exit <= 255 ? exit : null,
+  preview_ok: current?.ok === true,
+  preview_code: codes.has(current?.code) ? current.code : 'UNKNOWN',
+  config_digest_valid: digest(current?.configDigest),
+  install_digest_valid: current !== null && (current.previousInstallDigest === null
+    || digest(current.previousInstallDigest)),
+  comparison_present: comparisonPresent,
+  config_token_match: comparisonPresent
+    ? digest(current?.configDigest) && current.configDigest === prior?.configDigest : null,
+  install_digest_match: comparisonPresent ? digest(current?.previousInstallDigest)
+    && current.previousInstallDigest === prior?.previousInstallDigest : null,
+}) + '\n');
+NATIVE_PREVIEW_SUMMARY
+  then
+    printf 'NATIVE_PREVIEW_DIAG {"phase":"UNKNOWN","exit":%d,"preview_ok":false,"preview_code":"UNKNOWN","config_digest_valid":false,"install_digest_valid":false,"comparison_present":%s,"config_token_match":null,"install_digest_match":null}\n' "$2" "$4"
+  fi
+}
+
+run_preview() {
+  local phase="$1"
+  local comparison_present=false
+  local comparison=''
+  case "$phase" in
+    initial) echo 'NATIVE_PHASE=preview' ;;
+    post-apply) echo 'NATIVE_PHASE=post-apply-preview' ;;
+    post-stop)
+      echo 'NATIVE_PHASE=post-stop-preview'
+      comparison_present=true
+      comparison="$2"
+      ;;
+    post-uninstall) echo 'NATIVE_PHASE=post-uninstall-preview' ;;
+    *) return 64 ;;
+  esac
+  set +e
+  CAPTURED_PREVIEW="$("$NODE" "$OPERATOR" preview --json)"
+  local preview_exit=$?
+  set -e
+  preview_summary "$phase" "$preview_exit" "$CAPTURED_PREVIEW" "$comparison_present" "$comparison"
+  if [[ "$preview_exit" -ne 0 ]]; then
+    preview_snapshot "$phase" preview >&2
+    return "$preview_exit"
+  fi
+  return 0
+}
+
+preview_assert() {
+  local phase="$1"
+  local assertion="$2"
+  shift 2
+  set +e
+  "$NODE" -e "$assertion" "$@"
+  local assertion_exit=$?
+  set -e
+  if [[ "$assertion_exit" -ne 0 ]]; then
+    # Token assertions run in command substitutions; keep their diagnostics
+    # visible without mixing them into captured token output.
+    preview_snapshot "$phase" assertion >&2
+    return "$assertion_exit"
+  fi
+  return 0
+}
+
+run_preview initial
+PREVIEW="$CAPTURED_PREVIEW"
 printf '%s\n' "$PREVIEW" > "${RUNNER_TEMP:-/tmp}/mac02-native-preview.json"
-PREVIEW_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.configDigest!=="string") process.exit(2); process.stdout.write(j.preview.configDigest)' "$PREVIEW")"
-PREVIOUS="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
+PREVIEW_TOKEN="$(preview_assert initial 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.configDigest!=="string") process.exit(2); process.stdout.write(j.preview.configDigest)' "$PREVIEW")"
+PREVIOUS="$(preview_assert initial 'const j=JSON.parse(process.argv[1]); if(j.preview?.previousInstallDigest!==null) process.exit(2); process.stdout.write("none")' "$PREVIEW")"
 
 echo 'NATIVE_PHASE=apply'
 set +e
@@ -527,10 +716,11 @@ for file in "$ROOT/config/service.json" "$ROOT/config/installation.json" "$ROOT/
     || { echo 'COMMITTED_FILE_MODE_INVALID' >&2; exit 2; }
 done
 
-POST="$("$NODE" "$OPERATOR" preview --json)"
-"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.previousInstallDigest!=="string"||j.preview.previousInstallDigest.length!==64) process.exit(2)' "$POST"
-POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$POST")"
-POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$POST")"
+run_preview post-apply
+POST="$CAPTURED_PREVIEW"
+preview_assert post-apply 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||typeof j.preview.previousInstallDigest!=="string"||j.preview.previousInstallDigest.length!==64) process.exit(2)' "$POST"
+POST_TOKEN="$(preview_assert post-apply 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$POST")"
+POST_INSTALL="$(preview_assert post-apply 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$POST")"
 
 echo 'NATIVE_PHASE=start'
 set +e
@@ -577,10 +767,11 @@ if /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1; then
   exit 2
 fi
 
-STOPPED="$("$NODE" "$OPERATOR" preview --json)"
-"$NODE" -e 'const a=JSON.parse(process.argv[1]); const b=JSON.parse(process.argv[2]); if(!a.preview?.ok||a.preview.configDigest!==b.preview.configDigest||a.preview.previousInstallDigest!==b.preview.previousInstallDigest) process.exit(2)' "$STOPPED" "$POST"
-POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$STOPPED")"
-POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$STOPPED")"
+run_preview post-stop "$POST"
+STOPPED="$CAPTURED_PREVIEW"
+preview_assert post-stop 'const a=JSON.parse(process.argv[1]); const b=JSON.parse(process.argv[2]); if(!a.preview?.ok||a.preview.configDigest!==b.preview.configDigest||a.preview.previousInstallDigest!==b.preview.previousInstallDigest) process.exit(2)' "$STOPPED" "$POST"
+POST_TOKEN="$(preview_assert post-stop 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$STOPPED")"
+POST_INSTALL="$(preview_assert post-stop 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$STOPPED")"
 
 echo 'NATIVE_PHASE=uninstall'
 set +e
@@ -606,9 +797,10 @@ core_override="$(/usr/bin/grep -F "\"$CORE_LABEL\"" <<<"$disabled_output" | /usr
   exit 2
 }
 
-EMPTY="$("$NODE" "$OPERATOR" preview --json)"
-"$NODE" -e 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||j.preview.previousInstallDigest!==null) process.exit(2)' "$EMPTY"
-EMPTY_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$EMPTY")"
+run_preview post-uninstall
+EMPTY="$CAPTURED_PREVIEW"
+preview_assert post-uninstall 'const j=JSON.parse(process.argv[1]); if(!j.preview?.ok||j.preview.previousInstallDigest!==null) process.exit(2)' "$EMPTY"
+EMPTY_TOKEN="$(preview_assert post-uninstall 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$EMPTY")"
 echo 'NATIVE_PHASE=second-uninstall'
 set +e
 SECOND="$("$NODE" "$OPERATOR" uninstall --config service --expected-config-digest "$EMPTY_TOKEN" --expected-install-digest none --json)"
