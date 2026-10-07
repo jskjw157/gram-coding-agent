@@ -130,37 +130,159 @@ if [[ "$APPLY_EXIT" -ne 0 ]]; then
   # Read installed review once as the runtime user, without provisioning or
   # starting a session. Force exit at the deadline even if a scan ignores abort.
   if ! /usr/bin/sudo -u gram-agent "$NODE" --input-type=module 2>/dev/null <<'NATIVE_REVIEW_PROBE'
-import { writeSync } from 'node:fs';
+import { constants, writeSync } from 'node:fs';
+import { lstat, open } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 
 const started = performance.now();
 const controller = new AbortController();
+let reviewReported = false;
+let reviewElapsedMs = -1;
+let diagnosticsStarted = -1;
+let diagnosticsComplete = false;
 const timer = setTimeout(() => {
   controller.abort();
   finish('TIMEOUT', false);
 }, 60_000);
 
+function emit(label, fields) {
+  writeSync(1, `${label} ${JSON.stringify(fields)}\n`);
+}
+
+function reportReview(result, reviewOk) {
+  reviewElapsedMs = Math.round(performance.now() - started);
+  reviewReported = true;
+  emit('NATIVE_REVIEW_DIAG', {
+    result, review_ok: reviewOk, elapsed_ms: reviewElapsedMs,
+    uid: process.getuid(), gid: process.getgid(), aborted: controller.signal.aborted,
+  });
+}
+
 function finish(result, reviewOk) {
   clearTimeout(timer);
   try {
-    writeSync(1, `NATIVE_REVIEW_DIAG ${JSON.stringify({
-      result,
-      review_ok: reviewOk,
-      elapsed_ms: Math.round(performance.now() - started),
-      uid: process.getuid(),
-      gid: process.getgid(),
+    if (!reviewReported) reportReview(result, reviewOk);
+    else if (diagnosticsStarted >= 0) emit('NATIVE_REVIEW_DETAIL_DONE', {
+      diagnostics_complete: diagnosticsComplete,
+      review_elapsed_ms: reviewElapsedMs,
+      diag_elapsed_ms: Math.round(performance.now() - diagnosticsStarted),
       aborted: controller.signal.aborted,
-    })}\n`);
+    });
   } finally {
     process.exit(0);
   }
 }
 
+async function diagnose(source, acl) {
+  const fixedRoot = '/Library/Application Support/HAAR/GramAgent';
+  // Fixed numeric IDs only: 0-7 are the config chain and its two files;
+  // 8-10 extend the shared root chain to the independent bootstrap helper.
+  const paths = ['/', '/Library', '/Library/Application Support',
+    '/Library/Application Support/HAAR', fixedRoot, `${fixedRoot}/config`,
+    `${fixedRoot}/config/service.json`, `${fixedRoot}/config/installation.json`,
+    `${fixedRoot}/bootstrap`, `${fixedRoot}/bootstrap/bin`, `${fixedRoot}/bootstrap/bin/file-acl`];
+  const isLeaf = id => id === 6 || id === 7 || id === 10;
+  const same = (a, b) => ['dev', 'ino', 'mode', 'uid', 'gid', 'nlink', 'size', 'mtimeNs', 'ctimeNs']
+    .every(key => a[key] === b[key]);
+
+  async function inspectPath(id, probeAcl) {
+    const row = { id, stat_ok: false, type: 0, uid: -1, gid: -1, mode: -1, nlink: -1,
+      open_ok: false, identity_ok: false, acl_checked: false, acl_ok: false };
+    let file;
+    try {
+      const before = await lstat(paths[id], { bigint: true });
+      Object.assign(row, { stat_ok: true, type: before.isDirectory() ? 1 : before.isFile() ? 2 : 0,
+        uid: Number(before.uid), gid: Number(before.gid), mode: Number(before.mode & 0o7777n),
+        nlink: Number(before.nlink) });
+      if (row.type !== (isLeaf(id) ? 2 : 1)) return row;
+      file = await open(paths[id], constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+        | (isLeaf(id) ? 0 : constants.O_DIRECTORY));
+      row.open_ok = true;
+      row.identity_ok = same(before, await file.stat({ bigint: true }))
+        && same(before, await lstat(paths[id], { bigint: true }));
+      if (probeAcl && row.identity_ok) {
+        row.acl_checked = true;
+        row.acl_ok = await acl(file) === true;
+      }
+      row.identity_ok = row.identity_ok && same(before, await file.stat({ bigint: true }))
+        && same(before, await lstat(paths[id], { bigint: true }));
+    } catch {
+      // The individual false fields are the evidence; never emit error text.
+      row.identity_ok = false;
+    } finally {
+      if (file) await file.close().catch(() => undefined);
+    }
+    return row;
+  }
+
+  let helperFailId = -1;
+  for (const id of [1, 2, 3, 4, 8, 9, 10]) {
+    const row = await inspectPath(id, false);
+    const safe = row.stat_ok && row.open_ok && row.identity_ok && row.uid === 0
+      && (row.mode & 0o022) === 0 && row.type === (id === 10 ? 2 : 1)
+      && (id !== 10 || row.nlink === 1 && (row.mode & 0o111) !== 0);
+    if (!safe && helperFailId === -1) helperFailId = id;
+    if (id >= 8) emit('NATIVE_REVIEW_PATH_DIAG', row);
+  }
+  emit('NATIVE_REVIEW_HELPER_DIAG', {
+    helper_chain_checked: true, helper_chain_ok: helperFailId === -1, helper_fail_id: helperFailId,
+  });
+  for (let id = 0; id <= 7; id++) emit('NATIVE_REVIEW_PATH_DIAG', await inspectPath(id, true));
+
+  const [{ createTrustedFiles }, { parseConfig }, { validateManifestBytes, shaBytes }] = await Promise.all([
+    import(new URL('adapters/trusted-files.js', source).href),
+    import(new URL('config.js', source).href),
+    import(new URL('adapters/install-files.js', source).href),
+  ]);
+  const files = createTrustedFiles('/', 0, acl, `${fixedRoot.slice(1)}/config`);
+  let configBytes = null;
+  let manifestBytes = null;
+  try { configBytes = await files.read('service.json', 262144); } catch { /* observed below */ }
+  try { manifestBytes = await files.read('installation.json', 262144); } catch { /* observed below */ }
+  const binding = { config_read_ok: configBytes !== null, manifest_read_ok: manifestBytes !== null,
+    config_parse_ok: false, manifest_schema_ok: false, binding_checked: false,
+    runtime_name_match: false, runtime_uid_match: false, runtime_gid_match: false,
+    config_sha_match: false, release_id_match: false, release_digest_match: false, pre_release_ok: false };
+  let config = null;
+  if (configBytes !== null) {
+    try {
+      config = parseConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(configBytes)));
+      binding.config_parse_ok = true;
+    } catch { /* observed below */ }
+  }
+  // The production validator checks exact top-level/nested keys, schema 1,
+  // COMMITTED state, runtime identity shape and disabled desired state.
+  binding.manifest_schema_ok = manifestBytes !== null && validateManifestBytes(manifestBytes);
+  if (config !== null && binding.manifest_schema_ok) {
+    const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes));
+    binding.binding_checked = true;
+    binding.runtime_name_match = manifest.runtime.name === 'gram-agent';
+    binding.runtime_uid_match = manifest.runtime.uid === process.getuid();
+    binding.runtime_gid_match = manifest.runtime.gid === process.getgid();
+    binding.config_sha_match = manifest.configSha256 === shaBytes(configBytes);
+    binding.release_id_match = manifest.releaseId === config.releaseId;
+    binding.release_digest_match = manifest.releaseDigest === config.releaseDigest;
+    binding.pre_release_ok = manifest.schemaVersion === 1 && manifest.state === 'COMMITTED'
+      && binding.runtime_name_match && binding.runtime_uid_match && binding.runtime_gid_match
+      && binding.config_sha_match && binding.release_id_match && binding.release_digest_match;
+  }
+  emit('NATIVE_REVIEW_BINDING_DIAG', binding);
+}
+
 try {
   const source = new URL('../packages/macos-lifecycle/dist/a-system-sources.js', pathToFileURL(process.execPath));
   const { createSystemBootstrapSources } = await import(source.href);
-  const review = await createSystemBootstrapSources().review.read(controller.signal);
+  const sources = createSystemBootstrapSources();
+  const review = await sources.review.read(controller.signal);
+  reportReview(review === null ? 'REFUSED' : 'READY', review !== null);
+  if (review === null && !controller.signal.aborted) {
+    diagnosticsStarted = performance.now();
+    try {
+      await diagnose(source, sources.acl);
+      diagnosticsComplete = true;
+    } catch { /* Preserve the review result; report incomplete diagnostics. */ }
+  }
   finish(review === null ? 'REFUSED' : 'READY', review !== null);
 } catch {
   finish('ERROR', false);
