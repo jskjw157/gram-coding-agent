@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OwnedChild } from './contracts.js';
 import { CORE_PROTOCOL, probeCore, validCoreHealth, type CoreConnections, type CoreCredentials,
-  type CoreRequest, type WireReply } from './health-probe.js';
+  type CoreEvidence, type CoreRequest, type OwnedConnection, type WireReply } from './health-probe.js';
 const child = (): OwnedChild => ({ role: 'core', pid: 123, startIdentity: 'start-1', generation: 'generation-1',
   releaseDigest: 'a'.repeat(64), uid: 501 });
 const healthy = { status: 'healthy', database: 'ok', mcp: 'ready' };
@@ -33,6 +33,23 @@ function fixture(change?: (kind: CoreRequest, base: WireReply) => WireReply) {
   } };
   return { trace, connections, credentials, stats: () => ({ uses, opened, closed }),
     foreign() { foreign = true; }, stale() { current = false; } };
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+function delayConnections(f: ReturnType<typeof fixture>, preparationMs: number, responseMs: number, recheckMs = 0) {
+  const open = f.connections.openOwnedConnection.bind(f.connections);
+  f.connections.openOwnedConnection = async (owned, port, signal) => {
+    await pause(preparationMs);
+    const connection = await open(owned, port, signal); if (connection === null) return null;
+    return {
+      close: connection.close.bind(connection),
+      async isCurrent() { await pause(recheckMs); return connection.isCurrent(); },
+      async request(...args) { await pause(responseMs); return connection.request(...args); },
+    };
+  };
 }
 afterEach(() => vi.useRealTimers());
 describe('owned core health protocol', () => {
@@ -123,11 +140,14 @@ describe('owned core health protocol', () => {
     const f = fixture((kind, r) => { if (kind === 'call') f.stale(); return r; });
     expect((await probeCore(child(), f.connections, f.credentials)).state).toBe('UNKNOWN');
   });
-  it('bounds a hung connection before any credentials are obtained', async () => {
+  it('bounds a hung local connection provider by the complete protocol deadline', async () => {
     vi.useFakeTimers(); const f = fixture();
     f.connections.openOwnedConnection = async () => new Promise(() => undefined);
-    const check = expect(probeCore(child(), f.connections, f.credentials)).resolves.toMatchObject({ state: 'UNKNOWN' });
-    await vi.advanceTimersByTimeAsync(2000); await check; expect(f.stats().uses).toBe(0);
+    let result: CoreEvidence | undefined;
+    const work = probeCore(child(), f.connections, f.credentials).then(value => { result = value; });
+    await vi.advanceTimersByTimeAsync(59999); expect(result).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1); await work;
+    expect(result).toMatchObject({ state: 'UNKNOWN' }); expect(f.stats().uses).toBe(0);
   });
   it('does not start when already aborted and does not echo abort reasons', async () => {
     const f = fixture(); const controller = new AbortController(); controller.abort('SYNTHETIC_TEST_SECRET');
@@ -142,5 +162,99 @@ describe('owned core health protocol', () => {
   it('does not accept accessors as a healthy body', () => {
     let reads = 0; const value = { ...healthy, get status() { reads++; return 'healthy'; } };
     expect(validCoreHealth(value)).toBe(false); expect(reads).toBe(0); expect(validCoreHealth(healthy)).toBe(true);
+  });
+});
+
+describe('one absolute owned-health protocol deadline', () => {
+  it('allows local preparation and responses below two seconds to compose beyond ten seconds', async () => {
+    vi.useFakeTimers(); const f = fixture(); delayConnections(f, 1500, 1500, 1000);
+    const work = probeCore(child(), f.connections, f.credentials);
+    await vi.advanceTimersByTimeAsync(25000);
+    expect(await work).toMatchObject({ state: 'LOCAL_CORE_HEALTHY', code: 'OK' });
+    expect(f.stats()).toEqual({ uses: 4, opened: 5, closed: 5 });
+    expect(f.trace.filter(kind => ['health', 'initialize', 'initialized', 'tools', 'call'].includes(kind)))
+      .toEqual(['health', 'initialize', 'initialized', 'tools', 'call']);
+  });
+  it('does not reset the sixty-second budget after each successful request', async () => {
+    vi.useFakeTimers(); const f = fixture(); delayConnections(f, 12000, 1000);
+    let result: CoreEvidence | undefined;
+    const work = probeCore(child(), f.connections, f.credentials).then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(59999); expect(result).toBeUndefined();
+      expect(f.trace.filter(kind => ['health', 'initialize', 'initialized', 'tools', 'call'].includes(kind)))
+        .toEqual(['health', 'initialize', 'initialized', 'tools']);
+      await vi.advanceTimersByTimeAsync(1); await work;
+      expect(result).toMatchObject({ state: 'UNKNOWN', code: 'HEALTH_UNKNOWN' });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(f.trace).not.toContain('call'); expect(f.stats().uses).toBe(3);
+    } finally { await vi.runAllTimersAsync(); await work; }
+  });
+  it.each([59999, 60000])('includes the last ownership recheck at %i milliseconds in the same budget', async delay => {
+    vi.useFakeTimers(); const f = fixture(); const open = f.connections.openOwnedConnection.bind(f.connections);
+    let checks = 0;
+    f.connections.openOwnedConnection = async (...args) => {
+      const connection = await open(...args); if (connection === null) return null;
+      return { ...connection, async isCurrent() { if (++checks === 10) await pause(delay); return connection.isCurrent(); } };
+    };
+    let result: CoreEvidence | undefined;
+    const work = probeCore(child(), f.connections, f.credentials).then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(delay - 1); expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1); await work;
+      expect(result?.state).toBe(delay === 59999 ? 'LOCAL_CORE_HEALTHY' : 'UNKNOWN');
+      expect(f.stats()).toEqual({ uses: 4, opened: 5, closed: 5 });
+    } finally { await vi.runAllTimersAsync(); await work; }
+  });
+  it('checks the absolute deadline before accepting a late local preparation even before timer dispatch', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0); const f = fixture();
+    const open = f.connections.openOwnedConnection.bind(f.connections);
+    f.connections.openOwnedConnection = async (...args) => {
+      const connection = await open(...args); vi.setSystemTime(60000); return connection;
+    };
+    const result = await probeCore(child(), f.connections, f.credentials);
+    expect(result.state).toBe('UNKNOWN'); expect(f.trace).toEqual(['open']); expect(f.stats().uses).toBe(0);
+  });
+  it.each(['caller', 'total'] as const)('closes a connection delivered after the %s deadline without requesting or authenticating', async kind => {
+    vi.useFakeTimers(); const f = fixture(); const parent = new AbortController();
+    const ready = deferred<OwnedConnection | null>(); let result: CoreEvidence | undefined;
+    const close = vi.fn(); const request = vi.fn(async () => reply('health')); const current = vi.fn(async () => true);
+    f.connections.openOwnedConnection = async () => ready.promise;
+    const work = probeCore(child(), f.connections, f.credentials, { signal: parent.signal }).then(value => { result = value; });
+    try {
+      await vi.advanceTimersByTimeAsync(kind === 'caller' ? 4999 : 59999); expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1); if (kind === 'caller') parent.abort('SYNTHETIC_PRIVATE_ABORT');
+      await work; expect(result).toMatchObject({ state: 'UNKNOWN', code: 'HEALTH_UNKNOWN' });
+      ready.resolve({ close, request, isCurrent: current }); await vi.advanceTimersByTimeAsync(0);
+      expect(close).toHaveBeenCalledOnce(); expect(request).not.toHaveBeenCalled(); expect(current).not.toHaveBeenCalled();
+      expect(f.stats().uses).toBe(0); expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
+    } finally { parent.abort(); ready.resolve(null); await work; }
+  });
+  it.each(['read', 'callback'] as const)('prevents late credential %s after cancellation or the complete deadline', async phase => {
+    vi.useFakeTimers(); const parent = new AbortController(); const entered = deferred<void>(); const resume = deferred<void>();
+    const kinds: CoreRequest[] = []; let providerReads = 0; let delivered = 0; let result: CoreEvidence | undefined;
+    const credentials: CoreCredentials = { async withValue(use) {
+      providerReads++;
+      if (phase === 'callback') { entered.resolve(); await resume.promise; }
+      return use('SYNTHETIC_PRIVATE_CREDENTIAL');
+    } };
+    const connections: CoreConnections = { async openOwnedConnection() { return {
+      async isCurrent() { return true; }, close() {},
+      async request(kind, broker) {
+        kinds.push(kind);
+        if (kind === 'health') return reply(kind);
+        if (phase === 'read') { entered.resolve(); await resume.promise; }
+        return broker.withValue(async () => { delivered++; return reply(kind); });
+      },
+    }; } };
+    const work = probeCore(child(), connections, credentials, { signal: parent.signal }).then(value => { result = value; });
+    await entered.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(phase === 'read' ? 4999 : 59999); expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1); if (phase === 'read') parent.abort();
+      await work; expect(result).toMatchObject({ state: 'UNKNOWN', code: 'HEALTH_UNKNOWN' });
+      resume.resolve(); await vi.advanceTimersByTimeAsync(0);
+      expect(providerReads).toBe(phase === 'read' ? 0 : 1); expect(delivered).toBe(0);
+      expect(kinds).toEqual(['health', 'initialize']); expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
+    } finally { parent.abort(); resume.resolve(); await work; }
   });
 });

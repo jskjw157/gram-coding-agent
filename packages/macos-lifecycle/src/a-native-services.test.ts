@@ -38,7 +38,7 @@ describe('installed health observation deadline', () => {
     }
   });
 
-  it('returns false at sixty seconds even when an observer ignores abort', async () => {
+  it('bounds preparation, startup and final review even when an observer ignores abort', async () => {
     const ready = deferred<boolean>();
     const entered = deferred<AbortSignal>();
     probes.healthy.mockImplementation((_role: string, signal: AbortSignal) => {
@@ -50,7 +50,10 @@ describe('installed health observation deadline', () => {
     void work.then(value => { result = value; });
     const signal = await entered.promise;
     try {
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(179_999);
+      expect(result).toBeUndefined();
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
       expect(signal.aborted).toBe(true);
       expect(result).toBe(false);
       expect(probes.healthy).toHaveBeenCalledTimes(1);
@@ -74,12 +77,13 @@ describe('installed health observation deadline', () => {
     const work = createSystemServiceHandle(async () => true).ownedHealthy('core');
     void work.then(value => { result = value; });
     try {
-      await vi.advanceTimersByTimeAsync(40_000);
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(result).toBeUndefined();
       first.resolve(false);
       await vi.advanceTimersByTimeAsync(200);
       const signal = await entered.promise;
       expect(signal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(19_800);
+      await vi.advanceTimersByTimeAsync(79_800);
       expect(signal.aborted).toBe(true);
       expect(result).toBe(false);
       expect(probes.healthy).toHaveBeenCalledTimes(2);
@@ -89,5 +93,28 @@ describe('installed health observation deadline', () => {
       await work;
     }
     expect(result).toBe(false);
+  });
+
+  it('can observe health after a complete preparation and startup window', async () => {
+    const ready = deferred<boolean>();
+    const entered = deferred<AbortSignal>();
+    probes.healthy.mockImplementation((_role: string, signal: AbortSignal) => {
+      entered.resolve(signal);
+      return ready.promise;
+    });
+    const work = createSystemServiceHandle(async () => true).ownedHealthy('core');
+    const signal = await entered.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(60_000 + 60_000);
+      expect(signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      ready.resolve(true);
+      expect(await work).toBe(true);
+      expect(probes.healthy).toHaveBeenCalledTimes(1);
+    } finally {
+      ready.resolve(false);
+      await vi.advanceTimersByTimeAsync(180_000);
+      await work;
+    }
   });
 });
