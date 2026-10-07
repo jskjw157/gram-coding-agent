@@ -15,6 +15,100 @@ export interface NormalizedOperation {
   pathResolutionFailed: boolean;
 }
 
+const UNSUPPORTED_SHELL_SYNTAX_REASON =
+  'Unsupported shell syntax: redirection, dynamic shell expansion, and unmodeled composition are not supported';
+
+export class UnsupportedShellSyntaxError extends Error {
+  constructor() {
+    super(UNSUPPORTED_SHELL_SYNTAX_REASON);
+    this.name = 'UnsupportedShellSyntaxError';
+  }
+}
+
+function isDollar(char: string): boolean {
+  return char.charCodeAt(0) === 36;
+}
+
+function isBacktick(char: string): boolean {
+  return char.charCodeAt(0) === 96;
+}
+
+/**
+ * Reject shell syntax whose side effects are not modeled by this parser.
+ * Redirection is active outside quotes. Dynamic command substitution remains
+ * active inside double quotes, but single quotes and backslash escapes keep
+ * their contents literal under the parser's existing escaping model.
+ */
+function assertSupportedShellSyntax(command: string): void {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === undefined) break;
+
+    if (escaped) {
+      if (char === '\n' || char === '\r') {
+        throw new UnsupportedShellSyntaxError();
+      }
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (
+        (isDollar(char) && command[index + 1] === '(') ||
+        isBacktick(char)
+      ) {
+        throw new UnsupportedShellSyntaxError();
+      }
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    if (char === '\n' || char === '\r') {
+      throw new UnsupportedShellSyntaxError();
+    }
+
+    if (char === '&') {
+      if (command[index + 1] === '&') {
+        index += 1;
+        continue;
+      }
+      throw new UnsupportedShellSyntaxError();
+    }
+
+    if (char === '>' || char === '<') {
+      throw new UnsupportedShellSyntaxError();
+    }
+
+    if (
+      (isDollar(char) && command[index + 1] === '(') ||
+      isBacktick(char)
+    ) {
+      throw new UnsupportedShellSyntaxError();
+    }
+  }
+}
+
 interface CommandSegment {
   text: string;
   precededBy: ShellSeparator;
@@ -77,15 +171,30 @@ function splitShellComposition(command: string): CommandSegment[] {
   return segments;
 }
 
-function tokenize(segment: string): string[] {
-  const tokens: string[] = [];
+interface ShellToken {
+  value: string;
+  pathnameExpansion: boolean;
+}
+
+interface UnwrappedCommand {
+  executable: string;
+  args: string[];
+  argPathnameExpansion: boolean[];
+}
+
+function tokenize(segment: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
   let buffer = '';
   let quote: "'" | '"' | null = null;
   let escaped = false;
+  let pathnameExpansion = false;
 
   const flush = () => {
-    if (buffer.length > 0) tokens.push(buffer);
+    if (buffer.length > 0) {
+      tokens.push({ value: buffer, pathnameExpansion });
+    }
     buffer = '';
+    pathnameExpansion = false;
   };
 
   for (const char of segment) {
@@ -99,8 +208,12 @@ function tokenize(segment: string): string[] {
       continue;
     }
     if (quote !== null) {
-      if (char === quote) quote = null;
-      else buffer += char;
+      if (char === quote) {
+        quote = null;
+      } else {
+        if (quote === '"' && isDollar(char)) pathnameExpansion = true;
+        buffer += char;
+      }
       continue;
     }
     if (char === "'" || char === '"') {
@@ -111,18 +224,29 @@ function tokenize(segment: string): string[] {
       flush();
       continue;
     }
+
+    if (
+      (char === '~' && buffer.length === 0) ||
+      char === '*' ||
+      char === '?' ||
+      char === '[' ||
+      isDollar(char) ||
+      char === '{'
+    ) {
+      pathnameExpansion = true;
+    }
     buffer += char;
   }
   flush();
   return tokens;
 }
 
-function unwrapCommand(tokens: string[]): { executable: string; args: string[] } | null {
+function unwrapCommand(tokens: ShellToken[]): UnwrappedCommand | null {
   let offset = 0;
-  if (tokens[offset] === 'sudo') {
+  if (tokens[offset]?.value === 'sudo') {
     offset += 1;
     while (offset < tokens.length) {
-      const token = tokens[offset];
+      const token = tokens[offset]?.value;
       if (token === '--') {
         offset += 1;
         break;
@@ -132,10 +256,10 @@ function unwrapCommand(tokens: string[]): { executable: string; args: string[] }
     }
   }
 
-  if (tokens[offset] === 'env') {
+  if (tokens[offset]?.value === 'env') {
     offset += 1;
     while (offset < tokens.length) {
-      const token = tokens[offset];
+      const token = tokens[offset]?.value;
       if (token === '--') {
         offset += 1;
         break;
@@ -145,22 +269,37 @@ function unwrapCommand(tokens: string[]): { executable: string; args: string[] }
     }
   }
 
-  const executable = tokens[offset];
+  const executable = tokens[offset]?.value;
   if (executable === undefined) return null;
-  return { executable, args: tokens.slice(offset + 1) };
+  const argTokens = tokens.slice(offset + 1);
+  return {
+    executable,
+    args: argTokens.map((token) => token.value),
+    argPathnameExpansion: argTokens.map((token) => token.pathnameExpansion),
+  };
+}
+
+function requestedPathTargetIndexes(executable: string, args: readonly string[]): number[] {
+  const indexes: number[] = [];
+  if (executable === 'rm' || executable === 'rmdir' || executable === 'cp' || executable === 'mv') {
+    for (let index = 0; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+    return indexes;
+  }
+  if (executable === 'chmod' || executable === 'chown') {
+    for (let index = 1; index < args.length; index += 1) {
+      if (args[index]?.startsWith('-') === false) indexes.push(index);
+    }
+  }
+  return indexes;
 }
 
 function requestedPathTargets(executable: string, args: readonly string[]): string[] {
-  if (executable === 'rm' || executable === 'rmdir') {
-    return args.filter((argument) => !argument.startsWith('-'));
-  }
-  if (executable === 'chmod' || executable === 'chown') {
-    return args.slice(1).filter((argument) => !argument.startsWith('-'));
-  }
-  if (executable === 'cp' || executable === 'mv') {
-    return args.filter((argument) => !argument.startsWith('-'));
-  }
-  return [];
+  return requestedPathTargetIndexes(executable, args).flatMap((index) => {
+    const value = args[index];
+    return value === undefined ? [] : [value];
+  });
 }
 
 function canonicalizeTargets(
@@ -183,11 +322,27 @@ function canonicalizeTargets(
 }
 
 export function normalizeShellCommand(command: string, cwd: string): NormalizedOperation[] {
+  assertSupportedShellSyntax(command);
   const normalizedCwd = resolve(cwd);
   return splitShellComposition(command).flatMap((segment) => {
-    const unwrapped = unwrapCommand(tokenize(segment.text));
+    const tokens = tokenize(segment.text);
+    // Policy decisions and operation hashes must describe the exact argv that
+    // Bash will execute. Any dynamic expansion would make the parsed literal
+    // tokens differ from runtime argv, so shellText fails closed before
+    // command unwrapping, classification, approval lookup or hashing.
+    if (tokens.some((token) => token.pathnameExpansion)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const unwrapped = unwrapCommand(tokens);
     if (unwrapped === null) return [];
-    const requestedTargets = requestedPathTargets(unwrapped.executable, unwrapped.args);
+    const targetIndexes = requestedPathTargetIndexes(unwrapped.executable, unwrapped.args);
+    if (targetIndexes.some((index) => unwrapped.argPathnameExpansion[index] === true)) {
+      throw new UnsupportedShellSyntaxError();
+    }
+    const requestedTargets = targetIndexes.flatMap((index) => {
+      const value = unwrapped.args[index];
+      return value === undefined ? [] : [value];
+    });
     const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(requestedTargets, normalizedCwd);
     return [{
       type: 'SHELL_COMMAND' as const,
@@ -201,4 +356,34 @@ export function normalizeShellCommand(command: string, cwd: string): NormalizedO
       pathResolutionFailed,
     }];
   });
+}
+
+
+export function normalizeExecutableCommand(
+  executable: string,
+  args: readonly string[],
+  cwd: string,
+): NormalizedOperation {
+  if (executable.trim().length === 0) {
+    throw new Error('Executable must not be empty');
+  }
+
+  const normalizedCwd = resolve(cwd);
+  const requestedTargets = requestedPathTargets(executable, args);
+  const { canonicalTargets, pathResolutionFailed } = canonicalizeTargets(
+    requestedTargets,
+    normalizedCwd,
+  );
+
+  return {
+    type: 'SHELL_COMMAND',
+    raw: [executable, ...args].join(' '),
+    executable,
+    args: [...args],
+    cwd: normalizedCwd,
+    precededBy: null,
+    requestedTargets,
+    canonicalTargets,
+    pathResolutionFailed,
+  };
 }

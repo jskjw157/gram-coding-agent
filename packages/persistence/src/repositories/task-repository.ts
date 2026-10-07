@@ -32,6 +32,13 @@ export class ConcurrentTaskTransitionError extends Error {
   }
 }
 
+export class TaskRepositoryBindingConflictError extends Error {
+  constructor(taskId: TaskId, existingRepoId: number, requestedRepoId: number) {
+    super(`Task ${taskId} is already bound to repository ${existingRepoId}, cannot bind to ${requestedRepoId}`);
+    this.name = 'TaskRepositoryBindingConflictError';
+  }
+}
+
 export class TaskRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -111,5 +118,74 @@ export class TaskRepository {
     if (result.changes !== 1) {
       throw new ConcurrentTaskTransitionError(id, expectedFrom, to);
     }
+  }
+
+  listRunnable(perStatusLimit: number): StoredTask[] {
+    if (!Number.isSafeInteger(perStatusLimit) || perStatusLimit <= 0) {
+      throw new Error('perStatusLimit must be a positive safe integer');
+    }
+
+    const rows = this.db
+      .prepare(`
+        WITH waiting AS (
+          SELECT id, seq, goal, repo_id AS repoId, repo_selector AS repoSelector, status,
+                 task_type AS taskType, publish_mode AS publishMode, priority,
+                 created_at AS createdAt, updated_at AS updatedAt, 0 AS statusOrder
+          FROM tasks WHERE status = 'WAITING_REPO_LOCK'
+          ORDER BY priority ASC, seq ASC LIMIT ?
+        ),
+        queued AS (
+          SELECT id, seq, goal, repo_id AS repoId, repo_selector AS repoSelector, status,
+                 task_type AS taskType, publish_mode AS publishMode, priority,
+                 created_at AS createdAt, updated_at AS updatedAt, 1 AS statusOrder
+          FROM tasks WHERE status = 'QUEUED'
+          ORDER BY priority ASC, seq ASC LIMIT ?
+        )
+        SELECT id, seq, goal, repoId, repoSelector, status, taskType, publishMode,
+               priority, createdAt, updatedAt
+        FROM (SELECT * FROM waiting UNION ALL SELECT * FROM queued)
+        ORDER BY statusOrder, priority ASC, seq ASC
+      `)
+      .all(perStatusLimit, perStatusLimit) as StoredTask[];
+    return rows;
+  }
+
+  bindRepository(taskId: TaskId, repoId: number): void {
+    const task = this.get(taskId);
+    if (!task) {
+      throw new Error(`task ${taskId} not found`);
+    }
+
+    const repoRow = this.db
+      .prepare('SELECT id FROM repositories WHERE id = ?')
+      .get(repoId) as { id: number } | undefined;
+    if (!repoRow) {
+      throw new Error(`repository ${repoId} not found`);
+    }
+
+    if (task.repoId === null) {
+      const result = this.db
+        .prepare('UPDATE tasks SET repo_id = ?, updated_at = ? WHERE id = ? AND repo_id IS NULL')
+        .run(repoId, new Date().toISOString(), taskId);
+      if (result.changes === 1) {
+        return;
+      }
+      const current = this.get(taskId);
+      if (!current) {
+        throw new Error(`task ${taskId} not found`);
+      }
+      if (current.repoId === repoId) {
+        return;
+      }
+      if (current.repoId === null) {
+        throw new Error(`failed to bind task ${taskId} to repository ${repoId}`);
+      }
+      throw new TaskRepositoryBindingConflictError(taskId, current.repoId, repoId);
+    }
+
+    if (task.repoId === repoId) {
+      return;
+    }
+    throw new TaskRepositoryBindingConflictError(taskId, task.repoId, repoId);
   }
 }
