@@ -270,16 +270,131 @@ async function diagnose(source, acl) {
   emit('NATIVE_REVIEW_BINDING_DIAG', binding);
 }
 
+async function diagnoseRuntime(source, acl, review) {
+  const [{ inspectRuntimeDirectories }, { createPrivateRecordFiles },
+    { decodeExecution }, { decodeHistory },
+    { decodeCoreRegistration, matchesCoreExecution, coreStartIdentity },
+    { decodeStatus, parseEvent }, { createTrustedFiles }, { createNativePeerProof }] = await Promise.all([
+    import(new URL('adapters/runtime-directories.js', source).href),
+    import(new URL('adapters/private-record-files.js', source).href),
+    import(new URL('execution-lease.js', source).href),
+    import(new URL('lifecycle-store.js', source).href),
+    import(new URL('core-registration.js', source).href),
+    import(new URL('telemetry.js', source).href),
+    import(new URL('adapters/trusted-files.js', source).href),
+    import(new URL('adapters/owned-process.js', source).href),
+  ]);
+  const fixedRoot = '/Library/Application Support/HAAR/GramAgent';
+  const directories = await inspectRuntimeDirectories(
+    { anchor: '/', relative: fixedRoot.slice(1), ownerUid: 0 },
+    process.getuid(), acl, controller.signal,
+  );
+  emit('NATIVE_RUNTIME_DIR_DIAG', { directories_ok: true });
+  const snapshots = new Map();
+  for (const kind of ['execution', 'circuit', 'process', 'status', 'events']) {
+    if (controller.signal.aborted) return;
+    const readStarted = Date.now();
+    try {
+      await directories.verify();
+      const policy = kind === 'events' ? directories.logsPolicy : directories.runPolicy;
+      // Only the existing fixed-family read API is used. No CAS, initialization,
+      // recovery, session, credential or HTTP operation is performed.
+      const bytes = await createPrivateRecordFiles(kind, policy).read('core');
+      await directories.verify();
+      const readFinished = Date.now();
+      snapshots.set(kind, { bytes, readStarted, readFinished });
+      emit('NATIVE_RUNTIME_READ_DIAG', {
+        kind, read_ok: true, present: bytes.some(value => value !== null),
+        elapsed_ms: Math.max(0, readFinished - readStarted),
+      });
+    } catch {
+      emit('NATIVE_RUNTIME_READ_DIAG', {
+        kind, read_ok: false, present: false, elapsed_ms: Math.max(0, Date.now() - readStarted),
+      });
+    }
+  }
+  const first = kind => snapshots.get(kind)?.bytes[0] ?? null;
+  const held = first('execution') === null ? null : decodeExecution(first('execution'));
+  const history = first('circuit') === null ? null : decodeHistory(first('circuit'));
+  const registration = first('process') === null ? null : decodeCoreRegistration(first('process'));
+  const status = first('status') === null ? null : decodeStatus(first('status'));
+  const statusRead = snapshots.get('status');
+  const sameReview = value => value !== null && value.releaseDigest === review.config.releaseDigest;
+  const matched = held !== null && registration !== null && matchesCoreExecution(registration, held);
+  emit('NATIVE_RUNTIME_RECORD_DIAG', {
+    execution_state: held?.state ?? 'UNAVAILABLE', execution_revision: held?.revision ?? -1,
+    execution_config_match: held?.configDigest === review.configDigest,
+    execution_release_match: sameReview(held),
+    circuit_blocked: history?.blocked ?? null, circuit_active: history?.activeAttempt !== null && history !== null,
+    circuit_exit_count: history?.exitsMs.length ?? -1,
+    registration_present: registration !== null, registration_execution_match: matched,
+    registration_config_match: registration?.configDigest === review.configDigest,
+    registration_release_match: sameReview(registration?.child ?? null),
+    status_state: status?.state ?? 'UNAVAILABLE', status_code: status?.code ?? 'UNAVAILABLE',
+    status_attempt: status?.attemptCount ?? -1,
+    status_age_ms: status === null ? -1 : statusRead.readFinished - status.observedAtMs,
+    status_after_read_start: status !== null && status.observedAtMs > statusRead.readStarted,
+    status_after_read_end: status !== null && status.observedAtMs > statusRead.readFinished,
+    status_execution_generation_match: status !== null && status.generation === held?.generation,
+    status_registration_generation_match: status !== null && status.generation === registration?.child.generation,
+    status_release_match: sameReview(status),
+  });
+  const generation = registration?.child.generation ?? held?.generation ?? history?.lastGeneration;
+  const events = [];
+  for (const bytes of snapshots.get('events')?.bytes ?? []) {
+    if (bytes === null) continue;
+    // The fixed record adapter already validated every canonical segment line.
+    for (const line of bytes.toString('utf8').split('\n').slice(1, -1)) {
+      const event = parseEvent(JSON.parse(line));
+      if (event.generation === generation && sameReview(event)) events.push(event);
+    }
+  }
+  events.sort((a, b) => a.observedAtMs - b.observedAtMs);
+  emit('NATIVE_RUNTIME_EVENT_DIAG', {
+    matching_event_count: events.length,
+    recent: events.slice(-16).map(event => ({
+      code: event.code, attempt: event.attemptCount, age_ms: Date.now() - event.observedAtMs,
+    })),
+  });
+  if (registration === null || controller.signal.aborted) return;
+  const releasePrefix = `${fixedRoot.slice(1)}/releases/${review.config.releaseId}`;
+  const releaseFiles = createTrustedFiles('/', 0, acl, releasePrefix);
+  const nodePath = `${fixedRoot}/releases/${review.config.releaseId}/bin/node`;
+  const helperPath = `${fixedRoot}/releases/${review.config.releaseId}/bin/peer-owner`;
+  const node = await lstat(nodePath, { bigint: true });
+  const observerNode = await lstat(nodePath);
+  const pinsOk = node.isFile() && node.uid === 0n && node.nlink === 1n
+    && (node.mode & 0o6022n) === 0n && (node.mode & 0o111n) !== 0n
+    && await releaseFiles.hash('bin/node', 256 * 1024 * 1024) === review.nodeDigest
+    && await releaseFiles.hash('bin/peer-owner', 256 * 1024 * 1024) === review.peerOwnerDigest;
+  let verdict = 'UNAVAILABLE';
+  if (pinsOk && !controller.signal.aborted) {
+    const start = coreStartIdentity(registration.child.startIdentity);
+    verdict = await createNativePeerProof(helperPath).current({
+      pid: registration.child.pid, uid: registration.child.uid,
+      startSec: start.sec, startUsec: start.usec, executable: { dev: node.dev, ino: node.ino },
+    }, controller.signal);
+  }
+  // This is a post-compensation process observation. It does not recreate the
+  // supervisor's protected proof call or establish authenticated Core health.
+  emit('NATIVE_RUNTIME_PROCESS_DIAG', {
+    pins_ok: pinsOk, verdict, aborted: controller.signal.aborted,
+    observer_inode_safe_integer: Number.isSafeInteger(observerNode.ino),
+    observer_numeric_identity_exact: BigInt(observerNode.ino) === node.ino && BigInt(observerNode.dev) === node.dev,
+  });
+}
+
 try {
   const source = new URL('../packages/macos-lifecycle/dist/a-system-sources.js', pathToFileURL(process.execPath));
   const { createSystemBootstrapSources } = await import(source.href);
   const sources = createSystemBootstrapSources();
   const review = await sources.review.read(controller.signal);
   reportReview(review === null ? 'REFUSED' : 'READY', review !== null);
-  if (review === null && !controller.signal.aborted) {
+  if (!controller.signal.aborted) {
     diagnosticsStarted = performance.now();
     try {
-      await diagnose(source, sources.acl);
+      if (review === null) await diagnose(source, sources.acl);
+      else await diagnoseRuntime(source, sources.acl, review);
       diagnosticsComplete = true;
     } catch { /* Preserve the review result; report incomplete diagnostics. */ }
   }
