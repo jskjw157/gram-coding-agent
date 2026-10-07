@@ -230,11 +230,11 @@ describe('one absolute owned-health protocol deadline', () => {
     } finally { parent.abort(); ready.resolve(null); await work; }
   });
   it.each(['read', 'callback'] as const)('prevents late credential %s after cancellation or the complete deadline', async phase => {
-    vi.useFakeTimers(); const parent = new AbortController(); const entered = deferred<void>(); const resume = deferred<void>();
+    vi.useFakeTimers(); const parent = new AbortController(); const entered = deferred<undefined>(); const resume = deferred<undefined>();
     const kinds: CoreRequest[] = []; let providerReads = 0; let delivered = 0; let result: CoreEvidence | undefined;
     const credentials: CoreCredentials = { async withValue(use) {
       providerReads++;
-      if (phase === 'callback') { entered.resolve(); await resume.promise; }
+      if (phase === 'callback') { entered.resolve(undefined); await resume.promise; }
       return use('SYNTHETIC_PRIVATE_CREDENTIAL');
     } };
     const connections: CoreConnections = { async openOwnedConnection() { return {
@@ -242,7 +242,7 @@ describe('one absolute owned-health protocol deadline', () => {
       async request(kind, broker) {
         kinds.push(kind);
         if (kind === 'health') return reply(kind);
-        if (phase === 'read') { entered.resolve(); await resume.promise; }
+        if (phase === 'read') { entered.resolve(undefined); await resume.promise; }
         return broker.withValue(async () => { delivered++; return reply(kind); });
       },
     }; } };
@@ -252,9 +252,9 @@ describe('one absolute owned-health protocol deadline', () => {
       await vi.advanceTimersByTimeAsync(phase === 'read' ? 4999 : 59999); expect(result).toBeUndefined();
       await vi.advanceTimersByTimeAsync(1); if (phase === 'read') parent.abort();
       await work; expect(result).toMatchObject({ state: 'UNKNOWN', code: 'HEALTH_UNKNOWN' });
-      resume.resolve(); await vi.advanceTimersByTimeAsync(0);
+      resume.resolve(undefined); await vi.advanceTimersByTimeAsync(0);
       expect(providerReads).toBe(phase === 'read' ? 0 : 1); expect(delivered).toBe(0);
       expect(kinds).toEqual(['health', 'initialize']); expect(JSON.stringify(result)).not.toContain('SYNTHETIC');
-    } finally { parent.abort(); resume.resolve(); await work; }
+    } finally { parent.abort(); resume.resolve(undefined); await work; }
   });
 });

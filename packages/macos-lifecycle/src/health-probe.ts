@@ -1,4 +1,5 @@
 import type { OwnedChild, SafeCode } from './contracts.js';
+import { CORE_HEALTH_PROBE_TIMEOUT_MS } from './release-review-budget.js';
 /** Pinned compatibility fixture, not a claim about the latest MCP revision. */
 export const CORE_PROTOCOL = '2025-11-25';
 export type CoreRequest = 'health' | 'initialize' | 'initialized' | 'tools' | 'call';
@@ -132,37 +133,56 @@ export async function probeCore(child: OwnedChild, connections: CoreConnections,
   options: ProbeOptions = {}): Promise<CoreEvidence> {
   let generation = ''; let releaseDigest = ''; let observedAtMs = 0;
   const now = options.now ?? Date.now;
+  // One budget covers all five requests, including local ownership preparation
+  // and rechecks. Native adapters separately bound actual TCP/HTTP operations.
+  const expiresAt = Date.now() + CORE_HEALTH_PROBE_TIMEOUT_MS;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), CORE_HEALTH_PROBE_TIMEOUT_MS);
+  const check = (signal: AbortSignal) => {
+    // A late provider may resolve before the event loop dispatches the timer.
+    if (Date.now() >= expiresAt) deadline.abort();
+    if (signal.aborted) fail();
+  };
   try {
     const owned = copyCoreChild(child); generation = owned.generation; releaseDigest = owned.releaseDigest;
     const started = now(); if (!time(started)) fail(); observedAtMs = started;
+    const overall = options.signal ? AbortSignal.any([deadline.signal, options.signal]) : deadline.signal;
     let session: string | undefined;
     for (const kind of kinds) {
-      if (options.signal?.aborted) fail();
-      const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 2000);
-      const signal = options.signal ? AbortSignal.any([deadline.signal, options.signal]) : deadline.signal;
+      check(overall);
+      // Closing a request still invalidates its late work without resetting time.
+      const scope = new AbortController(); const signal = AbortSignal.any([overall, scope.signal]);
+      const guardedCredentials: CoreCredentials = { async withValue<T>(use: (secret: string) => Promise<T>): Promise<T> {
+        check(signal);
+        return abortable(credentials.withValue(async secret => { check(signal); return use(secret); }), signal);
+      } };
       let connection: OwnedConnection | null = null;
       try {
         const pending = connections.openOwnedConnection(owned, 3847, signal);
         void pending.then(c => { if (signal.aborted) c?.close(); }, () => undefined).catch(() => undefined);
         connection = await abortable(pending, signal);
+        check(signal);
         if (connection === null || !await abortable(connection.isCurrent(), signal)) fail();
-        const response = await abortable(connection.request(kind, credentials, session, signal), signal);
+        check(signal);
+        const response = await abortable(connection.request(kind, guardedCredentials, session, signal), signal);
+        check(signal);
         if (!await abortable(connection.isCurrent(), signal)) fail();
+        check(signal);
         if (response.sessionId !== undefined) {
           if (!sessionId(response.sessionId) || (kind !== 'initialize' && response.sessionId !== session)) fail();
           if (kind === 'initialize') session = response.sessionId;
         }
         validate(kind, response);
       } finally {
-        clearTimeout(timer); deadline.abort();
+        scope.abort();
         try { connection?.close(); } catch { /* A close failure cannot reveal provider error text. */ }
       }
     }
-    const finished = now(); if (!time(finished) || finished < observedAtMs || options.signal?.aborted) fail();
+    const finished = now(); check(overall); if (!time(finished) || finished < observedAtMs) fail();
     return { state: 'LOCAL_CORE_HEALTHY', code: 'OK', generation, releaseDigest, observedAtMs: finished };
   } catch (error) {
     const raw = error instanceof Error ? Object.getOwnPropertyDescriptor(error, 'message')?.value : undefined;
     const code: SafeCode = raw === 'AUTH_BLOCKED' || raw === 'TOOL_SURFACE_MISMATCH' ? raw : 'HEALTH_UNKNOWN';
     return { state: code === 'HEALTH_UNKNOWN' ? 'UNKNOWN' : 'BLOCKED', code, generation, releaseDigest, observedAtMs };
-  }
+  } finally { clearTimeout(timer); deadline.abort(); }
 }

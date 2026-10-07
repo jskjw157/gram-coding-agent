@@ -102,14 +102,14 @@ describe('complete Core health probe deadlines', () => {
   });
 
   it.each(['caller', 'child'] as const)('lets %s cancellation end a pending complete probe before its deadline', async source => {
-    const f = await timedFixture(); const late = deferred<CoreEvidence>(); const exited = deferred<void>();
+    const f = await timedFixture(); const late = deferred<CoreEvidence>(); const exited = deferred<undefined>();
     let active: AbortSignal | undefined; let generation = ''; let result: number | undefined;
     f.deps.core.spawn = async (_config, value) => ({ ...managed('core', value), exited: exited.promise });
     f.deps.core.probe = async (child, signal) => { generation = child.generation; active = signal; return late.promise; };
     const work = run(f).then(value => { result = value; });
     try {
       await vi.advanceTimersByTimeAsync(5000); expect(result).toBeUndefined(); expect(active?.aborted).toBe(false);
-      if (source === 'caller') f.controller.abort('SYNTHETIC_PRIVATE_ABORT'); else exited.resolve();
+      if (source === 'caller') f.controller.abort('SYNTHETIC_PRIVATE_ABORT'); else exited.resolve(undefined);
       await vi.advanceTimersByTimeAsync(0); await work;
       expect(result).toBe(source === 'caller' ? 0 : 1); expect(active?.aborted).toBe(true);
       late.resolve(f.evidence(generation)); await vi.advanceTimersByTimeAsync(0);
@@ -119,9 +119,9 @@ describe('complete Core health probe deadlines', () => {
   });
 
   it('rejects first healthy evidence at the absolute startup deadline before timer dispatch', async () => {
-    const f = await timedFixture(); const entered = deferred<void>(); let result: number | undefined;
+    const f = await timedFixture(); const entered = deferred<undefined>(); let result: number | undefined;
     f.deps.core.probe = async child => {
-      vi.setSystemTime(60000); entered.resolve(); return f.evidence(child.generation);
+      vi.setSystemTime(60000); entered.resolve(undefined); return f.evidence(child.generation);
     };
     const work = run(f).then(value => { result = value; });
     try {

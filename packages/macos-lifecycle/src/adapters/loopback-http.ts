@@ -3,6 +3,7 @@ import { createConnection, Socket } from 'node:net';
 import type { OwnedChild } from '../contracts.js';
 import { abortable, copyCoreChild, CORE_PROTOCOL, type CoreConnections, type CoreCredentials,
   type CoreRequest, type OwnedConnection, type WireReply } from '../health-probe.js';
+import { CORE_HEALTH_PROBE_TIMEOUT_MS } from '../release-review-budget.js';
 
 /** INTERNAL trusted dependency. current must bind a live registered child handle,
  * generation, start identity and sealed release. verify must inspect this exact
@@ -37,9 +38,9 @@ function wire(kind: CoreRequest): { path: '/healthz' | '/mcp'; method: 'GET' | '
 /** One request, one preconnected socket. No pooling, redirect, proxy, retry, URL
  * input or fallback createConnection. Raw bytes remain local and bounded. */
 async function exchange(socket: Socket, kind: CoreRequest, secret: string | undefined,
-  session: string | undefined, signal: AbortSignal): Promise<WireReply> {
+  session: string | undefined, parent: AbortSignal): Promise<WireReply> {
   const w = wire(kind);
-  if (!connected(socket) || signal.aborted) fail();
+  if (!connected(socket) || parent.aborted) fail();
   const headers: Record<string, string> = { host: `127.0.0.1:${socket.remotePort}`, connection: 'close',
     accept: 'application/json, text/event-stream' };
   if (kind !== 'health') {
@@ -50,6 +51,10 @@ async function exchange(socket: Socket, kind: CoreRequest, secret: string | unde
     if (session !== undefined) headers['mcp-session-id'] = session;
   }
   const agent = new Agent({ keepAlive: false, maxSockets: 1 }); let loaned = false;
+  // Only the actual wire exchange spends the HTTP budget. Authorization and
+  // credential preparation remain bounded by the caller's whole operation.
+  const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 2000);
+  const signal = AbortSignal.any([parent, deadline.signal]);
   agent.createConnection = () => { if (loaned || !connected(socket) || signal.aborted) fail(); loaned = true; return socket; };
   let req: ClientRequest | undefined; let response: IncomingMessage | undefined;
   try {
@@ -87,7 +92,10 @@ async function exchange(socket: Socket, kind: CoreRequest, secret: string | unde
         req.end(w.body);
       } catch { abort(); }
     });
-  } finally { response?.destroy(); req?.destroy(); agent.destroy(); socket.destroy(); }
+  } finally {
+    clearTimeout(timer); deadline.abort();
+    response?.destroy(); req?.destroy(); agent.destroy(); socket.destroy();
+  }
 }
 
 /** Takes exclusive ownership of an already connected local socket. This internal
@@ -99,7 +107,7 @@ export async function bindOwnedConnection(socket: Socket, child: OwnedChild, ver
   const guard = () => undefined; socket.on('error', guard); socket.once('close', () => socket.off('error', guard));
   let owned: OwnedChild;
   const bindingDeadline = new AbortController();
-  const bindingTimer = setTimeout(() => bindingDeadline.abort(), 2000);
+  const bindingTimer = setTimeout(() => bindingDeadline.abort(), CORE_HEALTH_PROBE_TIMEOUT_MS);
   const bindingSignal = AbortSignal.any([signal, bindingDeadline.signal]);
   try {
     owned = copyCoreChild(child);
@@ -111,7 +119,8 @@ export async function bindOwnedConnection(socket: Socket, child: OwnedChild, ver
   } catch { socket.destroy(); return null; }
   finally { clearTimeout(bindingTimer); }
   const proof = verifier; let used = false; let closed = false;
-  const close = () => { closed = true; socket.destroy(); };
+  const close = () => { closed = true; signal.removeEventListener('abort', close); socket.destroy(); };
+  signal.addEventListener('abort', close, { once: true }); socket.once('close', close);
   const assertOwned = async (abort: AbortSignal) => {
     if (closed || abort.aborted || !connected(socket) || socket.readableLength !== 0) fail();
     if (!await abortable(proof.current(owned), abort)
@@ -120,10 +129,19 @@ export async function bindOwnedConnection(socket: Socket, child: OwnedChild, ver
     if (closed || abort.aborted || !connected(socket) || socket.readableLength !== 0) fail();
   };
   return Object.freeze({
-    async isCurrent() { try { return !signal.aborted && await abortable(proof.current(owned), signal); } catch { return false; } },
+    async isCurrent() {
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(), CORE_HEALTH_PROBE_TIMEOUT_MS);
+      const active = AbortSignal.any([signal, deadline.signal]);
+      try {
+        if (!active.aborted && await abortable(proof.current(owned), active)) return true;
+      } catch { /* Refuse an unavailable identity without exposing its error. */ }
+      finally { clearTimeout(timer); deadline.abort(); }
+      close(); return false;
+    },
     close,
     async request(kind: CoreRequest, credentials: CoreCredentials, session: string | undefined, parent: AbortSignal) {
-      const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 2000);
+      const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), CORE_HEALTH_PROBE_TIMEOUT_MS);
       const abort = AbortSignal.any([signal, parent, deadline.signal]);
       try {
         if (used || closed || abort.aborted) fail(); used = true; wire(kind);
@@ -144,18 +162,22 @@ export async function bindOwnedConnection(socket: Socket, child: OwnedChild, ver
 export function createLoopbackConnections(verifier?: ConnectedPeerVerifier): CoreConnections {
   return Object.freeze({ async openOwnedConnection(child: OwnedChild, port: 3847, parent: AbortSignal) {
     if (!verifier || port !== 3847 || parent.aborted) return null;
-    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), 2000);
+    const deadline = new AbortController(); const timer = setTimeout(() => deadline.abort(), CORE_HEALTH_PROBE_TIMEOUT_MS);
     const signal = AbortSignal.any([parent, deadline.signal]); let socket: Socket | undefined;
     const abort = () => socket?.destroy(); signal.addEventListener('abort', abort, { once: true });
     try {
       const owned = copyCoreChild(child);
       if (!await abortable(verifier.current(owned), signal)) return null;
-      socket = createConnection({ host: '127.0.0.1', port: 3847 });
-      const active = socket; active.on('error', () => undefined);
-      await abortable(new Promise<void>((resolve, reject) => {
-        active.once('error', reject); active.once('connect', () => { active.removeListener('error', reject); active.pause(); resolve(); });
-      }), signal);
-      return await bindOwnedConnection(active, owned, verifier, signal);
+      const connecting = new AbortController(); const connectTimer = setTimeout(() => connecting.abort(), 2000);
+      const connectSignal = AbortSignal.any([signal, connecting.signal]);
+      try {
+        socket = createConnection({ host: '127.0.0.1', port: 3847 });
+        const active = socket; active.on('error', () => undefined);
+        await abortable(new Promise<void>((resolve, reject) => {
+          active.once('error', reject); active.once('connect', () => { active.removeListener('error', reject); active.pause(); resolve(); });
+        }), connectSignal);
+      } finally { clearTimeout(connectTimer); connecting.abort(); }
+      return await bindOwnedConnection(socket, owned, verifier, signal);
     } catch { socket?.destroy(); return null; }
     finally { clearTimeout(timer); signal.removeEventListener('abort', abort); }
   } });
