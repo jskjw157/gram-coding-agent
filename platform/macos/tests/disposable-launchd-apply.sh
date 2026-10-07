@@ -577,8 +577,151 @@ if /bin/launchctl print "system/$CORE_LABEL" >/dev/null 2>&1; then
   exit 2
 fi
 
+post_stop_snapshot() {
+  # Failure-only observation. Never retry the preview or change its result.
+  if ! "$NODE" --input-type=module - "$1" 2>/dev/null <<'NATIVE_POST_STOP_SNAPSHOT'
+import { execFile } from 'node:child_process';
+import { writeSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+const stages = {
+  preview: { done: 'PREVIEW_DONE', timeout: 'PREVIEW_TIMEOUT', error: 'PREVIEW_ERROR' },
+  identity: { done: 'IDENTITY_DONE', timeout: 'IDENTITY_TIMEOUT', error: 'IDENTITY_ERROR' },
+};
+const stage = Object.hasOwn(stages, process.argv[2]) ? stages[process.argv[2]] : null;
+const snapshot = {
+  ports: { core: 'unknown', tunnel: 'unknown' },
+  tcp_states: { core: [], tunnel: [] },
+  registry: null,
+};
+let finished = false;
+let timer;
+function finish(kind) {
+  if (finished) return;
+  finished = true;
+  clearTimeout(timer);
+  try {
+    writeSync(1, 'NATIVE_POST_STOP_SYSTEM_DIAG ' + JSON.stringify({
+      stage: stage?.[kind] ?? 'UNKNOWN_ERROR', ...snapshot,
+    }) + '\n');
+  } finally {
+    process.exit(0);
+  }
+}
+// One hard deadline covers imports and both read-only observations.
+timer = setTimeout(() => finish('timeout'), 10_000);
+
+function netstat() {
+  return new Promise(resolve => {
+    execFile('/usr/sbin/netstat', ['-an', '-p', 'tcp'], {
+      encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL',
+      maxBuffer: 1024 * 1024, shell: false,
+      env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C', LANG: 'C' },
+    }, (error, stdout, stderr) => {
+      const rawCode = error?.code;
+      const code = error === null ? 0
+        : error?.killed !== true && error?.signal == null && typeof rawCode === 'number'
+          && Number.isSafeInteger(rawCode) && rawCode >= 1 && rawCode <= 255 ? rawCode : 255;
+      resolve({ code, stdout: typeof stdout === 'string' ? stdout : '',
+        stderr: typeof stderr === 'string' ? stderr : '' });
+    });
+  });
+}
+
+try {
+  if (stage === null) finish('error');
+  const source = new URL('../packages/macos-lifecycle/dist/adapters/macos-service-probes.js',
+    pathToFileURL(process.execPath));
+  const { inspectMacRegistry, parseTcpSnapshot } = await import(source.href);
+  const results = await Promise.allSettled([
+    (async () => {
+      const value = await inspectMacRegistry();
+      const roles = ['core', 'tunnel'];
+      if (value !== null && roles.every(role =>
+        ['absent', 'present'].includes(value?.jobs?.[role])
+        && (value?.overrides?.[role] === null || typeof value?.overrides?.[role] === 'boolean'))) {
+        snapshot.registry = {
+          jobs: { core: value.jobs.core, tunnel: value.jobs.tunnel },
+          overrides: { core: value.overrides.core, tunnel: value.overrides.tunnel },
+        };
+      }
+    })(),
+    (async () => {
+      const raw = await netstat();
+      const ports = parseTcpSnapshot(raw);
+      snapshot.ports = { core: ports.core, tunnel: ports.tunnel };
+      // Decode target-port states only after the production parser accepts
+      // the complete table. Never emit native text, addresses, or PIDs.
+      if (ports.core === 'unknown' || ports.tunnel === 'unknown') return;
+      const recognized = new Set(['CLOSED', 'LISTEN', 'SYN_SENT', 'SYN_RECEIVED',
+        'ESTABLISHED', 'CLOSE_WAIT', 'FIN_WAIT_1', 'CLOSING', 'LAST_ACK', 'FIN_WAIT_2', 'TIME_WAIT']);
+      const found = { core: new Set(), tunnel: new Set() };
+      for (const line of raw.stdout.split('\n').map(value => value.trim()).filter(Boolean).slice(2)) {
+        const fields = line.split(/[ \t]+/u);
+        const endpoint = fields[3];
+        const port = Number(endpoint.slice(endpoint.lastIndexOf('.') + 1));
+        const role = port === 3847 ? 'core' : port === 8080 ? 'tunnel' : null;
+        if (role !== null && recognized.has(fields[5])) found[role].add(fields[5]);
+      }
+      snapshot.tcp_states = { core: [...found.core].sort(), tunnel: [...found.tunnel].sort() };
+    })(),
+  ]);
+  finish(results.every(result => result.status === 'fulfilled') ? 'done' : 'error');
+} catch {
+  finish('error');
+}
+NATIVE_POST_STOP_SNAPSHOT
+  then
+    echo 'NATIVE_POST_STOP_SYSTEM_DIAG {"stage":"PROCESS_ERROR","ports":{"core":"unknown","tunnel":"unknown"},"tcp_states":{"core":[],"tunnel":[]},"registry":null}'
+  fi
+}
+
+echo 'NATIVE_PHASE=post-stop-preview'
+set +e
 STOPPED="$("$NODE" "$OPERATOR" preview --json)"
+STOPPED_EXIT=$?
+set -e
+if ! "$NODE" --input-type=module - "$STOPPED_EXIT" "$STOPPED" "$POST" 2>/dev/null <<'NATIVE_POST_STOP_PREVIEW_SUMMARY'
+const codes = new Set(['OK', 'UNSUPPORTED_HOST', 'INVALID_CONFIG', 'ACCOUNT_INVALID',
+  'UNTRUSTED_RELEASE', 'UNSAFE_PATH', 'FOREIGN_SERVICE', 'PORT_IN_USE', 'CONFIG_CHANGED',
+  'BUSY', 'AUTH_BLOCKED', 'HEALTH_UNKNOWN', 'TOOL_SURFACE_MISMATCH', 'RESTART_BUDGET',
+  'INVALID_HISTORY', 'ROLLBACK_BLOCKED_SCHEMA', 'PARTIAL_INSTALL', 'NOT_AUTHORIZED',
+  'TUNNEL_COMPATIBILITY_REQUIRED', 'INTERNAL_ERROR']);
+function preview(value) {
+  try {
+    if (typeof value !== 'string' || Buffer.byteLength(value) > 65_536) return null;
+    const parsed = JSON.parse(value)?.preview;
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+const current = preview(process.argv[3]);
+const prior = preview(process.argv[4]);
+const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/u.test(value);
+const exit = Number(process.argv[2]);
+process.stdout.write('NATIVE_POST_STOP_PREVIEW_DIAG ' + JSON.stringify({
+  exit: Number.isSafeInteger(exit) && exit >= 0 && exit <= 255 ? exit : null,
+  preview_ok: current?.ok === true,
+  preview_code: codes.has(current?.code) ? current.code : 'UNKNOWN',
+  config_token_match: digest(current?.configDigest) && current.configDigest === prior?.configDigest,
+  install_digest_match: digest(current?.previousInstallDigest)
+    && current.previousInstallDigest === prior?.previousInstallDigest,
+}) + '\n');
+NATIVE_POST_STOP_PREVIEW_SUMMARY
+then
+  printf 'NATIVE_POST_STOP_PREVIEW_DIAG {"exit":%d,"preview_ok":false,"preview_code":"UNKNOWN","config_token_match":false,"install_digest_match":false}\n' "$STOPPED_EXIT"
+fi
+if [[ "$STOPPED_EXIT" -ne 0 ]]; then
+  post_stop_snapshot preview
+  exit "$STOPPED_EXIT"
+fi
+set +e
 "$NODE" -e 'const a=JSON.parse(process.argv[1]); const b=JSON.parse(process.argv[2]); if(!a.preview?.ok||a.preview.configDigest!==b.preview.configDigest||a.preview.previousInstallDigest!==b.preview.previousInstallDigest) process.exit(2)' "$STOPPED" "$POST"
+STOPPED_IDENTITY_EXIT=$?
+set -e
+if [[ "$STOPPED_IDENTITY_EXIT" -ne 0 ]]; then
+  post_stop_snapshot identity
+  exit "$STOPPED_IDENTITY_EXIT"
+fi
 POST_TOKEN="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.configDigest)' "$STOPPED")"
 POST_INSTALL="$("$NODE" -e 'const j=JSON.parse(process.argv[1]); process.stdout.write(j.preview.previousInstallDigest)' "$STOPPED")"
 
