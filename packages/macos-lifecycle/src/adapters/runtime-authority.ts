@@ -10,6 +10,7 @@ import { CoreRegistrationStore } from '../core-registration.js';
 import { TunnelRegistrationStore } from '../tunnel-registration.js';
 import { decodeStatus, type ServiceStatus } from '../telemetry.js';
 import { inspectRelease } from '../release-inspection.js';
+import { RELEASE_REVIEW_TIMEOUT_MS } from '../release-review-budget.js';
 import type { RecordFiles } from '../telemetry-store.js';
 import type { CoreAuthority } from './native-core.js';
 import type { TunnelAuthority } from './native-tunnel.js';
@@ -115,7 +116,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
     if (typeof bootstrapAcl !== 'function') refuse();
     const environment = Object.freeze({ host: inputEnvironment.host.bind(inputEnvironment),
       account: inputEnvironment.account.bind(inputEnvironment), identity: inputEnvironment.identity.bind(inputEnvironment) });
-    return await bounded(10000, parent, async signal => {
+    return await bounded(RELEASE_REVIEW_TIMEOUT_MS, parent, async signal => {
       async function context(abort: AbortSignal): Promise<LocalAccount> {
         check(abort);
         const host = data(environment.host(), ['platform', 'arch', 'nodeVersion']);
@@ -175,7 +176,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
       }
       async function validate(abort: AbortSignal): Promise<ExecutableIdentity> {
         await unchangedContext(abort); const before = await configuration(abort);
-        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles); check(abort);
+        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles, abort); check(abort);
         const node = await executable('bin/node', review.nodeDigest, abort);
         await executable('bin/file-acl', review.fileAclDigest, abort);
         await executable('bin/peer-owner', review.peerOwnerDigest, abort);
@@ -188,7 +189,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
         const before = await lstat(absolute, { bigint: true });
         if (!before.isFile() || before.uid !== BigInt(layout.ownerUid) || before.nlink !== 1n
           || (before.mode & 0o6022n) !== 0n || (before.mode & 0o111n) === 0n) refuse();
-        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles);
+        await inspectRelease(review.config, review.config.releaseDigest, releaseFiles, abort);
         if (!sameFile(before, await lstat(absolute, { bigint: true }))) refuse();
         check(abort);
         return Object.freeze({ dev: before.dev, ino: before.ino });
@@ -241,7 +242,7 @@ export async function bindReviewedCoreRuntimeAt(inputLayout: RuntimeLayout, inpu
         async acquire(input, abort) {
           try {
             const config = parseConfig(input); if (configDigest(config) !== review.configDigest) return null;
-            return await bounded(10000, abort, async active => {
+            return await bounded(RELEASE_REVIEW_TIMEOUT_MS, abort, async active => {
               const node = await validate(active);
               const occupied = await execution.read('core'); check(active);
               if (occupied.state !== 'HELD' || occupied.configDigest !== review.configDigest

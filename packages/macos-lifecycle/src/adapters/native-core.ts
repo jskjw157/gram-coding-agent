@@ -6,6 +6,7 @@ import { attachChildOutput, type OutputDrain } from '../child-output.js';
 import { withExclusiveCore } from '../exclusive-core.js';
 import { ExecutionLeaseStore } from '../execution-lease.js';
 import { copyCoreChild, probeCore, type CoreCredentials, type CoreEvidence } from '../health-probe.js';
+import { RELEASE_REVIEW_TIMEOUT_MS } from '../release-review-budget.js';
 import type { ManagedChild, SupervisorDeps } from '../supervisor.js';
 import { createLoopbackConnections } from './loopback-http.js';
 import { createMacConnectedPeerVerifier, sealMacOwnedChild, type ExecutableIdentity,
@@ -163,7 +164,7 @@ export function createNativeCorePort(options: NativeCoreOptions = {}): Superviso
         const config = parseConfig(input); Object.freeze(config.tunnel); Object.freeze(config);
         copyCoreChild({ role: 'core', pid: 1, uid: 1, startIdentity: 'validation-only',
           generation, releaseDigest: config.releaseDigest });
-        const grant = validatedGrant(await within(10000, signal, s => authority.acquire(config, s)), config);
+        const grant = validatedGrant(await within(RELEASE_REVIEW_TIMEOUT_MS, signal, s => authority.acquire(config, s)), config);
         if (signal.aborted) startFailed();
         // Both command and environment are derived, never supplied by the grant.
         custody = takeCustody(launch(coreLaunchPlan(config)), grant.proof);

@@ -87,6 +87,53 @@ describe('fixed core launch recipe', () => {
   });
 });
 
+describe('sealed-release review deadline before the native launcher', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  function pendingGrant(parent: AbortSignal) {
+    // This fixture ends at the launcher boundary and never creates an OS child.
+    vi.spyOn(process, 'getuid').mockReturnValue(501); vi.spyOn(process, 'getgid').mockReturnValue(20);
+    const ready = deferred<CoreLaunchGrant | null>(); let active: AbortSignal | undefined;
+    const grant: CoreLaunchGrant = { configDigest: configDigest(lab()),
+      account: { name: 'gram-agent', uid: 501, gid: 20, admin: false }, executable: { dev: 1n, ino: 2n },
+      proof: { async capture() { return null; }, async current() { return 'UNKNOWN'; }, async peer() { return 'UNKNOWN'; } } };
+    const launch = vi.fn(() => { throw new Error('FIXTURE_LAUNCH_BOUNDARY'); });
+    const port = createNativeCorePort({
+      authority: { async acquire(_config, signal) { active = signal; return ready.promise; } },
+      credentials: { async withValue(use) { return use('synthetic-review-budget-secret'); } }, launch,
+    });
+    vi.useFakeTimers(); let settled = false;
+    const work = port.spawn(lab(), 'review-budget', parent).then(() => 'SPAWNED', error => (error as Error).message);
+    void work.then(() => { settled = true; });
+    return { work, launch, signal: () => active, settled: () => settled, resolve: () => ready.resolve(grant) };
+  }
+  it('allows a valid 21-second reviewed grant to reach the fixed launcher', async () => {
+    const f = pendingGrant(signal());
+    try {
+      await vi.advanceTimersByTimeAsync(21000); expect(f.settled()).toBe(false);
+      expect(f.signal()?.aborted).toBe(false); expect(f.launch).not.toHaveBeenCalled();
+      f.resolve(); expect(await f.work).toBe('CORE_START_FAILED');
+      expect(f.launch).toHaveBeenCalledExactlyOnceWith(coreLaunchPlan(lab()));
+    } finally { f.resolve(); await f.work; }
+  });
+  it('honors an earlier caller deadline and ignores its late reviewed grant', async () => {
+    const parent = new AbortController(); const f = pendingGrant(parent.signal);
+    try {
+      await vi.advanceTimersByTimeAsync(5000); parent.abort();
+      expect(await f.work).toBe('CORE_START_FAILED'); expect(f.signal()?.aborted).toBe(true);
+      f.resolve(); await Promise.resolve(); await Promise.resolve(); expect(f.launch).not.toHaveBeenCalled();
+    } finally { f.resolve(); await f.work; }
+  });
+  it('refuses a reviewed grant arriving after the 60-second deadline', async () => {
+    const f = pendingGrant(signal());
+    try {
+      await vi.advanceTimersByTimeAsync(59999); expect(f.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await f.work).toBe('CORE_START_FAILED'); expect(f.signal()?.aborted).toBe(true);
+      f.resolve(); await Promise.resolve(); await Promise.resolve(); expect(f.launch).not.toHaveBeenCalled();
+    } finally { f.resolve(); await f.work; }
+  });
+});
+
 describe('real direct-child custody with synthetic identity proof', () => {
   it('fails closed without independent launch authority and never calls launcher', async () => {
     const f = await fixture(); delete f.options.authority;
