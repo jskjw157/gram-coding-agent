@@ -197,6 +197,34 @@ describe('CommandRunner policy gate', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+
+  it.each([
+    ['background separator', 'echo ok & rm -rf /'],
+    ['newline separator', 'echo ok\nrm -rf /'],
+  ] as const)('rejects %s before approval, evidence, or spawn', async (_label, shellText) => {
+    const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
+      exitCode: 0,
+      stdout: '',
+      stderr: '',
+    }));
+    const consume = vi.fn<ApprovalConsumptionPort['consume']>(async () => true);
+    const ports = evidencePorts();
+    const runner = new CommandRunner({
+      policy: new PolicyEngine(),
+      approvals: { consume },
+      spawner: { spawn },
+      ...ports,
+    });
+
+    await expect(runner.run(request(shellText))).rejects.toThrow(
+      /unsupported shell syntax/i,
+    );
+
+    expect(consume).not.toHaveBeenCalled();
+    expect(ports.commandRuns.start).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it('keeps executable-form redirect-looking arguments literal', async () => {
     const spawn: ProcessSpawner['spawn'] = vi.fn(async () => ({
       exitCode: 0,
