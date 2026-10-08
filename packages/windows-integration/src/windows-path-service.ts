@@ -10,13 +10,16 @@ export interface WindowsPathRunner {
 export class WindowsPathService {
   constructor(private readonly runner: WindowsPathRunner) {}
 
-  async toWindows(linuxPath: string): Promise<string> {
-    void linuxPath;
-    throw new Error('Not implemented');
+  toWindows(linuxPath: string): Promise<string> {
+    return this.convert('-w', linuxPath);
   }
 
-  async toLinux(windowsPath: string): Promise<string> {
-    void windowsPath;
-    throw new Error('Not implemented');
+  toLinux(windowsPath: string): Promise<string> {
+    return this.convert('-u', windowsPath);
+  }
+
+  private async convert(direction: '-w' | '-u', path: string): Promise<string> {
+    const output = await this.runner.run({ executable: 'wslpath', args: [direction, path] });
+    return output.replace(/\r?\n$/, '');
   }
 }
