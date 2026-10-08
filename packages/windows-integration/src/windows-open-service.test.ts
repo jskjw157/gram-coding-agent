@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { type FixedWindowsOperation } from './fixed-windows-runner.js';
+import { WindowsIntegrationError } from './windows-integration-error.js';
 import { WindowsOpenService } from './windows-open-service.js';
 
 function fixture() {
@@ -43,6 +44,7 @@ describe('WindowsOpenService paths', () => {
     'Q:\\' + 'x'.repeat(8190),
     'relative\\folder',
     'Q:relative',
+    'Q:\\\\',
     '\\root-relative',
     '/select,Q:\\folder',
     '-Embedding',
@@ -157,6 +159,38 @@ describe('WindowsOpenService URLs', () => {
 });
 
 describe('WindowsOpenService failures', () => {
+  it.each(['throwing getter', 'changing getter', 'throwing prototype'] as const)(
+    'fails closed when an injected error has a %s',
+    async (mode) => {
+      const privateDetails = 'fixture private error details';
+      const original = new WindowsIntegrationError('OPERATION_FAILED');
+      let reads = 0;
+      const getter = vi.fn(() => {
+        reads += 1;
+        if (mode === 'throwing getter') throw new Error(privateDetails);
+        return reads === 1 ? 'OPERATION_FAILED' : privateDetails;
+      });
+      const reflection = vi.fn(() => { throw new Error(privateDetails); });
+      let raw: unknown = original;
+      if (mode === 'throwing prototype') {
+        raw = new Proxy(original, { getPrototypeOf: reflection });
+      } else {
+        Object.defineProperty(original, 'code', { get: getter });
+      }
+      const service = new WindowsOpenService({ async run() { throw raw; } });
+      const error: unknown = await service.openUrl('https://example.test/').catch((cause: unknown) => cause);
+      expect(error).toMatchObject({
+        name: 'WindowsIntegrationError',
+        code: 'OPERATION_FAILED',
+        message: 'Windows operation failed.',
+      });
+      expect(String(error)).not.toContain(privateDetails);
+      expect(error).not.toHaveProperty('cause');
+      expect(getter).not.toHaveBeenCalled();
+      if (mode === 'throwing prototype') expect(reflection).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each(['openPath', 'openUrl'] as const)('sanitizes injected %s runner errors', async (method) => {
     const privateTarget = method === 'openPath' ? 'Q:\\private target' : 'https://example.test/?private=value';
     const raw = Object.assign(new Error('native failure ' + privateTarget), {

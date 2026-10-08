@@ -174,19 +174,14 @@ describe('FixedWindowsRunner strict operation boundary', () => {
   });
 
   it('sanitizes a reflective failure on a malformed runtime object', async () => {
-    const operation = new Proxy(
-      {},
-      {
-        ownKeys() {
-          throw new Error('private object details');
-        },
-      },
-    );
+    const ownKeys = vi.fn(() => { throw new Error('private object details'); });
+    const operation = new Proxy({ kind: 'REVEAL_PATH', windowsPath: 'Q:\\file.txt' }, { ownKeys });
     const error: unknown = await runner()
       .run(operation as FixedWindowsOperation)
       .catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'INVALID_OPERATION' });
     expect(String(error)).not.toContain('private object details');
+    expect(ownKeys).toHaveBeenCalledTimes(1);
     expect(execFile).not.toHaveBeenCalled();
   });
 });
@@ -200,6 +195,7 @@ describe('FixedWindowsRunner path boundary cannot be bypassed directly', () => {
     '--',
     'relative',
     'Q:relative',
+    'Q:\\\\',
     '\\root-relative',
     'Q:/folder',
     '\\\\server',
