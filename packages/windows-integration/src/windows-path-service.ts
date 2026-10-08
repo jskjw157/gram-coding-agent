@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process';
+
 export interface WindowsPathInvocation {
   readonly executable: 'wslpath';
   readonly args: readonly ['-w' | '-u', string];
@@ -25,19 +27,43 @@ export class WindowsPathError extends Error {
 const maxPathLength = 8192;
 
 function isPathString(value: unknown): value is string {
-  return typeof value === 'string'
-    && value.length > 0
-    && value.length <= maxPathLength
-    && value.trim().length > 0
-    && !value.includes('\0')
-    && !value.includes('\r')
-    && !value.includes('\n')
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maxPathLength &&
+    value.trim().length > 0 &&
+    !value.includes('\0') &&
+    !value.includes('\r') &&
+    !value.includes('\n') &&
     // With the Unicode flag, paired surrogates are one code point and do not match.
-    && !/[\uD800-\uDFFF]/u.test(value);
+    !/[\uD800-\uDFFF]/u.test(value)
+  );
 }
 
+const systemWslPathRunner: WindowsPathRunner = {
+  run({ args }) {
+    return new Promise((resolve, reject) => {
+      execFile(
+        'wslpath',
+        [...args],
+        {
+          shell: false,
+          encoding: 'utf8',
+          timeout: 5000,
+          killSignal: 'SIGKILL',
+          maxBuffer: 65536,
+        },
+        (error, stdout) => {
+          if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
+    });
+  },
+};
+
 export class WindowsPathService {
-  constructor(private readonly runner: WindowsPathRunner) {}
+  constructor(private readonly runner: WindowsPathRunner = systemWslPathRunner) {}
 
   toWindows(linuxPath: string): Promise<string> {
     return this.convert('-w', linuxPath);

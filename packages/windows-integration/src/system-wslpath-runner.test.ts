@@ -60,18 +60,22 @@ describe.runIf(process.platform === 'linux')('default Linux process runner (fixt
 
   it('executes the installed PATH converter directly and keeps shell syntax literal', async () => {
     const marker = join(directory, 'injected');
-    const path = `/home/한글 'single' "double"; touch ${marker}; $(touch ${marker}) & `
-      + '`touch ' + marker + '` %COMSPEC%';
+    const path =
+      `/home/한글 'single' "double"; touch ${marker}; $(touch ${marker}) & ` + '`touch ' + marker + '` %COMSPEC%';
     const service = new WindowsPathService();
 
     expect(await service.toWindows(path)).toBe('Z:\\fixture\\한글 file.txt');
     expect(JSON.parse(readFileSync(capture, 'utf8'))).toEqual(['-w', path]);
     expect(existsSync(marker)).toBe(false);
     expect(execFile).toHaveBeenCalledExactlyOnceWith(
-      'wslpath', ['-w', path],
+      'wslpath',
+      ['-w', path],
       expect.objectContaining({
-        shell: false, encoding: 'utf8', timeout: 5000,
-        killSignal: 'SIGKILL', maxBuffer: 65536,
+        shell: false,
+        encoding: 'utf8',
+        timeout: 5000,
+        killSignal: 'SIGKILL',
+        maxBuffer: 65536,
       }),
       expect.any(Function),
     );
@@ -84,7 +88,8 @@ describe.runIf(process.platform === 'linux')('default Linux process runner (fixt
   });
 
   it.each(['nonzero', 'signal', 'stdout-overflow', 'stderr-overflow'])(
-    'fails closed for %s without returning partial output or native error details', async (mode) => {
+    'fails closed for %s without returning partial output or native error details',
+    async (mode) => {
       vi.stubEnv('GRAM_PATH_TEST_MODE', mode);
       const path = '/private/path-that-must-not-appear';
       const error = await new WindowsPathService().toWindows(path).catch((cause: unknown) => cause);
@@ -102,7 +107,8 @@ describe.runIf(process.platform === 'linux')('default Linux process runner (fixt
   it('fails closed when wslpath is not installed instead of using a fallback mapper', async () => {
     rmSync(join(directory, 'wslpath'));
     await expect(new WindowsPathService().toWindows('/input')).rejects.toMatchObject({
-      name: 'WindowsPathError', code: 'CONVERSION_FAILED',
+      name: 'WindowsPathError',
+      code: 'CONVERSION_FAILED',
     });
     expect(execFile).toHaveBeenCalledTimes(1);
     expect(existsSync(capture)).toBe(false);
@@ -112,7 +118,8 @@ describe.runIf(process.platform === 'linux')('default Linux process runner (fixt
     vi.stubEnv('GRAM_PATH_TEST_MODE', 'hang');
     const started = performance.now();
     await expect(new WindowsPathService().toWindows('/input')).rejects.toMatchObject({
-      name: 'WindowsPathError', code: 'CONVERSION_FAILED',
+      name: 'WindowsPathError',
+      code: 'CONVERSION_FAILED',
     });
 
     expect(execFile).toHaveBeenCalledTimes(1);

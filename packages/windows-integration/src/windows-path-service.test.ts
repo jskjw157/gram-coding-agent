@@ -12,9 +12,7 @@ describe('WindowsPathService conversions', () => {
     });
 
     expect(await service.toWindows('/home/example/한글 file.txt')).toBe('E:\\converted\\한글 file.txt');
-    expect(calls).toEqual([
-      { executable: 'wslpath', args: ['-w', '/home/example/한글 file.txt'] },
-    ]);
+    expect(calls).toEqual([{ executable: 'wslpath', args: ['-w', '/home/example/한글 file.txt'] }]);
   });
 
   it('uses the reverse direction without deriving drive or mount mappings', async () => {
@@ -27,9 +25,7 @@ describe('WindowsPathService conversions', () => {
     });
 
     expect(await service.toLinux('q:\\Other User\\보고서 final.txt')).toBe('/custom-mount/보고서 final.txt');
-    expect(calls).toEqual([
-      { executable: 'wslpath', args: ['-u', 'q:\\Other User\\보고서 final.txt'] },
-    ]);
+    expect(calls).toEqual([{ executable: 'wslpath', args: ['-u', 'q:\\Other User\\보고서 final.txt'] }]);
   });
 
   it.each([
@@ -55,7 +51,11 @@ describe('WindowsPathService conversions', () => {
     ['  relative path  \n', '  relative path  '],
     ['E:\\already unframed', 'E:\\already unframed'],
   ])('removes only a single terminal line ending from %j', async (output, expected) => {
-    const service = new WindowsPathService({ async run() { return output; } });
+    const service = new WindowsPathService({
+      async run() {
+        return output;
+      },
+    });
     expect(await service.toWindows('/input')).toBe(expected);
   });
 });
@@ -91,7 +91,8 @@ describe.each(methods)('%s input boundary', (method) => {
     });
 
     await expect(service[method](path as string)).rejects.toMatchObject({
-      name: 'WindowsPathError', code: 'INVALID_PATH',
+      name: 'WindowsPathError',
+      code: 'INVALID_PATH',
     });
     expect(calls).toEqual([]);
   });
@@ -149,25 +150,39 @@ describe('WindowsPathService result boundary', () => {
     { label: 'undefined', output: undefined },
     { label: 'object', output: { stdout: '/path\n' } },
   ])('rejects $label as a malformed converter result', async ({ output }) => {
-    const service = new WindowsPathService({ async run() { return output as string; } });
+    const service = new WindowsPathService({
+      async run() {
+        return output as string;
+      },
+    });
 
     await expect(service.toLinux('R:\\input')).rejects.toMatchObject({
-      name: 'WindowsPathError', code: 'INVALID_OUTPUT',
+      name: 'WindowsPathError',
+      code: 'INVALID_OUTPUT',
     });
   });
 
   it('applies the result limit after removing the terminal line ending', async () => {
     const output = '/' + '한'.repeat(8191);
-    const service = new WindowsPathService({ async run() { return output + '\n'; } });
+    const service = new WindowsPathService({
+      async run() {
+        return output + '\n';
+      },
+    });
     expect(await service.toLinux('R:\\input')).toBe(output);
   });
 
   it('does not expose the runner exception, input, stderr, or cause', async () => {
     const privatePath = '/private/should-not-appear.txt';
     const rawError = Object.assign(new Error(`wslpath -w ${privatePath}: private stderr`), {
-      stderr: 'private stderr', stdout: privatePath,
+      stderr: 'private stderr',
+      stdout: privatePath,
     });
-    const service = new WindowsPathService({ async run() { throw rawError; } });
+    const service = new WindowsPathService({
+      async run() {
+        throw rawError;
+      },
+    });
     const error = await service.toWindows(privatePath).catch((cause: unknown) => cause);
 
     expect(error).toMatchObject({ name: 'WindowsPathError', code: 'CONVERSION_FAILED' });
@@ -183,7 +198,9 @@ describe('WindowsPathService result boundary', () => {
     const pending = new Map<string, (output: string) => void>();
     const service = new WindowsPathService({
       run({ args }) {
-        return new Promise((resolve) => { pending.set(args[1], resolve); });
+        return new Promise((resolve) => {
+          pending.set(args[1], resolve);
+        });
       },
     });
     const windows = service.toWindows('/first');
