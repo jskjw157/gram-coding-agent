@@ -56,6 +56,7 @@ export function normalizeHttpUrl(value: unknown): string {
     !url.hostname ||
     url.username ||
     url.password ||
+    /[\s",\\]/u.test(url.href) ||
     !isBoundedPath(url.href)
   ) {
     throw new WindowsIntegrationError('INVALID_URL');
