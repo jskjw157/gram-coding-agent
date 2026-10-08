@@ -22,17 +22,25 @@ function executeClipboard(operation: 'READ' | 'WRITE', input: Uint8Array): Promi
   return new Promise((resolve, reject) => {
     const failure = () => new WindowsClipboardError('CLIPBOARD_FAILED');
     try {
-      const child = spawn('powershell.exe', [
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand',
-        operation === 'READ' ? encodedRead : encodedWrite,
-      ], {
-        shell: false,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-        timeout: 5000,
-        killSignal: 'SIGKILL',
-        env: clipboardEnvironment(),
-      });
+      const child = spawn(
+        'powershell.exe',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-STA',
+          '-EncodedCommand',
+          operation === 'READ' ? encodedRead : encodedWrite,
+        ],
+        {
+          shell: false,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          windowsHide: true,
+          timeout: 5000,
+          killSignal: 'SIGKILL',
+          env: clipboardEnvironment(),
+        },
+      );
       let failed = false;
       let length = 0;
       const chunks: Buffer[] = [];

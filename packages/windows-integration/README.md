@@ -1,10 +1,14 @@
-# Windows integration preparation — #99 and #100
+# Windows integration preparation — #99, #100 and #101
 
 `@gram/windows-integration` implements path conversion from M4 Task 1 and the
-constrained Open/Reveal adapters from Task 2.
+constrained Open/Reveal adapters from Task 2, and the text-only clipboard service
+from Task 3.
 See [Open/Reveal contracts, verification and integration gates](OPEN_REVEAL.md)
 for #100. These APIs open verified directories, select filesystem paths, and
 submit HTTP/HTTPS URLs; arbitrary file-association opening is excluded.
+See [Clipboard contracts, redaction and integration gates](CLIPBOARD.md) for #101.
+Clipboard MCP tools are not registered; the service requires trusted redactor,
+secret-registration and metadata-only audit composition.
 
 ## Path conversion — #99
 

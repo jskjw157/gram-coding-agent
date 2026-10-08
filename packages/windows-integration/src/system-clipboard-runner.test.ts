@@ -33,7 +33,7 @@ const fixtureProgram = [
   "  if (cfg.mode === 'nonzero' || cfg.mode === 'stdout-then-fail') process.exitCode = 7;",
   "  if (cfg.mode === 'chunked') {",
   '    let offset = 0;',
-  "    const send = () => { if (offset >= bytes.length) return; process.stdout.write(bytes.subarray(offset, ++offset)); setImmediate(send); };",
+  '    const send = () => { if (offset >= bytes.length) return; process.stdout.write(bytes.subarray(offset, ++offset)); setImmediate(send); };',
   '    send();',
   '  } else { process.stdout.write(bytes); }',
   '});',
@@ -52,13 +52,18 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     return new WindowsClipboardService({
       redactor: new SecretRedactor([secret]),
       registeredSecrets: [secret],
-      audit: { record: (event) => { events.push(event); } },
+      audit: {
+        record: (event) => {
+          events.push(event);
+        },
+      },
     });
   }
 
   function capture() {
     return JSON.parse(readFileSync(join(directory, 'capture.json'), 'utf8')) as {
-      args: string[]; env: Record<string, string>;
+      args: string[];
+      env: Record<string, string>;
     };
   }
 
@@ -125,8 +130,11 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     expect(args).not.toContain(text || 'unexpected-empty-argv');
     expect(env).not.toHaveProperty('GRAM_CLIPBOARD_PRIVATE_SENTINEL');
     expect(spawn).toHaveBeenCalledExactlyOnceWith('powershell.exe', args, {
-      shell: false, stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true, timeout: 5000, killSignal: 'SIGKILL',
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      timeout: 5000,
+      killSignal: 'SIGKILL',
       env: expect.any(Object),
     });
     expect(JSON.stringify(events)).not.toContain('Start-Process');
@@ -158,28 +166,37 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     expect(existsSync(join(directory, 'capture.json'))).toBe(false);
   });
 
-  it.each([
-    'nonzero', 'stdout-then-fail', 'signal', 'stdout-overflow', 'stderr-overflow', 'stderr',
-  ])('fails safely for %s without leaking to parent stdout/stderr/audit or retrying', async (mode) => {
-    configure(mode, Buffer.from(secret));
-    const output: string[] = [];
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { output.push(String(chunk)); return true; });
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { output.push(String(chunk)); return true; });
-    try {
-      const error = await service().readText().catch((cause: unknown) => cause);
-      expect(error).toMatchObject({ name: 'WindowsClipboardError', code: 'CLIPBOARD_FAILED' });
-      expect(inspect(error)).not.toContain(secret);
-      expect(error).not.toHaveProperty('cause');
-      expect(error).not.toHaveProperty('stdout');
-      expect(error).not.toHaveProperty('stderr');
-      expect(JSON.stringify(events)).not.toContain(secret);
-      expect(output.join('')).not.toContain(secret);
-      expect(spawn).toHaveBeenCalledTimes(1);
-    } finally {
-      stdout.mockRestore();
-      stderr.mockRestore();
-    }
-  });
+  it.each(['nonzero', 'stdout-then-fail', 'signal', 'stdout-overflow', 'stderr-overflow', 'stderr'])(
+    'fails safely for %s without leaking to parent stdout/stderr/audit or retrying',
+    async (mode) => {
+      configure(mode, Buffer.from(secret));
+      const output: string[] = [];
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        output.push(String(chunk));
+        return true;
+      });
+      try {
+        const error = await service()
+          .readText()
+          .catch((cause: unknown) => cause);
+        expect(error).toMatchObject({ name: 'WindowsClipboardError', code: 'CLIPBOARD_FAILED' });
+        expect(inspect(error)).not.toContain(secret);
+        expect(error).not.toHaveProperty('cause');
+        expect(error).not.toHaveProperty('stdout');
+        expect(error).not.toHaveProperty('stderr');
+        expect(JSON.stringify(events)).not.toContain(secret);
+        expect(output.join('')).not.toContain(secret);
+        expect(spawn).toHaveBeenCalledTimes(1);
+      } finally {
+        stdout.mockRestore();
+        stderr.mockRestore();
+      }
+    },
+  );
 
   it.each([[0xff], [0xc0, 0xaf], [0xed, 0xa0, 0x80], [0xe3, 0x81], [0x61, 0]])(
     'rejects invalid text bytes received from a successful child',

@@ -1,10 +1,5 @@
 export type WindowsClipboardErrorCode =
-  | 'INVALID_TEXT'
-  | 'INVALID_ENCODING'
-  | 'PAYLOAD_TOO_LARGE'
-  | 'REDACTION_FAILED'
-  | 'AUDIT_FAILED'
-  | 'CLIPBOARD_FAILED';
+  'INVALID_TEXT' | 'INVALID_ENCODING' | 'PAYLOAD_TOO_LARGE' | 'REDACTION_FAILED' | 'AUDIT_FAILED' | 'CLIPBOARD_FAILED';
 
 const messages: Record<WindowsClipboardErrorCode, string> = {
   INVALID_TEXT: 'Invalid clipboard text.',

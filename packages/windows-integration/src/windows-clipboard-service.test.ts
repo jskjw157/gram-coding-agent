@@ -2,31 +2,29 @@ import { inspect } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import { SecretRedactor } from '../../secrets/src/redactor.js';
 import * as api from './index.js';
-import type {
-  ClipboardAuditEvent,
-  ClipboardRunner,
-  WindowsClipboardOptions,
-} from './windows-clipboard-service.js';
+import type { ClipboardAuditEvent, ClipboardRunner, WindowsClipboardOptions } from './windows-clipboard-service.js';
 
 const limit = 1048576;
 const marker = '***REDACTED***';
 const privateValue = 'fixture-private-value.[a]+';
 
-function fixture(
-  text = '',
-  secrets: readonly string[] = [],
-  overrides: Partial<WindowsClipboardOptions> = {},
-) {
+function fixture(text = '', secrets: readonly string[] = [], overrides: Partial<WindowsClipboardOptions> = {}) {
   const events: ClipboardAuditEvent[] = [];
   const writes: Uint8Array[] = [];
   const runner: ClipboardRunner = {
     readText: vi.fn(async () => Buffer.from(text, 'utf8')),
-    writeText: vi.fn(async (bytes) => { writes.push(Buffer.from(bytes)); }),
+    writeText: vi.fn(async (bytes) => {
+      writes.push(Buffer.from(bytes));
+    }),
   };
   const options = {
     redactor: new SecretRedactor(secrets),
     registeredSecrets: secrets,
-    audit: { record: async (event: ClipboardAuditEvent) => { events.push(event); } },
+    audit: {
+      record: async (event: ClipboardAuditEvent) => {
+        events.push(event);
+      },
+    },
     runner,
     ...overrides,
   };
@@ -74,8 +72,17 @@ describe('WindowsClipboardService text boundary', () => {
   });
 
   it.each([
-    null, undefined, 17, {}, ['text'], Buffer.from('text'),
-    { text: 'x', command: 'calc.exe' }, 'before\0after', '\ud800', '\udc00', 'x\ud800y',
+    null,
+    undefined,
+    17,
+    {},
+    ['text'],
+    Buffer.from('text'),
+    { text: 'x', command: 'calc.exe' },
+    'before\0after',
+    '\ud800',
+    '\udc00',
+    'x\ud800y',
   ])('rejects invalid write input %j before dispatch', async (value) => {
     const f = fixture();
     await expect(f.service.writeText(value as string)).rejects.toMatchObject({ code: 'INVALID_TEXT' });
@@ -83,10 +90,17 @@ describe('WindowsClipboardService text boundary', () => {
     expect(f.events).toEqual([{ operation: 'WRITE', result: 'FAILURE', characterCount: null }]);
   });
 
-  it.each([
-    [0xc0, 0xaf], [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80], [0xff],
-    [0xe3, 0x81], [0x61, 0xc3, 0x28], [0xff, 0xfe, 0x61, 0x00],
-  ].map((bytes) => [bytes]))('rejects malformed, truncated, or non-UTF-8 process bytes %j', async (bytes) => {
+  it.each(
+    [
+      [0xc0, 0xaf],
+      [0xed, 0xa0, 0x80],
+      [0xf4, 0x90, 0x80, 0x80],
+      [0xff],
+      [0xe3, 0x81],
+      [0x61, 0xc3, 0x28],
+      [0xff, 0xfe, 0x61, 0x00],
+    ].map((bytes) => [bytes]),
+  )('rejects malformed, truncated, or non-UTF-8 process bytes %j', async (bytes) => {
     const f = fixture();
     vi.mocked(f.runner.readText).mockResolvedValue(Uint8Array.from(bytes));
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'INVALID_ENCODING' });
@@ -109,8 +123,11 @@ describe('WindowsClipboardService text boundary', () => {
 
 describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
   it('masks every registered literal, including regex syntax and overlapping values', async () => {
-    const f = fixture('before ' + privateValue + ' other-secret longer-other-secret after',
-      [privateValue, 'other-secret', 'longer-other-secret']);
+    const f = fixture('before ' + privateValue + ' other-secret longer-other-secret after', [
+      privateValue,
+      'other-secret',
+      'longer-other-secret',
+    ]);
     expect(await f.service.readText()).toEqual({
       text: 'before ' + marker + ' ' + marker + ' ' + marker + ' after',
       redacted: true,
@@ -124,13 +141,15 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     ...['o', 'p', 'u', 's', 'r'].map((kind) => 'gh' + kind + '_' + 'fixture01234567890'),
   ])('masks a token recognized by the existing redactor', async (token) => {
     expect(await fixture('before ' + token + ' after').service.readText()).toEqual({
-      text: 'before ' + marker + ' after', redacted: true,
+      text: 'before ' + marker + ' after',
+      redacted: true,
     });
   });
 
   it('masks a case-insensitive Authorization Bearer value', async () => {
     expect(await fixture('aUtHoRiZaTiOn:\tBEARER fixture-private-bearer').service.readText()).toEqual({
-      text: 'aUtHoRiZaTiOn:\tBEARER ' + marker, redacted: true,
+      text: 'aUtHoRiZaTiOn:\tBEARER ' + marker,
+      redacted: true,
     });
   });
 
@@ -151,9 +170,18 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
   });
 
   it.each([
-    undefined, null, {}, { redact: 1 }, { redact: (text: string) => text },
-    { redact: () => { throw new Error(privateValue); } },
-    { redact: async () => marker }, { redact: () => 17 },
+    undefined,
+    null,
+    {},
+    { redact: 1 },
+    { redact: (text: string) => text },
+    {
+      redact: () => {
+        throw new Error(privateValue);
+      },
+    },
+    { redact: async () => marker },
+    { redact: () => 17 },
   ])('fails before clipboard acquisition when the redactor is unusable', async (redactor) => {
     const f = fixture(privateValue, [privateValue], { redactor: redactor as WindowsClipboardOptions['redactor'] });
     const error = await f.service.readText().catch((cause: unknown) => cause);
@@ -184,7 +212,7 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     const source = 'only fail on this ' + privateValue;
     const real = new SecretRedactor([privateValue]);
     const f = fixture(source, [privateValue], {
-      redactor: { redact: (text) => text === source ? text : real.redact(text) },
+      redactor: { redact: (text) => (text === source ? text : real.redact(text)) },
     });
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
   });
@@ -204,7 +232,7 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     async (result) => {
       const real = new SecretRedactor();
       const f = fixture('fixture source', [], {
-        redactor: { redact: (text) => text === 'fixture source' ? result as string : real.redact(text) },
+        redactor: { redact: (text) => (text === 'fixture source' ? (result as string) : real.redact(text)) },
       });
       await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
     },
@@ -213,8 +241,14 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
   it('rejects non-idempotent redaction instead of returning an unverified first pass', async () => {
     const real = new SecretRedactor();
     const f = fixture('fixture source', [], {
-      redactor: { redact: (text) => text === 'fixture source' || text === 'unstable'
-        ? text === 'fixture source' ? 'unstable' : 'changed' : real.redact(text) },
+      redactor: {
+        redact: (text) =>
+          text === 'fixture source' || text === 'unstable'
+            ? text === 'fixture source'
+              ? 'unstable'
+              : 'changed'
+            : real.redact(text),
+      },
     });
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
   });
@@ -228,15 +262,19 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     'contains rejected asynchronous redactor promises during %s validation',
     async (phase) => {
       const unhandled: unknown[] = [];
-      const observe = (reason: unknown) => { unhandled.push(reason); };
+      const observe = (reason: unknown) => {
+        unhandled.push(reason);
+      };
       const real = new SecretRedactor();
       const f = fixture('fixture response', [], {
-        redactor: { redact: (text) => {
-          if (phase === 'configuration' || text === 'fixture response') {
-            return Promise.reject(new Error(privateValue)) as unknown as string;
-          }
-          return real.redact(text);
-        } },
+        redactor: {
+          redact: (text) => {
+            if (phase === 'configuration' || text === 'fixture response') {
+              return Promise.reject(new Error(privateValue)) as unknown as string;
+            }
+            return real.redact(text);
+          },
+        },
       });
       process.on('unhandledRejection', observe);
       try {
@@ -250,25 +288,29 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     },
   );
 
-  it.each([
-    Array.from({ length: 257 }, (_, i) => 'fixture-registration-' + i),
-    ['q'.repeat(65537)],
-  ])('refuses unbounded registration configuration before reading', async (...secrets) => {
-    const f = fixture('', secrets);
-    await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
-    expect(f.runner.readText).not.toHaveBeenCalled();
-  });
+  it.each([Array.from({ length: 257 }, (_, i) => 'fixture-registration-' + i), ['q'.repeat(65537)]])(
+    'refuses unbounded registration configuration before reading',
+    async (...secrets) => {
+      const f = fixture('', secrets);
+      await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+      expect(f.runner.readText).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('WindowsClipboardService failure and audit isolation', () => {
   it.each(['readText', 'writeText'] as const)('does not forward runner %s diagnostics or retry', async (method) => {
     const f = fixture(privateValue, [privateValue]);
     const failure = Object.assign(new Error(privateValue), {
-      stdout: privateValue, stderr: privateValue, cause: new Error(privateValue), args: [privateValue],
+      stdout: privateValue,
+      stderr: privateValue,
+      cause: new Error(privateValue),
+      args: [privateValue],
     });
     vi.mocked(f.runner[method]).mockRejectedValue(failure);
-    const error = await (method === 'readText' ? f.service.readText() : f.service.writeText(privateValue))
-      .catch((cause: unknown) => cause);
+    const error = await (method === 'readText' ? f.service.readText() : f.service.writeText(privateValue)).catch(
+      (cause: unknown) => cause,
+    );
     expect(error).toMatchObject({ name: 'WindowsClipboardError', code: 'CLIPBOARD_FAILED' });
     expect(f.runner[method]).toHaveBeenCalledTimes(1);
     expect(inspect(error)).not.toContain(privateValue);
@@ -280,18 +322,34 @@ describe('WindowsClipboardService failure and audit isolation', () => {
 
   it('does not inspect a hostile rejection object', async () => {
     const f = fixture();
-    vi.mocked(f.runner.readText).mockRejectedValue(new Proxy({}, {
-      get: () => { throw new Error(privateValue); },
-      getPrototypeOf: () => { throw new Error(privateValue); },
-      ownKeys: () => { throw new Error(privateValue); },
-    }));
+    vi.mocked(f.runner.readText).mockRejectedValue(
+      new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error(privateValue);
+          },
+          getPrototypeOf: () => {
+            throw new Error(privateValue);
+          },
+          ownKeys: () => {
+            throw new Error(privateValue);
+          },
+        },
+      ),
+    );
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'CLIPBOARD_FAILED' });
   });
 
   it('returns no response if audit storage fails, and suppresses its private diagnostics', async () => {
     const observed: ClipboardAuditEvent[] = [];
     const f = fixture(privateValue, [privateValue], {
-      audit: { record: async (event) => { observed.push(event); throw new Error(privateValue); } },
+      audit: {
+        record: async (event) => {
+          observed.push(event);
+          throw new Error(privateValue);
+        },
+      },
     });
     const error = await f.service.readText().catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'AUDIT_FAILED' });
@@ -300,7 +358,13 @@ describe('WindowsClipboardService failure and audit isolation', () => {
   });
 
   it('reports audit failure after a write without retrying the clipboard mutation', async () => {
-    const f = fixture('', [], { audit: { record: () => { throw new Error(privateValue); } } });
+    const f = fixture('', [], {
+      audit: {
+        record: () => {
+          throw new Error(privateValue);
+        },
+      },
+    });
     await expect(f.service.writeText('valid')).rejects.toMatchObject({ code: 'AUDIT_FAILED' });
     expect(f.writes.map((bytes) => Buffer.from(bytes).toString())).toEqual(['valid']);
   });
@@ -315,7 +379,8 @@ describe('WindowsClipboardService failure and audit isolation', () => {
 
   it('does not log raw or redacted clipboard content', async () => {
     const spies = ['log', 'info', 'warn', 'error', 'debug'].map((method) =>
-      vi.spyOn(console, method as 'log').mockImplementation(() => {}));
+      vi.spyOn(console, method as 'log').mockImplementation(() => {}),
+    );
     try {
       const f = fixture(privateValue, [privateValue]);
       expect((await f.service.readText()).text).toBe(marker);
