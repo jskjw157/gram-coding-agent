@@ -393,3 +393,79 @@ describe('WindowsClipboardService failure and audit isolation', () => {
     }
   });
 });
+
+describe('WindowsClipboardService complete source-span redaction', () => {
+  const embedded = 'registered123';
+  const suffix = 'LONGfixtureTOKENsuffix0123456789';
+
+  it.each(['sk-abc', 'ghp_abc', 'xoxb-123'])(
+    'refuses a registered replacement inside a %s token before it can expose fragments',
+    async (prefix) => {
+      const f = fixture(prefix + embedded + suffix, [embedded]);
+      await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+      expect(f.events[0]?.result).toBe('FAILURE');
+      expect(JSON.stringify(f.events)).not.toContain(suffix);
+    },
+  );
+
+  it.each([
+    { source: 'label sk-abc' + suffix, secrets: ['label sk-abc'] },
+    { source: 'sk-' + suffix + 'xyz label', secrets: ['sk-' + suffix + 'x'] },
+    { source: 'sk-' + suffix + 'xyz label', secrets: [suffix + 'xyz label'] },
+    { source: 'Authorization: Bearer opaque-private-credential', secrets: ['Authorization: Bearer'] },
+    { source: 'Authorization: Bearer opaque-private-credential', secrets: ['opaque-private'] },
+  ])('refuses registered replacements crossing a credential or selector boundary', async ({ source, secrets }) => {
+    await expect(fixture(source, secrets).service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+  });
+
+  it.each([
+    { source: 'abcdefghijklmnopqrstuvwxyz0123456789', secrets: ['abcdefghijklmnopqrst', 'tuvwxyz0123456789'] },
+    { source: 'ababab', secrets: ['abab'] },
+    { source: 'ababa', secrets: ['aba'] },
+    { source: 'secret-overlap-end', secrets: ['secret-overlap', 'overlap-end'] },
+  ])('refuses partial and self-overlapping registered source occurrences', async ({ source, secrets }) => {
+    await expect(fixture(source, secrets).service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+  });
+
+  it('allows a registered outer value to cover contained and otherwise crossing matches completely', async () => {
+    const source = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    expect(await fixture(source, [source, 'abcdefghijklmnopqrst', 'tuvwxyz0123456789']).service.readText())
+      .toEqual({ text: marker, redacted: true });
+  });
+
+  it('keeps unrelated registered values and tokens in one safely masked response', async () => {
+    const token = 'sk-' + suffix;
+    expect(await fixture(embedded + ' then ' + token, [embedded]).service.readText())
+      .toEqual({ text: marker + ' then ' + marker, redacted: true });
+  });
+
+  it('allows complete registered tokens, including a complete Bearer value', async () => {
+    const token = 'ghp_' + suffix;
+    const source = token + '\nAuthorization: Bearer ' + embedded;
+    expect(await fixture(source, [token, embedded]).service.readText())
+      .toEqual({ text: marker + '\nAuthorization: Bearer ' + marker, redacted: true });
+  });
+
+  it.each([true, false])('does not expose a PEM body when only its header is registered (closed=%s)', async (closed) => {
+    const header = '-----BEGIN ' + 'PRIVATE KEY-----';
+    const source = header + '\nsynthetic-private-body\n' + (closed ? '-----END PRIVATE KEY-----' : '');
+    await expect(fixture(source, [header]).service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+  });
+
+  it('allows a completely registered PEM value to be removed by the existing redactor', async () => {
+    const source = '-----BEGIN ' + 'PRIVATE KEY-----\nsynthetic-private-body\n-----END PRIVATE KEY-----';
+    expect(await fixture(source, [source]).service.readText()).toEqual({ text: marker, redacted: true });
+  });
+
+  it('fails closed when original sensitive-match analysis exceeds its bound', async () => {
+    const secret = 'bounded-registration-fixture';
+    await expect(fixture(Array(8193).fill(secret).join('\n'), [secret]).service.readText())
+      .rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+  });
+
+  it('accepts the sensitive-match analysis boundary without dropping any occurrence', async () => {
+    const secret = 'bounded-registration-fixture';
+    expect(await fixture(Array(8192).fill(secret).join('\n'), [secret]).service.readText())
+      .toEqual({ text: Array(8192).fill(marker).join('\n'), redacted: true });
+  });
+});

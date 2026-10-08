@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,14 @@ const fixtureProgram = [
   "const path = require('node:path');",
   "const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));",
   "fs.writeFileSync(path.join(__dirname, 'capture.json'), JSON.stringify({ args: process.argv.slice(2), env: process.env }));",
+  "if (cfg.mode.endsWith('-with-pipes')) {",
+  "  const descendant = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', process.stdout, process.stderr] });",
+  "  fs.writeFileSync(path.join(__dirname, 'descendant.pid'), String(descendant.pid));",
+  '  descendant.unref();',
+  "  if (cfg.mode === 'stderr-with-pipes') { fs.writeSync(2, cfg.diagnostic); process.exit(0); }",
+  "  if (cfg.mode === 'exited-with-pipes') process.exit(0);",
+  "  process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+  '}',
   "if (cfg.mode === 'early-close') { process.stdin.destroy(); process.exit(7); }",
   "if (cfg.mode === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); }",
   'const chunks = [];',
@@ -83,6 +92,10 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
       if (result.type !== 'return') continue;
       const child = result.value as ChildProcess;
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    const pidFile = join(directory, 'descendant.pid');
+    if (existsSync(pidFile)) {
+      try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* Fixture already exited. */ }
     }
     vi.unstubAllEnvs();
     rmSync(directory, { recursive: true, force: true });
@@ -234,6 +247,53 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(performance.now() - started).toBeLessThan(8000);
     const child = vi.mocked(spawn).mock.results[0]?.value as ChildProcess;
+    if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
     expect(child.signalCode).toBe('SIGKILL');
   }, 9000);
+
+  it.each(['exited-with-pipes', 'hang-with-pipes'])(
+    'bounds the whole call when a descendant retains pipes (%s)',
+    async (mode) => {
+      configure(mode);
+      const outcome = service().readText().then(
+        () => 'unexpected-success',
+        (error: unknown) => (error as { code: string }).code,
+      );
+      let guard: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          outcome,
+          new Promise((resolve) => { guard = setTimeout(() => resolve('unbounded-operation'), 6500); }),
+        ]);
+        expect(result).toBe('CLIPBOARD_FAILED');
+        const child = vi.mocked(spawn).mock.results[0]?.value as ChildProcess;
+        expect(child.stdout?.destroyed).toBe(true);
+        expect(child.stderr?.destroyed).toBe(true);
+        expect(events).toEqual([{ operation: 'READ', result: 'FAILURE', characterCount: null }]);
+      } finally {
+        clearTimeout(guard);
+      }
+    },
+    8500,
+  );
+
+  it('settles a protocol failure promptly even when inherited pipes stay open', async () => {
+    configure('stderr-with-pipes');
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = service().readText().then(
+        () => 'unexpected-success',
+        (error: unknown) => (error as { code: string }).code,
+      );
+      const result = await Promise.race([
+        outcome,
+        new Promise((resolve) => { guard = setTimeout(() => resolve('waited-for-open-pipes'), 2000); }),
+      ]);
+      expect(result).toBe('CLIPBOARD_FAILED');
+      expect(JSON.stringify(events)).not.toContain(secret);
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(guard);
+    }
+  }, 4000);
 });
