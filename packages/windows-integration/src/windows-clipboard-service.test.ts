@@ -35,9 +35,9 @@ function fixture(
 
 describe('WindowsClipboardService text boundary', () => {
   it.each([
-    ['', 0],
-    [' \t\r\n한글 🧵 "quotes" \'single\' & $(literal); %COMSPEC% \n ', 56],
-    ['\ufeffleading BOM and \ufffd literal replacement', 38],
+    '',
+    ' \t\r\n한글 🧵 "quotes" \'single\' & $(literal); %COMSPEC% \n ',
+    '\ufeffleading BOM and \ufffd literal replacement',
   ])('preserves valid text and audits counts without the body (%j)', async (text) => {
     const f = fixture(text as string);
     expect(await f.service.readText()).toEqual({ text, redacted: false });
@@ -85,7 +85,7 @@ describe('WindowsClipboardService text boundary', () => {
   it.each([
     [0xc0, 0xaf], [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80], [0xff],
     [0xe3, 0x81], [0x61, 0xc3, 0x28], [0xff, 0xfe, 0x61, 0x00],
-  ])('rejects malformed, truncated, or non-UTF-8 process bytes %j', async (bytes) => {
+  ].map((bytes) => [bytes]))('rejects malformed, truncated, or non-UTF-8 process bytes %j', async (bytes) => {
     const f = fixture();
     vi.mocked(f.runner.readText).mockResolvedValue(Uint8Array.from(bytes));
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'INVALID_ENCODING' });
