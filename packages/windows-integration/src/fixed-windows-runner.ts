@@ -1,3 +1,9 @@
+import { execFile } from 'node:child_process';
+import { realpath, stat } from 'node:fs/promises';
+import { sanitizeWindowsFailure, WindowsIntegrationError } from './windows-integration-error.js';
+import { WindowsPathService } from './windows-path-service.js';
+import { isBoundedPath, normalizeHttpUrl, validateWindowsPath } from './windows-targets.js';
+
 export type FixedWindowsOperation =
   | { readonly kind: 'OPEN_PATH'; readonly windowsPath: string }
   | { readonly kind: 'REVEAL_PATH'; readonly windowsPath: string }
@@ -81,9 +87,3 @@ export class FixedWindowsRunner implements WindowsOperationRunner {
     }
   }
 }
-import { execFile } from 'node:child_process';
-import { realpath, stat } from 'node:fs/promises';
-import { sanitizeWindowsFailure, WindowsIntegrationError } from './windows-integration-error.js';
-import { WindowsPathService } from './windows-path-service.js';
-import { isBoundedPath, normalizeHttpUrl, validateWindowsPath } from './windows-targets.js';
-

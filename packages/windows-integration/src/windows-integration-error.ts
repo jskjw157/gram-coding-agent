@@ -1,9 +1,5 @@
 export type WindowsIntegrationErrorCode =
-  | 'INVALID_OPERATION'
-  | 'INVALID_PATH'
-  | 'INVALID_URL'
-  | 'NOT_DIRECTORY'
-  | 'OPERATION_FAILED';
+  'INVALID_OPERATION' | 'INVALID_PATH' | 'INVALID_URL' | 'NOT_DIRECTORY' | 'OPERATION_FAILED';
 
 const messages: Record<WindowsIntegrationErrorCode, string> = {
   INVALID_OPERATION: 'Invalid fixed Windows operation.',

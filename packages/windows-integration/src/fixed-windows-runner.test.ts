@@ -106,8 +106,13 @@ describe('FixedWindowsRunner invocation construction', () => {
   it('snapshots operation data before awaiting directory resolution', async () => {
     let release: (path: string) => void = () => {};
     const fixed = new FixedWindowsRunner({
-      toLinux: () => new Promise<string>((resolve) => { release = resolve; }),
-      async toWindows() { return converted; },
+      toLinux: () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+      async toWindows() {
+        return converted;
+      },
     });
     const operation = { kind: 'OPEN_PATH', windowsPath: 'Q:\\original', url: undefined } as Record<string, unknown>;
     delete operation.url;
@@ -135,7 +140,9 @@ describe('FixedWindowsRunner strict operation boundary', () => {
     { kind: 'OPEN_URL', windowsPath: 'Q:\\folder' },
     { kind: 'REVEAL_PATH', url: 'https://example.test/' },
     ...['command', 'executable', 'script', 'args', 'shell', 'cwd', 'env', 'verb', 'flags'].map((key) => ({
-      kind: 'REVEAL_PATH', windowsPath: 'Q:\\folder', [key]: 'untrusted',
+      kind: 'REVEAL_PATH',
+      windowsPath: 'Q:\\folder',
+      [key]: 'untrusted',
     })),
     { kind: 'OPEN_URL', url: 'https://example.test/', windowsPath: 'Q:\\folder' },
     Object.assign(Object.create({ command: 'calc.exe' }) as object, { kind: 'REVEAL_PATH', windowsPath: 'Q:\\folder' }),
@@ -159,15 +166,25 @@ describe('FixedWindowsRunner strict operation boundary', () => {
 
   it('accepts an exact null-prototype data record', async () => {
     const operation = Object.assign(Object.create(null) as object, {
-      kind: 'REVEAL_PATH', windowsPath: 'Q:\\file.txt',
+      kind: 'REVEAL_PATH',
+      windowsPath: 'Q:\\file.txt',
     });
     await runner().run(operation as FixedWindowsOperation);
     expect(vi.mocked(execFile).mock.calls[0]?.[1]).toEqual(['/select,', 'Q:\\file.txt']);
   });
 
   it('sanitizes a reflective failure on a malformed runtime object', async () => {
-    const operation = new Proxy({}, { ownKeys() { throw new Error('private object details'); } });
-    const error: unknown = await runner().run(operation as FixedWindowsOperation).catch((cause: unknown) => cause);
+    const operation = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('private object details');
+        },
+      },
+    );
+    const error: unknown = await runner()
+      .run(operation as FixedWindowsOperation)
+      .catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'INVALID_OPERATION' });
     expect(String(error)).not.toContain('private object details');
     expect(execFile).not.toHaveBeenCalled();
@@ -176,17 +193,53 @@ describe('FixedWindowsRunner strict operation boundary', () => {
 
 describe('FixedWindowsRunner path boundary cannot be bypassed directly', () => {
   it.each([
-    '/select,Q:\\file', '/root,Q:\\file', '-Embedding', '/idlist,:payload', '--',
-    'relative', 'Q:relative', '\\root-relative', 'Q:/folder', '\\\\server',
-    '\\\\server\\', '\\\\?\\Q:\\folder', '\\\\.\\pipe\\name', '\\??\\Q:\\file',
-    'shell:AppsFolder', '::{01234567-0123-0123-0123-012345678901}', 'file:///Q:/payload.exe',
-    'ms-settings:display', 'javascript:alert(1)', 'Q:\\x,/root,Q:\\payload.exe',
-    'Q:\\x" /root,Q:\\payload.exe', 'Q:\\%COMSPEC%', 'Q:\\x|y', 'Q:\\x<y',
-    'Q:\\x>y', 'Q:\\x?y', 'Q:\\x*y', 'Q:\\file:stream', 'Q:\\x\tname',
-    'Q:\\x\u007f', 'Q:\\x\n', 'Q:\\x\0', 'Q:\\x\ud800', 'Q:\\x\udc00',
-    'Q:\\' + 'x'.repeat(8190), 'Q:\\a\\..\\file', 'Q:\\.\\file', 'Q:\\a\\\\file',
-    'Q:\\trailing.', 'Q:\\trailing ', 'Q:\\CON', 'Q:\\nul.txt', 'Q:\\LPT1',
-    'Q:\\COM¹.txt', 'Q:\\lpt².log', 'Q:\\CONIN$', 'Q:\\conout$.txt',
+    '/select,Q:\\file',
+    '/root,Q:\\file',
+    '-Embedding',
+    '/idlist,:payload',
+    '--',
+    'relative',
+    'Q:relative',
+    '\\root-relative',
+    'Q:/folder',
+    '\\\\server',
+    '\\\\server\\',
+    '\\\\?\\Q:\\folder',
+    '\\\\.\\pipe\\name',
+    '\\??\\Q:\\file',
+    'shell:AppsFolder',
+    '::{01234567-0123-0123-0123-012345678901}',
+    'file:///Q:/payload.exe',
+    'ms-settings:display',
+    'javascript:alert(1)',
+    'Q:\\x,/root,Q:\\payload.exe',
+    'Q:\\x" /root,Q:\\payload.exe',
+    'Q:\\%COMSPEC%',
+    'Q:\\x|y',
+    'Q:\\x<y',
+    'Q:\\x>y',
+    'Q:\\x?y',
+    'Q:\\x*y',
+    'Q:\\file:stream',
+    'Q:\\x\tname',
+    'Q:\\x\u007f',
+    'Q:\\x\n',
+    'Q:\\x\0',
+    'Q:\\x\ud800',
+    'Q:\\x\udc00',
+    'Q:\\' + 'x'.repeat(8190),
+    'Q:\\a\\..\\file',
+    'Q:\\.\\file',
+    'Q:\\a\\\\file',
+    'Q:\\trailing.',
+    'Q:\\trailing ',
+    'Q:\\CON',
+    'Q:\\nul.txt',
+    'Q:\\LPT1',
+    'Q:\\COM¹.txt',
+    'Q:\\lpt².log',
+    'Q:\\CONIN$',
+    'Q:\\conout$.txt',
     'Q:\\folder.{01234567-0123-0123-0123-012345678901}',
   ])('rejects %j with no process or conversion', async (windowsPath) => {
     await expect(runner().run({ kind: 'REVEAL_PATH', windowsPath })).rejects.toMatchObject({ code: 'INVALID_PATH' });
@@ -195,10 +248,18 @@ describe('FixedWindowsRunner path boundary cannot be bypassed directly', () => {
   });
 
   it.each([
-    'file:///Q:/payload.exe', 'javascript:alert(1)', 'shell:AppsFolder', 'ms-settings:display',
-    'custom://example.test/', ' https://example.test/', 'https://example.test/\n',
-    'https://example.test/,/root,Q:\\payload.exe', 'https://example.test/"x"',
-    'https://example.test/\\x', 'https://user:secret@example.test/', 'https:///example.test/',
+    'file:///Q:/payload.exe',
+    'javascript:alert(1)',
+    'shell:AppsFolder',
+    'ms-settings:display',
+    'custom://example.test/',
+    ' https://example.test/',
+    'https://example.test/\n',
+    'https://example.test/,/root,Q:\\payload.exe',
+    'https://example.test/"x"',
+    'https://example.test/\\x',
+    'https://user:secret@example.test/',
+    'https:///example.test/',
   ])('rejects URL %j directly at the runner', async (url) => {
     await expect(runner().run({ kind: 'OPEN_URL', url })).rejects.toMatchObject({ code: 'INVALID_URL' });
     expect(execFile).not.toHaveBeenCalled();
@@ -207,18 +268,24 @@ describe('FixedWindowsRunner path boundary cannot be bypassed directly', () => {
 });
 
 describe('FixedWindowsRunner directory and failure boundaries', () => {
-  it.each(['program.exe', 'program.com', 'script.ps1', 'script.cmd', 'script.bat', 'shortcut.lnk', 'link.url', 'data.txt'])(
-    'refuses to open the regular file %s even though Explorer is fixed',
-    async (filename) => {
-      linuxResult = join(directory, filename);
-      await writeFile(linuxResult, 'fixture data');
-      await expect(runner().run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\' + filename })).rejects.toMatchObject({
-        code: 'NOT_DIRECTORY',
-      });
-      expect(conversions).toHaveLength(1);
-      expect(execFile).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    'program.exe',
+    'program.com',
+    'script.ps1',
+    'script.cmd',
+    'script.bat',
+    'shortcut.lnk',
+    'link.url',
+    'data.txt',
+  ])('refuses to open the regular file %s even though Explorer is fixed', async (filename) => {
+    linuxResult = join(directory, filename);
+    await writeFile(linuxResult, 'fixture data');
+    await expect(runner().run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\' + filename })).rejects.toMatchObject({
+      code: 'NOT_DIRECTORY',
+    });
+    expect(conversions).toHaveLength(1);
+    expect(execFile).not.toHaveBeenCalled();
+  });
 
   it('refuses a symlink resolving to a regular file', async () => {
     const file = join(directory, 'script.ps1');
@@ -233,7 +300,8 @@ describe('FixedWindowsRunner directory and failure boundaries', () => {
 
   it('fails closed on a missing directory without returning native path details', async () => {
     linuxResult = join(directory, 'private-missing');
-    const error: unknown = await runner().run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\missing' })
+    const error: unknown = await runner()
+      .run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\missing' })
       .catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'OPERATION_FAILED' });
     expect(String(error)).not.toContain(linuxResult);
@@ -252,17 +320,21 @@ describe('FixedWindowsRunner directory and failure boundaries', () => {
     },
   );
 
-  it.each(['/root,Q:\\payload.exe', 'relative', 'shell:AppsFolder', 'Q:\\x,/root,Q:\\payload.exe', 'Q:\\x"', 'Q:\\x\0'])(
-    'revalidates the canonical conversion result %j before spawning',
-    async (path) => {
-      converted = path;
-      await expect(runner().run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\folder' })).rejects.toMatchObject({
-        code: 'INVALID_PATH',
-      });
-      expect(conversions).toHaveLength(2);
-      expect(execFile).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    '/root,Q:\\payload.exe',
+    'relative',
+    'shell:AppsFolder',
+    'Q:\\x,/root,Q:\\payload.exe',
+    'Q:\\x"',
+    'Q:\\x\0',
+  ])('revalidates the canonical conversion result %j before spawning', async (path) => {
+    converted = path;
+    await expect(runner().run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\folder' })).rejects.toMatchObject({
+      code: 'INVALID_PATH',
+    });
+    expect(conversions).toHaveLength(2);
+    expect(execFile).not.toHaveBeenCalled();
+  });
 
   it('checks the final length after adding directory framing', async () => {
     converted = 'Q:\\' + 'x'.repeat(8189);
@@ -274,11 +346,18 @@ describe('FixedWindowsRunner directory and failure boundaries', () => {
 
   it.each(['toLinux', 'toWindows'] as const)('does not spawn after a %s failure', async (method) => {
     const paths = {
-      async toLinux() { return directory; },
-      async toWindows() { return converted; },
+      async toLinux() {
+        return directory;
+      },
+      async toWindows() {
+        return converted;
+      },
     };
-    paths[method] = () => { throw new Error('private conversion details'); };
-    const error: unknown = await new FixedWindowsRunner(paths).run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\folder' })
+    paths[method] = () => {
+      throw new Error('private conversion details');
+    };
+    const error: unknown = await new FixedWindowsRunner(paths)
+      .run({ kind: 'OPEN_PATH', windowsPath: 'Q:\\folder' })
       .catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'OPERATION_FAILED' });
     expect(String(error)).not.toContain('private conversion details');
@@ -292,7 +371,8 @@ describe('FixedWindowsRunner directory and failure boundaries', () => {
       (args[3] as (error: Error) => void)(raw);
       return {} as ChildProcess;
     });
-    const error: unknown = await runner().run({ kind: 'OPEN_URL', url: 'https://example.test/?private=value' })
+    const error: unknown = await runner()
+      .run({ kind: 'OPEN_URL', url: 'https://example.test/?private=value' })
       .catch((cause: unknown) => cause);
     expect(error).toMatchObject({ code: 'OPERATION_FAILED' });
     expect(execFile).toHaveBeenCalledTimes(1);
@@ -304,7 +384,11 @@ describe('FixedWindowsRunner directory and failure boundaries', () => {
   it('preserves a fixed error code across a service without retaining extra details', async () => {
     const raw = Object.assign(new WindowsIntegrationError('NOT_DIRECTORY'), { stderr: 'private details' });
     raw.message = 'private path';
-    const service = new WindowsOpenService({ async run() { throw raw; } });
+    const service = new WindowsOpenService({
+      async run() {
+        throw raw;
+      },
+    });
     const error: unknown = await service.openPath('Q:\\data.txt').catch((cause: unknown) => cause);
     expect(error).toMatchObject({
       name: 'WindowsIntegrationError',

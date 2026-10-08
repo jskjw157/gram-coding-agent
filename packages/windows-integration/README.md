@@ -1,7 +1,15 @@
-# Windows path conversion preparation — #99
+# Windows integration preparation — #99 and #100
 
-`@gram/windows-integration` implements the path-conversion portion of M4 Task 1.
-It is prepared against M2 commit `d886ce3b98520e4c594e8da73b14e0bed7dbac3e`.
+`@gram/windows-integration` implements path conversion from M4 Task 1 and the
+constrained Open/Reveal adapters from Task 2.
+See [Open/Reveal contracts, verification and integration gates](OPEN_REVEAL.md)
+for #100. These APIs open verified directories, select filesystem paths, and
+submit HTTP/HTTPS URLs; arbitrary file-association opening is excluded.
+
+## Path conversion — #99
+
+The path-conversion portion is prepared against M2 commit
+`d886ce3b98520e4c594e8da73b14e0bed7dbac3e`.
 **MCP `windows_path` is not registered. Keep #99 OPEN and this PR Draft/unmerged;
 do not merge into main or M2 before #77 is complete.**
 
