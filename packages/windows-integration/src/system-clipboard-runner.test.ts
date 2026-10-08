@@ -120,7 +120,8 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     const { args, env } = capture();
     expect(args.slice(0, 5)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand']);
     expect(args).toHaveLength(6);
-    expect(Buffer.from(args[5]!, 'base64').toString('utf16le')).not.toContain('Start-Process');
+    expect(args[5]).toMatch(/^[A-Za-z0-9+/]+={0,2}$/u);
+    expect(Buffer.from(args[5] ?? '', 'base64').toString('utf16le')).not.toContain('Start-Process');
     expect(args).not.toContain(text || 'unexpected-empty-argv');
     expect(env).not.toHaveProperty('GRAM_CLIPBOARD_PRIVATE_SENTINEL');
     expect(spawn).toHaveBeenCalledExactlyOnceWith('powershell.exe', args, {
@@ -186,6 +187,7 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
       configure('success', Buffer.from(bytes));
       await expect(service().readText()).rejects.toMatchObject({ name: 'WindowsClipboardError' });
       expect(events[0]?.result).toBe('FAILURE');
+      expect(spawn).toHaveBeenCalledTimes(1);
     },
   );
 

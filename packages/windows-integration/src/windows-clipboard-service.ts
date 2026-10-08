@@ -1,4 +1,5 @@
 import { decodeClipboardText, validateClipboardText } from './clipboard-text.js';
+import { FixedClipboardRunner } from './fixed-clipboard-runner.js';
 import { clipboardFailure, WindowsClipboardError } from './windows-clipboard-error.js';
 
 export interface ClipboardReadResult {
@@ -64,7 +65,7 @@ export class WindowsClipboardService {
       if (typeof redactor?.redact === 'function') this.#redact = redactor.redact.bind(redactor);
       const secrets = options.registeredSecrets;
       if (Array.isArray(secrets)) this.#secrets = Object.freeze([...secrets]);
-      const runner = options.runner;
+      const runner = options.runner ?? new FixedClipboardRunner();
       if (runner && typeof runner.readText === 'function' && typeof runner.writeText === 'function') {
         this.#runner = { readText: runner.readText.bind(runner), writeText: runner.writeText.bind(runner) };
       }
@@ -76,11 +77,14 @@ export class WindowsClipboardService {
 
   #safeOutput(text: string): string {
     try {
-      const output = validateClipboardText(this.#redact!(text));
-      if (this.#secrets!.some((secret) => output.includes(secret)) || hasCredentialShape(output)) {
+      const redact = this.#redact;
+      const secrets = this.#secrets;
+      if (!redact || !secrets) throw new Error();
+      const output = validateClipboardText(redact(text));
+      if (secrets.some((secret) => output.includes(secret)) || hasCredentialShape(output)) {
         throw new Error();
       }
-      if (this.#redact!(output) !== output) throw new Error();
+      if (redact(output) !== output) throw new Error();
       return output;
     } catch {
       throw new WindowsClipboardError('REDACTION_FAILED');
@@ -109,7 +113,8 @@ export class WindowsClipboardService {
 
   async #audit(event: ClipboardAuditEvent): Promise<void> {
     try {
-      await this.#record!(Object.freeze(event));
+      if (!this.#record) throw new Error();
+      await this.#record(Object.freeze(event));
     } catch {
       throw new WindowsClipboardError('AUDIT_FAILED');
     }

@@ -42,7 +42,8 @@ describe('WindowsClipboardService text boundary', () => {
     const f = fixture(text as string);
     expect(await f.service.readText()).toEqual({ text, redacted: false });
     await expect(f.service.writeText(text as string)).resolves.toBeUndefined();
-    expect(Buffer.from(f.writes[0]!).toString('utf8')).toBe(text);
+    expect(f.writes).toHaveLength(1);
+    expect(Buffer.from(f.writes[0] ?? []).toString('utf8')).toBe(text);
     expect(f.events).toEqual([
       { operation: 'READ', result: 'SUCCESS', characterCount: (text as string).length },
       { operation: 'WRITE', result: 'SUCCESS', characterCount: (text as string).length },
@@ -136,7 +137,7 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
   it('keeps written secrets as clipboard data while returning void and auditing no content', async () => {
     const f = fixture('', [privateValue]);
     await expect(f.service.writeText(privateValue)).resolves.toBeUndefined();
-    expect(Buffer.from(f.writes[0]!).toString()).toBe(privateValue);
+    expect(Buffer.from(f.writes[0] ?? []).toString()).toBe(privateValue);
     expect(f.events).toEqual([{ operation: 'WRITE', result: 'SUCCESS', characterCount: privateValue.length }]);
     expect(inspect(f.service)).not.toContain(privateValue);
   });
