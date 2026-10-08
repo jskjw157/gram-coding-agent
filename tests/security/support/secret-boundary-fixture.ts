@@ -71,22 +71,43 @@ export async function createSecretBoundaryFixture() {
   assert.ok(capEff, 'Linux capability metadata is required');
   assert.equal(BigInt('0x' + capEff) & 6n, 0n, 'Run without CAP_DAC_OVERRIDE / CAP_DAC_READ_SEARCH');
 
+  // Only the dedicated runner supplies this owned temporary parent. It also
+  // seeds fake parent-process credentials without reading any real host values.
+  const runRoot = process.env.GRAM_SECRET_BOUNDARY_RUN_ROOT;
+  assert.ok(runRoot, 'Use node tests/security/run-secret-boundary.mjs');
+  assert.equal(path.dirname(runRoot), '/tmp');
+  assert.ok(path.basename(runRoot).startsWith('gram-secret-boundary-run-'));
+  assert.equal(realpathSync(runRoot), runRoot);
+  assert.equal(lstatSync(runRoot).uid, process.getuid?.());
+  assert.equal(lstatSync(runRoot).mode & 0o777, 0o700);
+  for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'CONTROL_PLANE_API_KEY',
+    'GRAM_MCP_INTERNAL_SECRET', 'OPENAI_ADMIN_KEY']) {
+    assert.ok(Object.hasOwn(process.env, key), 'The clean runner must seed every parent canary');
+  }
   // Intentionally do not use homedir(), the host TMPDIR, or a real secret path.
-  const root = mkdtempSync('/tmp/gram-secret-boundary-');
+  const root = mkdtempSync(path.join(runRoot, 'case-'));
   const home = path.join(root, 'agent-home');
   const secretDirectory = path.join(home, '.gram-agent', 'secrets');
   const temp = path.join(root, 'tmp');
   const bin = path.join(root, 'bin');
-  for (const directory of [home, secretDirectory, temp, bin]) {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-  }
-  const db = openDatabase(path.join(root, 'state.db'));
+  let database: ReturnType<typeof openDatabase> | undefined;
+  let disposed = false;
   function dispose() {
-    db.close();
-    rmSync(root, { recursive: true, force: true });
+    if (disposed) return;
+    disposed = true;
+    try {
+      database?.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 
   try {
+    for (const directory of [home, secretDirectory, temp, bin]) {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+    }
+    const db = openDatabase(path.join(root, 'state.db'));
+    database = db;
     runMigrations(db);
     const task = new TaskRepository(db).create({
       goal: 'Synthetic credential boundary regression only',

@@ -3,8 +3,11 @@ import { defineConfig } from 'vitest/config';
 
 // PREPARATORY DRAFT for #119 at M2 d886ce3b98520e4c594e8da73b14e0bed7dbac3e.
 // #112 remains OPEN. This suite deliberately retains unmet security assertions.
-// From the repository root, on Linux with installed workspace dependencies:
-// pnpm exec vitest run --config tests/security/vitest.secret-boundary.config.ts
+// Entry point: node tests/security/run-secret-boundary.mjs
+// It supplies a clean parent environment and a 45-second process-group watchdog.
+// Requires installed workspace dependencies, Linux /proc, Node 24, genuine npm
+// next to process.execPath, no DAC-bypass capabilities, and an EACCES mode-0000
+// control. Bare Vitest is intentionally insufficient to initialize the fixture.
 // Root pnpm test / CI do NOT collect tests/security at this baseline.
 export default defineConfig({
   root: fileURLToPath(new URL('../../', import.meta.url)),

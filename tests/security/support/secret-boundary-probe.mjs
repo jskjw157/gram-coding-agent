@@ -34,8 +34,10 @@ if (stage === 'descendant-parent') {
 } else {
   const manifest = JSON.parse(readFileSync('./secret-boundary-manifest.json', 'utf8'));
   assert.equal(manifest.schema, 'gram-secret-boundary-fixture/v1');
-  assert.equal(path.dirname(manifest.root), '/tmp');
-  assert.ok(path.basename(manifest.root).startsWith('gram-secret-boundary-'));
+  const runRoot = path.dirname(manifest.root);
+  assert.equal(path.dirname(runRoot), '/tmp');
+  assert.ok(path.basename(runRoot).startsWith('gram-secret-boundary-run-'));
+  assert.ok(path.basename(manifest.root).startsWith('case-'));
   assert.equal(process.cwd(), manifest.worktree);
   assert.ok(manifest.worktree.startsWith(manifest.root + path.sep));
 
