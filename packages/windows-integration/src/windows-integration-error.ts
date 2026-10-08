@@ -18,8 +18,16 @@ export class WindowsIntegrationError extends Error {
 
 export function sanitizeWindowsFailure(error: unknown): WindowsIntegrationError {
   // Recreate even our own errors: injected implementations may attach private details.
-  if (error instanceof WindowsIntegrationError && Object.hasOwn(messages, error.code)) {
-    return new WindowsIntegrationError(error.code);
+  try {
+    if (error instanceof WindowsIntegrationError) {
+      const descriptor = Object.getOwnPropertyDescriptor(error, 'code');
+      const code: unknown = descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+      if (typeof code === 'string' && Object.hasOwn(messages, code)) {
+        return new WindowsIntegrationError(code as WindowsIntegrationErrorCode);
+      }
+    }
+  } catch {
+    // Inspection of an unusual injected error must not expose another exception.
   }
   return new WindowsIntegrationError('OPERATION_FAILED');
 }

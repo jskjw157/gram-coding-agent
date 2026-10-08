@@ -152,7 +152,9 @@ Public `WindowsIntegrationError` failures have fixed messages and one code:
 
 Raw errors, argv, paths, URL queries, stdout/stderr and causes are not attached.
 Services recreate recognized fixed errors instead of forwarding private fields
-attached by an injected dependency.
+attached by an injected dependency. Error inspection is guarded and accepts
+only one recognized own data-property code; accessors and reflective failures
+fall back to a fresh `OPERATION_FAILED`.
 
 ## Verification performed in preparation
 
@@ -163,8 +165,11 @@ and no shared root lockfile change:
 - Fixed-runner contract: **122 RED / 188 passing → 310 GREEN**.
 - Real Linux process fixtures: **11 additional passing cases**.
 - Normalized URL delimiter regressions: **3 RED / 321 passing → 324 GREEN**.
-- Package total: **324 tests / 6 files**, retaining all #99 tests. New cases:
-  85 Open-service, 27 Reveal-service, 123 fixed-runner, 11 process-fixture tests.
+- Independent review regressions: **5 RED / 324 passing → 329 GREEN**;
+  duplicate drive-root separators and unusual injected error objects reject.
+  The reflective-failure test now asserts its throwing trap was reached.
+- Package total: **329 tests / 6 files**, retaining all #99 tests. New cases:
+  89 Open-service, 27 Reveal-service, 124 fixed-runner, 11 process-fixture tests.
 
 The Linux executables named `explorer.exe` and `wslpath` in the new process
 tests are temporary, test-owned fixtures. They verify literal argv, directory

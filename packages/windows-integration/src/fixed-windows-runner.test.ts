@@ -174,7 +174,9 @@ describe('FixedWindowsRunner strict operation boundary', () => {
   });
 
   it('sanitizes a reflective failure on a malformed runtime object', async () => {
-    const ownKeys = vi.fn(() => { throw new Error('private object details'); });
+    const ownKeys = vi.fn(() => {
+      throw new Error('private object details');
+    });
     const operation = new Proxy({ kind: 'REVEAL_PATH', windowsPath: 'Q:\\file.txt' }, { ownKeys });
     const error: unknown = await runner()
       .run(operation as FixedWindowsOperation)

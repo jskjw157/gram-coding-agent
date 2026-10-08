@@ -170,14 +170,20 @@ describe('WindowsOpenService failures', () => {
         if (mode === 'throwing getter') throw new Error(privateDetails);
         return reads === 1 ? 'OPERATION_FAILED' : privateDetails;
       });
-      const reflection = vi.fn(() => { throw new Error(privateDetails); });
+      const reflection = vi.fn(() => {
+        throw new Error(privateDetails);
+      });
       let raw: unknown = original;
       if (mode === 'throwing prototype') {
         raw = new Proxy(original, { getPrototypeOf: reflection });
       } else {
         Object.defineProperty(original, 'code', { get: getter });
       }
-      const service = new WindowsOpenService({ async run() { throw raw; } });
+      const service = new WindowsOpenService({
+        async run() {
+          throw raw;
+        },
+      });
       const error: unknown = await service.openUrl('https://example.test/').catch((cause: unknown) => cause);
       expect(error).toMatchObject({
         name: 'WindowsIntegrationError',

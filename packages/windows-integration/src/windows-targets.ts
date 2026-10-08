@@ -21,7 +21,7 @@ export function validateWindowsPath(value: unknown): string {
   if (!driveRooted && !unc) throw new WindowsIntegrationError('INVALID_PATH');
   let remainder = value.slice(driveRooted ? 3 : 2);
   if (remainder.endsWith('\\')) remainder = remainder.slice(0, -1);
-  const segments = remainder === '' && driveRooted ? [] : remainder.split('\\');
+  const segments = driveRooted && value.length === 3 ? [] : remainder.split('\\');
   if (unc && segments.length < 2) throw new WindowsIntegrationError('INVALID_PATH');
 
   for (const segment of segments) {
