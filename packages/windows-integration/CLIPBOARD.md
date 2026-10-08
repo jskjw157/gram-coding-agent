@@ -81,8 +81,10 @@ combined UTF-8 secret values. Empty, malformed, NUL-containing, and
 replacement-marker-conflicting registrations fail closed. Such conflicts can
 make the existing redactor non-idempotent or amplify intermediate replacements.
 
-Every actual read is decoded and bounded, passed to the configured redactor, and
-independently checked before return:
+Every actual read is decoded and bounded. Sensitive ranges in the **original**
+text are checked before sequential replacement can hide their token shapes or
+split registered values. The existing redactor then performs all masking, and
+the result is independently checked before return:
 
 1. The output is a synchronous primitive string with valid Unicode and the byte
    limit above.
@@ -90,6 +92,16 @@ independently checked before return:
    registrations.
 3. No recognized credential shape remains.
 4. A second redaction pass is identical to the first.
+
+Original-range verification includes overlapping registered occurrences,
+token candidates, Bearer values and their selector, and complete PEM blocks
+(or the remaining text when a PEM header is unclosed). Fully containing
+registered values are allowed; uncovered partial/self-overlaps and partial
+token consumption fail closed. This prevents a successful response from
+returning most of a secret after a replacement broke its full-match pattern.
+The analysis accepts at most **8,192 original matches**, including overlaps
+and credential candidates; exceeding that bound fails safely. Conservative
+refusals can include otherwise maskable combinations.
 
 The existing #19 implementation masks exact registered values, Authorization
 Bearer values and its OpenAI/GitHub token families. This boundary also detects
@@ -127,7 +139,11 @@ through stdin; reads receive UTF-8 bytes through a private stdout pipe. These
 pipes are in-memory data channels, not captured application logs.
 
 - `shell: false`, all three stdio streams piped, `windowsHide: true`.
-- Fixed five-second Node child timeout with `SIGKILL`.
+- Fixed five-second Node child timeout with `SIGKILL`, plus a separate
+  five-second deadline covering the entire native process/pipe operation.
+- Deadline and terminal protocol failures settle once, discard output, destroy
+  owned pipes and attempt termination without waiting for `close`. A descendant
+  holding inherited stdout/stderr cannot keep the local call pending indefinitely.
 - Read stdout is retained only up to 1 MiB. Any write stdout fails.
 - Stderr is never retained or forwarded; any stderr bytes fail the operation.
 - Nonzero exit, signal, stream failure, missing executable, overflow or timeout
@@ -199,6 +215,8 @@ runners. The process suite starts real **Linux fixture programs** named
 `powershell.exe`, using only synthetic data. It verifies exact fixed argv, stdin
 fidelity, byte boundaries, split multibyte/token data, environment filtering,
 parent-output/audit secrecy, errors, overflow, early pipe closure and timeout.
+Inherited-pipe fixtures also cover a direct child that has exited, a killed
+child whose descendant retains pipes, and prompt protocol-error settlement.
 It does **not** execute the PowerShell constants or Microsoft clipboard APIs.
 The original #99/#100 tests are retained.
 

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { READ_CLIPBOARD_SCRIPT, WRITE_CLIPBOARD_SCRIPT } from './clipboard-scripts.js';
 import { decodeClipboardText, MAX_CLIPBOARD_BYTES } from './clipboard-text.js';
 import { WindowsClipboardError } from './windows-clipboard-error.js';
@@ -21,8 +21,34 @@ function clipboardEnvironment(): NodeJS.ProcessEnv {
 function executeClipboard(operation: 'READ' | 'WRITE', input: Uint8Array): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const failure = () => new WindowsClipboardError('CLIPBOARD_FAILED');
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let settled = false;
+    let length = 0;
+    const chunks: Buffer[] = [];
+    const settle = (success: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (success) {
+        resolve(Buffer.concat(chunks, length));
+      } else {
+        // Settlement must not depend on a later close event, successful signal,
+        // or descendants releasing inherited pipes.
+        try {
+          child?.kill('SIGKILL');
+        } catch {
+          /* Still reject locally. */
+        }
+        child?.stdin.destroy();
+        child?.stdout.destroy();
+        child?.stderr.destroy();
+        reject(failure());
+      }
+      chunks.length = 0;
+    };
+    const deadline = setTimeout(() => settle(false), 5000);
     try {
-      const child = spawn(
+      child = spawn(
         'powershell.exe',
         [
           '-NoLogo',
@@ -41,20 +67,13 @@ function executeClipboard(operation: 'READ' | 'WRITE', input: Uint8Array): Promi
           env: clipboardEnvironment(),
         },
       );
-      let failed = false;
-      let length = 0;
-      const chunks: Buffer[] = [];
-      const fail = () => {
-        failed = true;
-        chunks.length = 0;
-        child.kill('SIGKILL');
-      };
+      const fail = () => settle(false);
       child.on('error', fail);
       child.stdin.on('error', fail);
       child.stdout.on('error', fail);
       child.stderr.on('error', fail);
       child.stdout.on('data', (chunk: Buffer) => {
-        if (failed) return;
+        if (settled) return;
         length += chunk.length;
         if (operation === 'WRITE' || length > MAX_CLIPBOARD_BYTES) {
           fail();
@@ -65,15 +84,11 @@ function executeClipboard(operation: 'READ' | 'WRITE', input: Uint8Array): Promi
       // Stderr is never retained or forwarded. Any bytes invalidate the protocol.
       child.stderr.on('data', fail);
       child.on('close', (code, signal) => {
-        if (failed || code !== 0 || signal !== null) {
-          reject(failure());
-        } else {
-          resolve(Buffer.concat(chunks, length));
-        }
+        settle(code === 0 && signal === null);
       });
       child.stdin.end(input);
     } catch {
-      reject(failure());
+      settle(false);
     }
   });
 }

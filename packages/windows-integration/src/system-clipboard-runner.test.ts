@@ -95,7 +95,11 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     }
     const pidFile = join(directory, 'descendant.pid');
     if (existsSync(pidFile)) {
-      try { process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL'); } catch { /* Fixture already exited. */ }
+      try {
+        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
+      } catch {
+        /* Fixture already exited. */
+      }
     }
     vi.unstubAllEnvs();
     rmSync(directory, { recursive: true, force: true });
@@ -255,15 +259,19 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     'bounds the whole call when a descendant retains pipes (%s)',
     async (mode) => {
       configure(mode);
-      const outcome = service().readText().then(
-        () => 'unexpected-success',
-        (error: unknown) => (error as { code: string }).code,
-      );
+      const outcome = service()
+        .readText()
+        .then(
+          () => 'unexpected-success',
+          (error: unknown) => (error as { code: string }).code,
+        );
       let guard: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
           outcome,
-          new Promise((resolve) => { guard = setTimeout(() => resolve('unbounded-operation'), 6500); }),
+          new Promise((resolve) => {
+            guard = setTimeout(() => resolve('unbounded-operation'), 6500);
+          }),
         ]);
         expect(result).toBe('CLIPBOARD_FAILED');
         const child = vi.mocked(spawn).mock.results[0]?.value as ChildProcess;
@@ -281,13 +289,17 @@ describe.runIf(process.platform === 'linux')('clipboard transport through real L
     configure('stderr-with-pipes');
     let guard: ReturnType<typeof setTimeout> | undefined;
     try {
-      const outcome = service().readText().then(
-        () => 'unexpected-success',
-        (error: unknown) => (error as { code: string }).code,
-      );
+      const outcome = service()
+        .readText()
+        .then(
+          () => 'unexpected-success',
+          (error: unknown) => (error as { code: string }).code,
+        );
       const result = await Promise.race([
         outcome,
-        new Promise((resolve) => { guard = setTimeout(() => resolve('waited-for-open-pipes'), 2000); }),
+        new Promise((resolve) => {
+          guard = setTimeout(() => resolve('waited-for-open-pipes'), 2000);
+        }),
       ]);
       expect(result).toBe('CLIPBOARD_FAILED');
       expect(JSON.stringify(events)).not.toContain(secret);

@@ -1,4 +1,5 @@
 import { decodeClipboardText, validateClipboardText } from './clipboard-text.js';
+import { assertCompleteRedactionCoverage, hasCredentialShape } from './clipboard-redaction.js';
 import { FixedClipboardRunner } from './fixed-clipboard-runner.js';
 import { clipboardFailure, WindowsClipboardError } from './windows-clipboard-error.js';
 
@@ -30,25 +31,12 @@ export interface WindowsClipboardOptions {
 }
 
 const marker = '***REDACTED***';
-// The same families as #19, without its leading word-boundary blind spot.
-const tokenShape = /(?:sk-[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{10,}|gh[opusr]_[A-Za-z0-9]{10,})/u;
-// Fail closed on common additional credential shapes that #19 does not mask itself.
-const unsupportedCredential =
-  /(?:xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)/u;
 const tokenProbes = [
   'sk-' + 'clipboard_probe_0123456789',
   'github_pat_' + 'clipboard_probe_0123456789',
   ...['o', 'p', 'u', 's', 'r'].map((kind) => 'gh' + kind + '_' + 'clipboardprobe0123456789'),
   'Authorization: Bearer clipboard-probe-value',
 ].join('\n');
-
-function hasCredentialShape(text: string): boolean {
-  if (tokenShape.test(text) || unsupportedCredential.test(text)) return true;
-  for (const match of text.matchAll(/Authorization\s*:\s*Bearer\s+([^\s]+)/giu)) {
-    if (match[1] !== marker) return true;
-  }
-  return false;
-}
 
 export class WindowsClipboardService {
   #redact: ((text: string) => string) | undefined;
@@ -95,6 +83,7 @@ export class WindowsClipboardService {
       const redact = this.#redact;
       const secrets = this.#secrets;
       if (!redact || !secrets) throw new Error();
+      assertCompleteRedactionCoverage(text, secrets);
       const output = validateClipboardText(this.#applyRedactor(text));
       if (secrets.some((secret) => output.includes(secret)) || hasCredentialShape(output)) {
         throw new Error();

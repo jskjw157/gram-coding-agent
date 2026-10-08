@@ -429,28 +429,37 @@ describe('WindowsClipboardService complete source-span redaction', () => {
 
   it('allows a registered outer value to cover contained and otherwise crossing matches completely', async () => {
     const source = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    expect(await fixture(source, [source, 'abcdefghijklmnopqrst', 'tuvwxyz0123456789']).service.readText())
-      .toEqual({ text: marker, redacted: true });
+    expect(await fixture(source, [source, 'abcdefghijklmnopqrst', 'tuvwxyz0123456789']).service.readText()).toEqual({
+      text: marker,
+      redacted: true,
+    });
   });
 
   it('keeps unrelated registered values and tokens in one safely masked response', async () => {
     const token = 'sk-' + suffix;
-    expect(await fixture(embedded + ' then ' + token, [embedded]).service.readText())
-      .toEqual({ text: marker + ' then ' + marker, redacted: true });
+    expect(await fixture(embedded + ' then ' + token, [embedded]).service.readText()).toEqual({
+      text: marker + ' then ' + marker,
+      redacted: true,
+    });
   });
 
   it('allows complete registered tokens, including a complete Bearer value', async () => {
     const token = 'ghp_' + suffix;
     const source = token + '\nAuthorization: Bearer ' + embedded;
-    expect(await fixture(source, [token, embedded]).service.readText())
-      .toEqual({ text: marker + '\nAuthorization: Bearer ' + marker, redacted: true });
+    expect(await fixture(source, [token, embedded]).service.readText()).toEqual({
+      text: marker + '\nAuthorization: Bearer ' + marker,
+      redacted: true,
+    });
   });
 
-  it.each([true, false])('does not expose a PEM body when only its header is registered (closed=%s)', async (closed) => {
-    const header = '-----BEGIN ' + 'PRIVATE KEY-----';
-    const source = header + '\nsynthetic-private-body\n' + (closed ? '-----END PRIVATE KEY-----' : '');
-    await expect(fixture(source, [header]).service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
-  });
+  it.each([true, false])(
+    'does not expose a PEM body when only its header is registered (closed=%s)',
+    async (closed) => {
+      const header = '-----BEGIN ' + 'PRIVATE KEY-----';
+      const source = header + '\nsynthetic-private-body\n' + (closed ? '-----END PRIVATE KEY-----' : '');
+      await expect(fixture(source, [header]).service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+    },
+  );
 
   it('allows a completely registered PEM value to be removed by the existing redactor', async () => {
     const source = '-----BEGIN ' + 'PRIVATE KEY-----\nsynthetic-private-body\n-----END PRIVATE KEY-----';
@@ -459,13 +468,16 @@ describe('WindowsClipboardService complete source-span redaction', () => {
 
   it('fails closed when original sensitive-match analysis exceeds its bound', async () => {
     const secret = 'bounded-registration-fixture';
-    await expect(fixture(Array(8193).fill(secret).join('\n'), [secret]).service.readText())
-      .rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+    await expect(fixture(Array(8193).fill(secret).join('\n'), [secret]).service.readText()).rejects.toMatchObject({
+      code: 'REDACTION_FAILED',
+    });
   });
 
   it('accepts the sensitive-match analysis boundary without dropping any occurrence', async () => {
     const secret = 'bounded-registration-fixture';
-    expect(await fixture(Array(8192).fill(secret).join('\n'), [secret]).service.readText())
-      .toEqual({ text: Array(8192).fill(marker).join('\n'), redacted: true });
+    expect(await fixture(Array(8192).fill(secret).join('\n'), [secret]).service.readText()).toEqual({
+      text: Array(8192).fill(marker).join('\n'),
+      redacted: true,
+    });
   });
 });
