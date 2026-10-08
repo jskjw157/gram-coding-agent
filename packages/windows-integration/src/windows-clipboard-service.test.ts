@@ -223,6 +223,41 @@ describe('WindowsClipboardService reuses the existing SecretRedactor', () => {
     const f = fixture('q'.repeat(90000), ['q']);
     await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
   });
+
+  it.each(['configuration', 'response'])(
+    'contains rejected asynchronous redactor promises during %s validation',
+    async (phase) => {
+      const unhandled: unknown[] = [];
+      const observe = (reason: unknown) => { unhandled.push(reason); };
+      const real = new SecretRedactor();
+      const f = fixture('fixture response', [], {
+        redactor: { redact: (text) => {
+          if (phase === 'configuration' || text === 'fixture response') {
+            return Promise.reject(new Error(privateValue)) as unknown as string;
+          }
+          return real.redact(text);
+        } },
+      });
+      process.on('unhandledRejection', observe);
+      try {
+        await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', observe);
+      }
+    },
+  );
+
+  it.each([
+    Array.from({ length: 257 }, (_, i) => 'fixture-registration-' + i),
+    ['q'.repeat(65537)],
+  ])('refuses unbounded registration configuration before reading', async (...secrets) => {
+    const f = fixture('', secrets);
+    await expect(f.service.readText()).rejects.toMatchObject({ code: 'REDACTION_FAILED' });
+    expect(f.runner.readText).not.toHaveBeenCalled();
+  });
 });
 
 describe('WindowsClipboardService failure and audit isolation', () => {
