@@ -33,7 +33,8 @@ const marker = '***REDACTED***';
 // The same families as #19, without its leading word-boundary blind spot.
 const tokenShape = /(?:sk-[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{10,}|gh[opusr]_[A-Za-z0-9]{10,})/u;
 // Fail closed on common additional credential shapes that #19 does not mask itself.
-const unsupportedCredential = /(?:xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)/u;
+const unsupportedCredential =
+  /(?:xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)/u;
 const tokenProbes = [
   'sk-' + 'clipboard_probe_0123456789',
   'github_pat_' + 'clipboard_probe_0123456789',
@@ -75,16 +76,30 @@ export class WindowsClipboardService {
     }
   }
 
+  #applyRedactor(text: string): string {
+    if (!this.#redact) throw new WindowsClipboardError('REDACTION_FAILED');
+    const output: unknown = this.#redact(text);
+    if (typeof output === 'string') return output;
+    // Reject async implementations, but consume native Promise rejections so a
+    // configuration error cannot become an unhandled diagnostic containing text.
+    try {
+      void Promise.prototype.then.call(output, undefined, () => {});
+    } catch {
+      // Non-Promise values also fail closed; do not inspect their properties.
+    }
+    throw new WindowsClipboardError('REDACTION_FAILED');
+  }
+
   #safeOutput(text: string): string {
     try {
       const redact = this.#redact;
       const secrets = this.#secrets;
       if (!redact || !secrets) throw new Error();
-      const output = validateClipboardText(redact(text));
+      const output = validateClipboardText(this.#applyRedactor(text));
       if (secrets.some((secret) => output.includes(secret)) || hasCredentialShape(output)) {
         throw new Error();
       }
-      if (redact(output) !== output) throw new Error();
+      if (this.#applyRedactor(output) !== output) throw new Error();
       return output;
     } catch {
       throw new WindowsClipboardError('REDACTION_FAILED');
@@ -103,7 +118,7 @@ export class WindowsClipboardService {
         registrationBytes += Buffer.byteLength(secret, 'utf8');
         if (registrationBytes > 65536) throw new Error();
       }
-      if (this.#redact(marker) !== marker) throw new Error();
+      if (this.#applyRedactor(marker) !== marker) throw new Error();
       this.#safeOutput(tokenProbes);
       for (const secret of this.#secrets) this.#safeOutput(secret);
     } catch {
