@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inspect } from 'node:util';
+import { inspect, isDeepStrictEqual } from 'node:util';
 import { expect, vi } from 'vitest';
 import { SecretRedactor } from '@gram/secrets';
 import {
@@ -139,14 +139,42 @@ export async function safeFailure(promise: Promise<unknown>, code: string, canar
   expect(outcome.ok).toBe(false);
   if (outcome.ok) throw new Error('Expected the public boundary to reject.');
   const error = outcome.error;
-  expect(error).toBeInstanceOf(Error);
-  expect(error).toHaveProperty('code', code);
-  for (const key of ['cause', 'stdout', 'stderr', 'args', 'command', 'script', 'env']) {
-    expect(error).not.toHaveProperty(key);
+  let inspected = false;
+  let isError = false;
+  let codeMatches = false;
+  let fieldsAllowed = false;
+  let diagnostic = '';
+  try {
+    isError = error instanceof Error;
+    if (isError) {
+      const descriptors = Object.getOwnPropertyDescriptors(error);
+      codeMatches = descriptors.code?.value === code;
+      fieldsAllowed = Reflect.ownKeys(error as object).every(
+        (key) => typeof key === 'string' && ['stack', 'message', 'name', 'code'].includes(key),
+      );
+      // Inspect descriptors, not getters, toJSON, or custom inspection hooks.
+      diagnostic = inspect(descriptors, { getters: false, customInspect: false, depth: 5 });
+    }
+    inspected = true;
+  } catch {
+    // An adversarial error must fail the test without becoming its diagnostic.
   }
-  const diagnostic = inspect(error, { getters: false, depth: 5 }) + JSON.stringify(error);
+  expect(inspected, 'Public failure could not be safely inspected.').toBe(true);
+  expect(isError, 'Public failure must be an Error.').toBe(true);
+  expect(codeMatches, 'Expected public error code: ' + code).toBe(true);
+  expect(fieldsAllowed, 'Public failure retained an unexpected diagnostic field.').toBe(true);
   for (const canary of [privateCanary, ...canaries]) expect(diagnostic.includes(canary)).toBe(false);
   return error;
+}
+
+export function expectPrivateEqual(actual: unknown, expected: unknown): void {
+  let equal = false;
+  try {
+    equal = isDeepStrictEqual(actual, expected);
+  } catch {
+    // Do not print raw values, including hostile inspection errors, on a regression.
+  }
+  expect(equal, 'Private boundary result differs from the expected safe result.').toBe(true);
 }
 
 export async function observeParentSinks<T>(action: () => Promise<T>): Promise<{ value: T; output: string }> {

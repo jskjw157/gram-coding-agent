@@ -21,6 +21,7 @@ import {
 import {
   actualChildren,
   createWindowsFixture,
+  expectPrivateEqual,
   marker,
   observeParentSinks,
   privateCanary,
@@ -141,7 +142,7 @@ describe('Windows public-boundary historical security regressions', () => {
     fixture.configure('powershell.exe', 'bytes', Buffer.from(text));
     await safeFailure(fixture.clipboard(secrets).readText(), 'REDACTION_FAILED', [text]);
     expect(fixture.calls()).toHaveLength(nativeCalls);
-    expect(fixture.events).toEqual([
+    expectPrivateEqual(fixture.events, [
       { operation: 'READ', result: 'FAILURE', characterCount: nativeCalls ? text.length : null },
     ]);
   });
@@ -149,7 +150,7 @@ describe('Windows public-boundary historical security regressions', () => {
   it('still masks a complete registered value containing overlapping secrets', async () => {
     const text = 'abcdefghijklmnopqrstuvwxyz0123456789';
     fixture.configure('powershell.exe', 'bytes', Buffer.from(text));
-    expect(await fixture.clipboard([text, 'abcdefghijklmnopqrst', 'tuvwxyz0123456789']).readText()).toEqual({
+    expectPrivateEqual(await fixture.clipboard([text, 'abcdefghijklmnopqrst', 'tuvwxyz0123456789']).readText(), {
       text: marker,
       redacted: true,
     });
@@ -540,12 +541,12 @@ describe('WindowsClipboardService text data and fixed transport', () => {
       fixture.configure('powershell.exe', 'bytes', Buffer.from(text));
       return clipboard.readText();
     });
-    expect(observed.value).toEqual({ text, redacted: false });
+    expectPrivateEqual(observed.value, { text, redacted: false });
     expect(Object.isFrozen(observed.value)).toBe(true);
-    expect(observed.output).toBe('');
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     const args = expectClipboardBoundary(2);
     expect(args[0]).not.toEqual(args[1]); // fixed write vs. fixed read, never a request-chosen script
-    expect(fixture.events).toEqual([
+    expectPrivateEqual(fixture.events, [
       { operation: 'WRITE', result: 'SUCCESS', characterCount: text.length },
       { operation: 'READ', result: 'SUCCESS', characterCount: text.length },
     ]);
@@ -575,7 +576,7 @@ describe('WindowsClipboardService text data and fixed transport', () => {
   it('reassembles UTF-8 across actual one-byte stdout chunks', async () => {
     const text = '\ufeff한글 😀 \ufffd\r\n';
     fixture.configure('powershell.exe', 'chunked', Buffer.from(text));
-    expect(await fixture.clipboard().readText()).toEqual({ text, redacted: false });
+    expectPrivateEqual(await fixture.clipboard().readText(), { text, redacted: false });
     expectClipboardBoundary(1);
   });
 
@@ -594,7 +595,7 @@ describe('WindowsClipboardService text data and fixed transport', () => {
     expect(result.text === text).toBe(true);
     expect(result.redacted).toBe(false);
     expectClipboardBoundary(2);
-    expect(fixture.events).toEqual([
+    expectPrivateEqual(fixture.events, [
       { operation: 'WRITE', result: 'SUCCESS', characterCount: text.length },
       { operation: 'READ', result: 'SUCCESS', characterCount: text.length },
     ]);
@@ -608,13 +609,13 @@ describe('WindowsClipboardService text data and fixed transport', () => {
     expect(Buffer.byteLength(text)).toBe(1048577);
     await safeFailure(fixture.clipboard().writeText(text), 'PAYLOAD_TOO_LARGE');
     expectNoExecution();
-    expect(fixture.events).toEqual([{ operation: 'WRITE', result: 'FAILURE', characterCount: null }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'WRITE', result: 'FAILURE', characterCount: null }]);
   });
 
   it('rejects one byte above the native read limit without exposing the partial stdout', async () => {
     fixture.configure('powershell.exe', 'stdout-overflow');
     await safeFailure(fixture.clipboard().readText(), 'CLIPBOARD_FAILED');
-    expect(fixture.events).toEqual([{ operation: 'READ', result: 'FAILURE', characterCount: null }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'READ', result: 'FAILURE', characterCount: null }]);
     expectClipboardBoundary(1);
   });
 
@@ -630,7 +631,7 @@ describe('WindowsClipboardService text data and fixed transport', () => {
   ])('rejects $label input before native write', async ({ value }) => {
     await safeFailure(fixture.clipboard().writeText(value as string), 'INVALID_TEXT');
     expectNoExecution();
-    expect(fixture.events).toEqual([{ operation: 'WRITE', result: 'FAILURE', characterCount: null }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'WRITE', result: 'FAILURE', characterCount: null }]);
   });
 
   it.each([
@@ -643,7 +644,7 @@ describe('WindowsClipboardService text data and fixed transport', () => {
   ])('fails closed on $label from a real process', async ({ bytes }) => {
     fixture.configure('powershell.exe', 'bytes', Buffer.from(bytes));
     await safeFailure(fixture.clipboard().readText(), 'CLIPBOARD_FAILED');
-    expect(fixture.events).toEqual([{ operation: 'READ', result: 'FAILURE', characterCount: null }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'READ', result: 'FAILURE', characterCount: null }]);
   });
 });
 
@@ -672,9 +673,9 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
   ])('masks $label before the public response and keeps sinks metadata-only', async ({ text, secrets, expected }) => {
     fixture.configure('powershell.exe', 'bytes', Buffer.from(text));
     const observed = await observeParentSinks(() => fixture.clipboard(secrets).readText());
-    expect(observed.value).toEqual({ text: expected, redacted: true });
-    expect(observed.output).toBe('');
-    expect(fixture.events).toEqual([{ operation: 'READ', result: 'SUCCESS', characterCount: text.length }]);
+    expectPrivateEqual(observed.value, { text: expected, redacted: true });
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
+    expectPrivateEqual(fixture.events, [{ operation: 'READ', result: 'SUCCESS', characterCount: text.length }]);
     expect(JSON.stringify(fixture.events).includes(text)).toBe(false);
     for (const secret of secrets) expect(JSON.stringify(observed).includes(secret)).toBe(false);
   });
@@ -693,9 +694,9 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
       await safeFailure(fixture.clipboard().readText(), 'REDACTION_FAILED', [text]);
       return fixture.clipboard([text]).readText();
     });
-    expect(observed.value).toEqual({ text: marker, redacted: true });
-    expect(observed.output).toBe('');
-    expect(fixture.events).toEqual([
+    expectPrivateEqual(observed.value, { text: marker, redacted: true });
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
+    expectPrivateEqual(fixture.events, [
       { operation: 'READ', result: 'FAILURE', characterCount: text.length },
       { operation: 'READ', result: 'SUCCESS', characterCount: text.length },
     ]);
@@ -729,9 +730,9 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
       await safeFailure(service.writeText(privateCanary), 'REDACTION_FAILED');
       await new Promise<void>((resolve) => setImmediate(resolve)); // rejected native Promises must be consumed
     });
-    expect(observed.output).toBe('');
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     expectNoExecution();
-    expect(fixture.events).toEqual([
+    expectPrivateEqual(fixture.events, [
       { operation: 'READ', result: 'FAILURE', characterCount: null },
       { operation: 'WRITE', result: 'FAILURE', characterCount: privateCanary.length },
     ]);
@@ -752,7 +753,7 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
     fixture.configure('powershell.exe', 'bytes', Buffer.from(input));
     await safeFailure(service.readText(), 'REDACTION_FAILED', [input]);
     expect(fixture.calls()).toHaveLength(1);
-    expect(fixture.events).toEqual([{ operation: 'READ', result: 'FAILURE', characterCount: input.length }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'READ', result: 'FAILURE', characterCount: input.length }]);
   });
 
   it('rejects output that is not stable under a second redaction pass', async () => {
@@ -777,10 +778,10 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
     const text = privateCanary + '\nAuthorization: Bearer fixture-token-that-must-not-be-logged';
     const service = fixture.clipboard([privateCanary]);
     const observed = await observeParentSinks(() => service.writeText(text));
-    expect(observed.value).toBeUndefined();
-    expect(observed.output).toBe('');
+    expect(observed.value === undefined, 'Void operation returned a value.').toBe(true);
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     expect(Buffer.compare(fixture.stdin(), Buffer.from(text))).toBe(0);
-    expect(fixture.events).toEqual([{ operation: 'WRITE', result: 'SUCCESS', characterCount: text.length }]);
+    expectPrivateEqual(fixture.events, [{ operation: 'WRITE', result: 'SUCCESS', characterCount: text.length }]);
     expect(JSON.stringify({ service, events: fixture.events }).includes(privateCanary)).toBe(false);
   });
 
@@ -798,8 +799,8 @@ describe('Existing SecretRedactor reuse, audit and non-disclosure', () => {
     const observed = await observeParentSinks(() =>
       safeFailure(operation === 'READ' ? service.readText() : service.writeText(privateCanary), 'AUDIT_FAILED'),
     );
-    expect(observed.output).toBe('');
-    expect(events).toEqual([{ operation, result: 'SUCCESS', characterCount: privateCanary.length }]);
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
+    expectPrivateEqual(events, [{ operation, result: 'SUCCESS', characterCount: privateCanary.length }]);
     expectClipboardBoundary(1); // a completed write is not rolled back or retried after audit failure
   });
 
@@ -861,10 +862,36 @@ describe('Scalar service methods do not expose execution options', () => {
 
   it('does not treat extra clipboard arguments as executable, script or environment selection', async () => {
     const clipboard = fixture.clipboard();
-    expect(await Reflect.apply(clipboard.readText, clipboard, [injected])).toEqual({ text: '', redacted: false });
-    await Reflect.apply(clipboard.writeText, clipboard, ['ordinary data & $(whoami)', injected]);
-    expect(fixture.stdin().toString()).toBe('ordinary data & $(whoami)');
-    expectClipboardBoundary(2);
+    const text = 'ordinary data & $(whoami)';
+    expectPrivateEqual(await clipboard.readText(), { text: '', redacted: false });
+    await clipboard.writeText(text);
+    const variants = [
+      injected,
+      {
+        ...injected,
+        executable: 'pwsh.exe',
+        command: 'Get-Process',
+        args: ['-Command', 'Get-Process'],
+        script: 'Write-Output second-injected-script',
+        env: { TEMP: '/private/second-temp', WSLENV: 'GRAM_WINDOWS_ESCAPE_CANARY' },
+      },
+    ];
+    for (const options of variants) {
+      expectPrivateEqual(await Reflect.apply(clipboard.readText, clipboard, [options]), { text: '', redacted: false });
+      await Reflect.apply(clipboard.writeText, clipboard, [text, options]);
+      expect(Buffer.compare(fixture.stdin(), Buffer.from(text))).toBe(0);
+    }
+    const argv = expectClipboardBoundary(6);
+    expect(argv[0]).not.toEqual(argv[1]);
+    for (const index of [2, 4]) {
+      // Compare independently against the actual clean READ and WRITE processes.
+      // A base64-shaped attacker script is insufficient: the full argv must match.
+      expect(argv[index]).toEqual(argv[0]);
+      expect(argv[index + 1]).toEqual(argv[1]);
+      const calls = vi.mocked(spawn).mock.calls;
+      expect(calls[index]?.[2]).toEqual(calls[0]?.[2]);
+      expect(calls[index + 1]?.[2]).toEqual(calls[1]?.[2]);
+    }
   });
 
   it('rejects option objects in place of each required scalar target', async () => {
@@ -942,7 +969,7 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     async ({ role, mode, code, calls, run }) => {
       fixture.configure(role, mode);
       const observed = await observeParentSinks(() => safeFailure(run(), code));
-      expect(observed.output).toBe('');
+      expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
       expect(fixture.calls()).toHaveLength(calls);
       expect(JSON.stringify(fixture.events).includes(privateCanary)).toBe(false);
     },
@@ -954,7 +981,7 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     const observed = await observeParentSinks(() =>
       safeFailure(operation === 'READ' ? clipboard.readText() : clipboard.writeText(privateCanary), 'CLIPBOARD_FAILED'),
     );
-    expect(observed.output).toBe('');
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     expect(fixture.calls()).toHaveLength(1);
   });
 
@@ -963,7 +990,7 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     const observed = await observeParentSinks(() =>
       safeFailure(fixture.clipboard().writeText('ordinary input'), 'CLIPBOARD_FAILED'),
     );
-    expect(observed.output).toBe('');
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     expect(fixture.calls()).toHaveLength(1);
   });
 
@@ -987,7 +1014,7 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     async ({ role, code, run }) => {
       rmSync(join(fixture.root, role));
       const observed = await observeParentSinks(() => safeFailure(run(), code));
-      expect(observed.output).toBe('');
+      expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
       expect(fixture.calls()).toEqual([]);
     },
   );
@@ -997,8 +1024,8 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     const observed = await observeParentSinks(() =>
       new WindowsOpenService().openUrl('https://example.test/' + privateCanary),
     );
-    expect(observed.value).toBeUndefined();
-    expect(observed.output).toBe('');
+    expect(observed.value === undefined, 'Void operation returned a value.').toBe(true);
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
     expect(fixture.calls()).toHaveLength(1);
   });
 
@@ -1006,8 +1033,8 @@ describe('Real Linux child-process failures remain bounded and private', () => {
     const path = 'R:\\' + privateCanary;
     fixture.configure('wslpath', 'success', undefined, { windowsPath: path });
     const observed = await observeParentSinks(() => new WindowsPathService().toWindows('/mnt/' + privateCanary));
-    expect(observed.value).toBe(path); // the requested data result is distinct from diagnostic disclosure
-    expect(observed.output).toBe('');
+    expect(observed.value === path).toBe(true); // the requested data result is distinct from diagnostic disclosure
+    expect(observed.output.length === 0, 'Parent output must remain empty.').toBe(true);
   });
 });
 
