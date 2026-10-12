@@ -19,10 +19,13 @@ execFileSync('git', ['-C', root, 'diff', '--exit-code', revision, '--', 'package
   stdio: 'pipe',
 });
 
-export default mergeConfig(current, defineConfig({
-  resolve: {
-    alias: {
-      '@gram/windows-integration': join(root, 'packages/windows-integration/src/index.ts'),
+export default mergeConfig(
+  current,
+  defineConfig({
+    resolve: {
+      alias: {
+        '@gram/windows-integration': join(root, 'packages/windows-integration/src/index.ts'),
+      },
     },
-  },
-}));
+  }),
+);

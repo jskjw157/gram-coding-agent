@@ -16,16 +16,20 @@ void (async () => {
     }
     const role = basename(script);
     const cfg = JSON.parse(readFileSync(join(root, role + '.json'), 'utf8'));
-    appendFileSync(join(root, 'calls.ndjson'), JSON.stringify({
-      role,
-      pid: process.pid,
-      args: process.argv.slice(2),
-      // Inspect only synthetic variables, never dump the host environment.
-      environment: {
-        GRAM_WINDOWS_ESCAPE_CANARY: process.env.GRAM_WINDOWS_ESCAPE_CANARY,
-        WSLENV: process.env.WSLENV,
-      },
-    }) + '\n');
+    appendFileSync(
+      join(root, 'calls.ndjson'),
+      JSON.stringify({
+        role,
+        pid: process.pid,
+        args: process.argv.slice(2),
+        // Inspect only synthetic variables, never dump the host environment.
+        environment: {
+          GRAM_WINDOWS_ESCAPE_CANARY: process.env.GRAM_WINDOWS_ESCAPE_CANARY,
+          WSLENV: process.env.WSLENV,
+          node: process.env.node,
+        },
+      }) + '\n',
+    );
     if (cfg.mode === 'exited-with-pipes' || cfg.mode === 'stderr-with-pipes') {
       const child = spawn(process.execPath, [script, '--windows-escape-hold-pipes'], {
         shell: false,
@@ -78,7 +82,7 @@ void (async () => {
     if (cfg.mode === 'chunked') {
       for (const byte of bytes) {
         process.stdout.write(Buffer.from([byte]));
-        await new Promise(resolve => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
     } else {
       process.stdout.write(bytes);

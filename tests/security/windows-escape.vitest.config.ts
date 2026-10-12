@@ -7,7 +7,9 @@ export default defineConfig({
   root: fileURLToPath(new URL('../..', import.meta.url)),
   resolve: {
     alias: {
-      '@gram/windows-integration': fileURLToPath(new URL('../../packages/windows-integration/src/index.ts', import.meta.url)),
+      '@gram/windows-integration': fileURLToPath(
+        new URL('../../packages/windows-integration/src/index.ts', import.meta.url),
+      ),
       '@gram/policy': fileURLToPath(new URL('../../packages/policy/src/index.ts', import.meta.url)),
       '@gram/secrets': fileURLToPath(new URL('../../packages/secrets/src/index.ts', import.meta.url)),
       '@gram/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
