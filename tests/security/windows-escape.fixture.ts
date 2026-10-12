@@ -84,6 +84,7 @@ export function createWindowsFixture() {
   vi.stubEnv('PATH', root);
   vi.stubEnv('GRAM_WINDOWS_ESCAPE_CANARY', privateCanary);
   vi.stubEnv('WSLENV', 'GRAM_WINDOWS_ESCAPE_CANARY');
+  vi.stubEnv('node', 'synthetic-unset-variable');
 
   return {
     root,
