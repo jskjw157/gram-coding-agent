@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rootDir": "../..",
+    "noEmit": true,
+    "paths": {
+      "@gram/windows-integration": ["../../packages/windows-integration/src/index.ts"],
+      "@gram/policy": ["../../packages/policy/src/index.ts"],
+      "@gram/secrets": ["../../packages/secrets/src/index.ts"],
+      "@gram/domain": ["../../packages/domain/src/index.ts"]
+    }
+  },
+  "include": ["windows-escape*.ts"]
+}
