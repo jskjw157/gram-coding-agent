@@ -191,6 +191,33 @@ This reproduces and fixes the clock race independently. Attribution of the
 earlier hosted stop/restart refusals still requires the native diagnostic and
 final-SHA acceptance; that causal link is not asserted by the unit test.
 
+## Running-control telemetry publication gaps
+
+Hosted `1060fff` passed restart, then stop refused `PARTIAL_INSTALL` while the
+owned Core remained listening. Failure-only diagnostics showed matching held
+execution/registration/config/release, healthy status and native ownership.
+Actual recent publication intervals included 30,425 ms and 30,667 ms, exceeding
+the unchanged 30,000 ms status TTL. Thus brief stale windows exist; the log does
+not identify the exact inner gate that refused this stop.
+
+The running-control health gate previously made one complete observation per
+role. It now repeats only those read-only observations within the ORIGINAL
+shared 60-second budget. Every successful sample still passes the same full
+sealed review, native ownership, exact identity and fresh-status checks. Core
+and tunnel share one absolute deadline and the original single hard timer;
+clock rollback cannot extend the budget. Non-abort exceptions remain failures.
+Service calls, mutations, TTL and registry/config validation are unchanged.
+
+The one-shot gate was extracted unchanged and reproduced a 30.7-second
+publication gap: RED 1 failed / 5 passed. The correction and an independent
+review finding about wall-clock rollback are covered by 9 regression cases
+plus existing service/control tests: 19 passed. Persistent stale/future/foreign
+status, hung/late observers, shared role budget and clock rollback all refuse.
+Root suite: 126 files / 1,432 tests passed; lint, typecheck, build and 20
+packaging tests passed. Independent re-review confirmed the hard-timer fix and
+found no blocking issue. Hosted causal attribution and final-SHA acceptance
+remain separate observations.
+
 ## Review and remaining acceptance
 
 An independent read-only reviewer examined the exact staged merge, package and
