@@ -24,7 +24,7 @@ import {
 import { createInstalledRuntimeReviewSource } from './a-system-sources.js';
 import type { RecordFiles } from './telemetry-store.js';
 import type { RoleObservation } from './cli-contracts.js';
-import type { ServiceStatus, StatusIdentity } from './telemetry.js';
+import { currentStatus, type ServiceStatus, type StatusIdentity } from './telemetry.js';
 
 export interface InstalledHealthObserver {
   observe(role: Role, signal: AbortSignal): Promise<RoleObservation>;
@@ -180,6 +180,10 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
       if (afterRegistrationBytes === null
         || !afterRegistrationBytes.equals(registrationBytes)
         || signal.aborted) return unknown();
+
+      // The final ownership/record guards are asynchronous. Evidence must still
+      // be fresh when they complete, including after a wall-clock rollback.
+      if (currentStatus(status, currentIdentity, Date.now()) === null) return unknown();
 
       return {
         status: structuredClone(status),
