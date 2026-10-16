@@ -53,7 +53,7 @@ Verification completed on the integrated tree plus the IPv6 fix below:
 | `pnpm test --maxWorkers=2` | PASS: 125 files / 1,418 tests, no skips |
 | Focused TCP parser, command and native probe tests | PASS: 3 files / 48 tests |
 | Explicit `review/lanes/rollback-regressions.test.ts` collection | PASS: 3 tests |
-| `node --test platform/macos/*.test.mjs` | PASS: 16 tests, including 2 assembly regressions |
+| `node --test platform/macos/*.test.mjs` | PASS: 20 tests, including 2 assembly regressions and 4 CI synchronization tests |
 | Compiled MAC-01 CLI on native Mac and unsupported arguments | PASS: UNKNOWN capabilities, exit 0; invalid argument exit 64 |
 | Compiled lifecycle CLI with synthetic healthy evidence | PASS: `LOCAL_CORE_HEALTHY`, business readiness still UNAVAILABLE |
 | Generated plist structure and negative cases | PASS: 2 roles / 12 altered cases refused |
@@ -123,6 +123,29 @@ CI are recorded on the Draft PR after completion.
 Independent review identified the ambient-setting override. The fixture then
 reproduced one failure with those settings before explicit overrides were added;
 the complete 16-test packaging suite passed afterward.
+
+## Hosted stopped-fixture synchronization
+
+The first integration head (`f250107`) passed root, platform Mac/Linux and
+lifecycle Linux CI. Hosted Mac lifecycle reached a successful apply and parked
+the owned service, then its immediate post-apply preview refused PORT_IN_USE.
+Failure-only diagnostics showed both jobs absent, Core disabled, and only a
+Core-port TIME_WAIT entry. This is residual TCP state from the fixture's
+authenticated health connection, not evidence that an owned service is running.
+
+The product's conservative occupancy policy is unchanged. The CI fixture now
+observes both ports as free before each stopped checkpoint's single preview;
+it never retries preview or interprets port idleness as ownership/health.
+Observation is limited to 90 seconds plus the in-flight native command's existing
+two-second bound. UNKNOWN, persistent occupancy and late success all fail.
+Four synthetic-clock tests cover recovery and these refusal paths. The job
+budget is 20 minutes to allow bounded residual-state drainage. The diagnostic
+netstat command also uses full IPv6 output. No local launchd action was used to
+reproduce or validate this CI-only synchronization.
+
+Independent review found no blocking issue in this fixture change. Its actual
+hosted acceptance remains separate from the local synthetic tests and is
+reported for the final remote SHA on the Draft PR.
 
 ## Review and remaining acceptance
 

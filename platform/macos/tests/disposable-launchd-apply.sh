@@ -16,6 +16,7 @@ if [[ $# -ne 3 ]]; then
 fi
 
 SOURCE_RELEASE="$1"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && /bin/pwd -P)"
 ACL_HELPER="$2"
 EXPECTED_DIGEST="$3"
 VENDOR_ROOT='/Library/Application Support/HAAR'
@@ -139,7 +140,7 @@ timer = setTimeout(() => finish('timeout'), 10_000);
 
 function netstat() {
   return new Promise(resolve => {
-    execFile('/usr/sbin/netstat', ['-an', '-p', 'tcp'], {
+    execFile('/usr/sbin/netstat', ['-anl', '-p', 'tcp'], {
       encoding: 'utf8', timeout: 2_000, killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024, shell: false,
       env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C', LANG: 'C' },
@@ -259,6 +260,20 @@ run_preview() {
     post-uninstall) echo 'NATIVE_PHASE=post-uninstall-preview' ;;
     *) return 64 ;;
   esac
+  if [[ "$phase" != initial ]]; then
+    # B1 parks the owned job before these checkpoints. Its authenticated health
+    # connection may leave TIME_WAIT. Observe complete idleness before the one
+    # preview attempt; do not weaken production occupancy checks or retry preview.
+    "$NODE" --input-type=module - "$SCRIPT_DIR/wait-for-idle-ports.mjs" <<'NATIVE_IDLE_PORTS'
+import { pathToFileURL } from 'node:url';
+const { waitForIdlePorts } = await import(pathToFileURL(process.argv[2]).href);
+const source = new URL('../packages/macos-lifecycle/dist/adapters/macos-service-probes.js',
+  pathToFileURL(process.execPath));
+const { inspectMacPorts } = await import(source.href);
+await waitForIdlePorts(inspectMacPorts);
+console.log('NATIVE_FIXTURE_PORTS_IDLE');
+NATIVE_IDLE_PORTS
+  fi
   set +e
   CAPTURED_PREVIEW="$("$NODE" "$OPERATOR" preview --json)"
   local preview_exit=$?
