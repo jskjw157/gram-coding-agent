@@ -162,7 +162,7 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
       const status: ServiceStatus | null = await stores.telemetry.readStatus(
         role,
         currentIdentity,
-        Date.now(),
+        Date.now,
       );
       if (status === null) return unknown();
 

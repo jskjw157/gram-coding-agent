@@ -117,7 +117,7 @@ import { writeSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const phases = { initial: 'INITIAL', 'post-apply': 'POST_APPLY',
-  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL', restart: 'RESTART' };
+  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL', restart: 'RESTART', stop: 'STOP' };
 const failures = { preview: 'PREVIEW', assertion: 'ASSERTION' };
 const phase = Object.hasOwn(phases, process.argv[2]) ? phases[process.argv[2]] : null;
 const failure = Object.hasOwn(failures, process.argv[3]) ? failures[process.argv[3]] : null;
@@ -405,6 +405,8 @@ STOP_EXIT=$?
 set -e
 if [[ "$STOP_EXIT" -ne 0 ]]; then
   echo "NATIVE_OPERATOR_EXIT=$STOP_EXIT NATIVE_RESULT=$STOP" >&2
+  preview_snapshot stop preview >&2
+  runtime_snapshot
   exit 2
 fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$STOP"; then echo "NATIVE_RESULT=$STOP" >&2; exit 2; fi

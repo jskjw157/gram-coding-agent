@@ -50,7 +50,7 @@ Verification completed on the integrated tree plus the IPv6 fix below:
 |---|---|
 | `pnpm install --frozen-lockfile --store-dir <isolated-store>` | PASS; Node 24 SQLite native build completed |
 | `pnpm lint`, `pnpm typecheck`, `pnpm build` | PASS |
-| `pnpm test --maxWorkers=2` | PASS: 125 files / 1,418 tests, no skips |
+| `pnpm test --maxWorkers=2` | PASS: 125 files / 1,423 tests, no skips |
 | Focused TCP parser, command and native probe tests | PASS: 3 files / 48 tests |
 | Explicit `review/lanes/rollback-regressions.test.ts` collection | PASS: 3 tests |
 | `node --test platform/macos/*.test.mjs` | PASS: 20 tests, including 2 assembly regressions and 4 CI synchronization tests |
@@ -63,7 +63,7 @@ Verification completed on the integrated tree plus the IPv6 fix below:
 
 The root count includes eight generated test files from the existing non-Mac
 package build configurations; it is the observed count after the workspace build,
-not a claim of 1,418 distinct source test cases. No test was disabled. The local
+not a claim of 1,423 distinct source test cases. No test was disabled. The local
 Homebrew Python XML extension was unusable; the plist verifier passed unchanged
 with `/usr/bin/python3`. Host Python installations were not modified.
 
@@ -162,6 +162,34 @@ heredoc to `platform/macos/tests/native-runtime-snapshot.mjs`. It retains its
 use, HTTP, state recovery, restart retry or product policy change is added.
 The original restart failure still exits nonzero. The final SHA's actual CI
 result and any remaining uncertainty must be reported separately.
+
+The preceding `ed36bbd` run had passed restart and then refused stop with
+`CONFIG_CHANGED`. Failure-only diagnostics are therefore also retained for stop.
+No stop/restart retry or mutation is added.
+
+## Independently reproduced asynchronous telemetry clock race
+
+Review found a concrete race in the running observer: it captured `Date.now()`
+before awaiting the status read, which includes asynchronous descriptor/ACL
+checks. A supervisor publication during that read can be newer than the captured
+read-start time and be falsely rejected as a future observation.
+
+`TelemetryStore.readStatus` now additionally accepts a trusted completion-clock
+callback; the native observer supplies `Date.now` rather than a pre-read number.
+The clock is evaluated once after reading and decoding. Existing numeric-clock
+fixtures remain supported. The 30-second freshness limit, rejection of actual
+future values, exact owner/generation/release binding and read-only behavior are
+unchanged.
+
+A deferred read fixture reproduces publication at 1005 while read-start is 1000
+and completion is 1010. RED: 1 failed / 12 passed; GREEN: all 13 passed. The added
+refusal cases cover actual future timestamps, stale status, a different
+generation and an invalid completion clock. Root suite: 1,423 passed; lint and
+typecheck passed. Independent review found no blocking issue.
+
+This reproduces and fixes the clock race independently. Attribution of the
+earlier hosted stop/restart refusals still requires the native diagnostic and
+final-SHA acceptance; that causal link is not asserted by the unit test.
 
 ## Review and remaining acceptance
 

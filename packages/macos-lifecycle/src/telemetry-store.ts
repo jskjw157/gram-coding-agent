@@ -36,12 +36,16 @@ function safe(error: unknown): never {
  */
 export class TelemetryStore {
   constructor(private readonly statusFiles: RecordFiles, private readonly eventFiles: RecordFiles) {}
-  async readStatus(role: Role, owner: StatusIdentity, nowMs: number): Promise<ServiceStatus | null> {
+  async readStatus(role: Role, owner: StatusIdentity, nowMs: number | (() => number)): Promise<ServiceStatus | null> {
     try {
       if (role !== 'core' && role !== 'tunnel') invalid();
       const [bytes] = slots(await this.statusFiles.read(role), 1);
       if (!bytes) return null;
-      try { const value = decodeStatus(bytes); return value.role === role ? currentStatus(value, owner, nowMs) : null; }
+      // Native readers sample their trusted clock after descriptor/ACL IO so a
+      // concurrent publication is not compared with an earlier read-start time.
+      // Numeric snapshots remain available for deterministic internal fixtures.
+      try { const value = decodeStatus(bytes); const completedAt = typeof nowMs === 'function' ? nowMs() : nowMs;
+        return value.role === role ? currentStatus(value, owner, completedAt) : null; }
       catch { return null; }
     } catch (error) { return safe(error); }
   }
