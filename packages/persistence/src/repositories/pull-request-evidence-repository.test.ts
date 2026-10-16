@@ -178,6 +178,50 @@ it('preserves the legacy diff-review evidence format', () => {
   expect(f.read()).toEqual(['src/one.ts', 'src/two.ts']);
 });
 
+it.each(['FAIL', 'PENDING', 'SKIPPED', 'NOT_REQUIRED'])('does not project unapproved legacy %s paths', status => {
+  const f = fixture();
+  f.db.prepare('DELETE FROM verification_reviews WHERE id=?').run(f.reviewId);
+  f.db.prepare('UPDATE verification_plans SET plan_json=? WHERE id=?').run('{}', f.planId);
+  f.db.prepare("UPDATE verification_checks SET status=?, evidence_ref='diff-review:src/counter.ts' WHERE id=?").run(status, f.checkId);
+  expect(f.read()).toEqual([]);
+});
+
+it('does not project paths from an optional legacy review', () => {
+  const f = fixture();
+  f.db.prepare('DELETE FROM verification_reviews WHERE id=?').run(f.reviewId);
+  f.db.prepare('UPDATE verification_plans SET plan_json=? WHERE id=?').run('{}', f.planId);
+  f.db.prepare("UPDATE verification_checks SET required=0, evidence_ref='diff-review:src/counter.ts' WHERE id=?").run(f.checkId);
+  expect(f.read()).toEqual([]);
+});
+
+it('never lets metadata override approved legacy paths', () => {
+  const f = fixture();
+  f.db.prepare('DELETE FROM verification_reviews WHERE id=?').run(f.reviewId);
+  f.db.prepare('UPDATE verification_plans SET plan_json=? WHERE id=?').run('{}', f.planId);
+  f.db.prepare("UPDATE verification_checks SET evidence_ref='diff-review:src/counter.ts' WHERE id=?").run(f.checkId);
+  f.db.prepare('UPDATE tasks SET metadata_json=? WHERE id=?').run(JSON.stringify({ changedPaths: ['unapproved.ts'], summary: 'Safe summary', rootCause: 'Safe cause' }), f.task.id);
+  expect(new PullRequestEvidenceRepository(f.db).readForTask(f.task.id)).toMatchObject({
+    changedPaths: ['src/counter.ts'], summary: 'Safe summary', rootCause: 'Safe cause',
+  });
+});
+
+it.each([null, 'not-review:src/counter.ts', 'diff-review:', 'diff-review:clean'])('ignores metadata when legacy approval is absent: %s', ref => {
+  const f = fixture();
+  f.db.prepare('DELETE FROM verification_reviews WHERE id=?').run(f.reviewId);
+  f.db.prepare('UPDATE verification_plans SET plan_json=? WHERE id=?').run('{}', f.planId);
+  f.db.prepare('UPDATE verification_checks SET evidence_ref=? WHERE id=?').run(ref, f.checkId);
+  f.db.prepare('UPDATE tasks SET metadata_json=? WHERE id=?').run('{"changedPaths":["unapproved.ts"]}', f.task.id);
+  expect(f.read()).toEqual([]);
+});
+
+it('does not project metadata-only paths without a review check or plan', () => {
+  const f = fixture();
+  f.db.prepare('DELETE FROM verification_reviews WHERE id=?').run(f.reviewId);
+  f.db.prepare('DELETE FROM verification_plans WHERE id=?').run(f.planId);
+  f.db.prepare('UPDATE tasks SET metadata_json=? WHERE id=?').run('{"changedPaths":["unapproved.ts"]}', f.task.id);
+  expect(f.read()).toEqual([]);
+});
+
 it('never downgrades malformed external evidence into legacy metadata fallback', () => {
   const f = fixture();
   f.db.prepare('UPDATE verification_plans SET plan_json=? WHERE id=?').run('{malformed', f.planId);
