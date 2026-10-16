@@ -147,6 +147,22 @@ Independent review found no blocking issue in this fixture change. Its actual
 hosted acceptance remains separate from the local synthetic tests and is
 reported for the final remote SHA on the Draft PR.
 
+## Restart acceptance still under investigation
+
+Hosted `efa1403` passed apply, the synchronized post-apply preview, and start.
+Restart then returned `PARTIAL_INSTALL`. This is distinct from the earlier
+TIME_WAIT failure; no restart fix or successful installed acceptance is claimed
+from that run. Public JSON does not identify the exact rejecting internal gate.
+
+The next observation reuses the existing failure-only runtime diagnostic after
+restart failure, before cleanup, alongside the fixed registry/TCP snapshot.
+The 376-line read-only diagnostic was moved unchanged from the apply-failure
+heredoc to `platform/macos/tests/native-runtime-snapshot.mjs`. It retains its
+60-second deadline, fixed record families and sanitized fields. No credential
+use, HTTP, state recovery, restart retry or product policy change is added.
+The original restart failure still exits nonzero. The final SHA's actual CI
+result and any remaining uncertainty must be reported separately.
+
 ## Review and remaining acceptance
 
 An independent read-only reviewer examined the exact staged merge, package and
