@@ -108,7 +108,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/mac02"
-          node --test platform/macos/package-release.test.mjs
+          node --test platform/macos/*.test.mjs
       - name: Native Apple plist syntax check only
         if: runner.os == 'macOS'
         shell: bash

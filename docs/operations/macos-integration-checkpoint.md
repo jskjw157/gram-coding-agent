@@ -53,7 +53,7 @@ Verification completed on the integrated tree plus the IPv6 fix below:
 | `pnpm test --maxWorkers=2` | PASS: 125 files / 1,418 tests, no skips |
 | Focused TCP parser, command and native probe tests | PASS: 3 files / 48 tests |
 | Explicit `review/lanes/rollback-regressions.test.ts` collection | PASS: 3 tests |
-| `node --test platform/macos/package-release.test.mjs` | PASS: 14 tests |
+| `node --test platform/macos/*.test.mjs` | PASS: 16 tests, including 2 assembly regressions |
 | Compiled MAC-01 CLI on native Mac and unsupported arguments | PASS: UNKNOWN capabilities, exit 0; invalid argument exit 64 |
 | Compiled lifecycle CLI with synthetic healthy evidence | PASS: `LOCAL_CORE_HEALTHY`, business readiness still UNAVAILABLE |
 | Generated plist structure and negative cases | PASS: 2 roles / 12 altered cases refused |
@@ -92,6 +92,37 @@ passes. It simulates the native truncation boundary, requires the complete-addre
 request to recognize an occupied local port, continues to refuse incomplete
 rows, and distinguishes a foreign port from a local binding. The focused native
 and parser suite then passed all 48 tests, followed by the complete root suite.
+
+## Release dependency provenance defect found and fixed
+
+An additional real local assembly exposed that pnpm 10.34.5's legacy deploy path
+explicitly disables frozen lockfiles. Despite a preceding frozen install, deploy
+re-resolved some `latest` dependencies and changed the source lockfile. The first
+bundle passed its isolated runtime smoke test, but its lock provenance was
+unsuitable; it is retained only as an investigation fixture, not an installation
+candidate. The generated source-lock changes were saved as local evidence and
+restored to the reviewed commit.
+
+Assembly now selects pnpm's shared-lockfile deployment path with a command-local
+`inject-workspace-packages=true` option and explicit `--frozen-lockfile`. This does
+not modify workspace settings or dependency versions. Command-local
+`force-legacy-deploy=false` and `shared-workspace-lockfile=true` also prevent
+ambient configuration from selecting the non-frozen fallback. It snapshots the
+reviewed lock bytes before build/deploy, refuses `SOURCE_LOCK_CHANGED` before
+sealing if they change, and copies the reviewed snapshot into the release.
+
+Two real assembly-script tests use disposable Git fixtures, a synthetic package
+manager boundary, real native compilation and the existing sealer. Before the
+fix, both failed: deployment changed the lock and assembly still sealed it.
+Afterward, both pass, including refusal with no published output on mutation.
+The lifecycle workflow now collects these alongside the 14 packaging tests.
+An independent actual offline shared-lockfile deploy also succeeded without
+changing the source lock. Final committed-source assembly and hosted final-SHA
+CI are recorded on the Draft PR after completion.
+
+Independent review identified the ambient-setting override. The fixture then
+reproduced one failure with those settings before explicit overrides were added;
+the complete 16-test packaging suite passed afterward.
 
 ## Review and remaining acceptance
 
