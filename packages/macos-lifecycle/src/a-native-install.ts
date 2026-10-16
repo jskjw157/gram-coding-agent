@@ -29,6 +29,7 @@ import {
 } from './a-native-storage.js';
 import { createSystemServiceHandle, normalizeAbsentSystemServiceOverride } from './a-native-services.js';
 import { createInstalledHealthObserver } from './a-native-observer.js';
+import { runningControlHealthy } from './installed-health.js';
 
 const fileMap: Readonly<Record<InstallFile, PublishKind>> = Object.freeze({
   configuration: 'configuration',
@@ -141,16 +142,7 @@ async function runningPriorFromStorage(
     || prior.releaseDigest !== config.releaseDigest) throw new Error('FOREIGN_SERVICE');
 
   const observer = createInstalledHealthObserver(acl);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  try {
-    if (await observer.healthy('core', controller.signal) !== true) throw new Error('FOREIGN_SERVICE');
-    if (config.tunnel.enabled
-      && await observer.healthy('tunnel', controller.signal) !== true) throw new Error('FOREIGN_SERVICE');
-  } finally {
-    clearTimeout(timer);
-    controller.abort();
-  }
+  if (!await runningControlHealthy(config.tunnel.enabled, observer)) throw new Error('FOREIGN_SERVICE');
 
   const after = await inspectMacRegistry();
   if (after === null || JSON.stringify(after) !== JSON.stringify(before)) {

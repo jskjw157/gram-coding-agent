@@ -38,14 +38,21 @@ TMP="$(/usr/bin/mktemp -d "${TMPDIR:-/var/tmp}/gram-core-release.XXXXXX")"
 trap '/bin/rm -rf "$TMP"' EXIT
 SOURCE="$TMP/source"
 STAGING="$TMP/staging"
+/bin/cp "$REPO/pnpm-lock.yaml" "$TMP/reviewed-pnpm-lock.yaml"
 
 /bin/mkdir -p "$SOURCE/apps" "$SOURCE/packages/macos-lifecycle" "$SOURCE/bin"
 (cd "$REPO" && "$PNPM_BIN" build) >&2
 # Deploy directly into its final bundle-relative location so pnpm's relative
 # workspace/package symlinks are computed for that exact path. Moving a deploy
 # tree afterwards can turn otherwise-internal links into escaping links.
-(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent deploy --prod --legacy "$SOURCE/apps/agent") >&2
-# pnpm legacy deploy adds a convenience self-link for the deployed package
+# The shared-lockfile deploy path freezes package resolutions. Legacy deploy
+# explicitly disables frozen lockfiles and can re-resolve `latest` dependencies.
+# This command-local option does not change the workspace configuration.
+(cd "$REPO" && "$PNPM_BIN" --filter @gram/agent --config.inject-workspace-packages=true \
+  --config.force-legacy-deploy=false --config.shared-workspace-lockfile=true \
+  deploy --prod --frozen-lockfile "$SOURCE/apps/agent") >&2
+/usr/bin/cmp -s "$REPO/pnpm-lock.yaml" "$TMP/reviewed-pnpm-lock.yaml" || { echo 'SOURCE_LOCK_CHANGED' >&2; exit 2; }
+# pnpm deploy may add a convenience self-link for the deployed package
 # under .pnpm/node_modules. The runtime never resolves @gram/agent from itself,
 # and keeping this link would point outside the sealed apps/agent subtree.
 self_link="$SOURCE/apps/agent/node_modules/.pnpm/node_modules/@gram/agent"
@@ -56,7 +63,7 @@ elif [[ -e "$self_link" ]]; then
   exit 2
 fi
 /bin/cp -R "$REPO/packages/macos-lifecycle/dist" "$SOURCE/packages/macos-lifecycle/dist"
-/bin/cp "$REPO/pnpm-lock.yaml" "$SOURCE/pnpm-lock.yaml"
+/bin/cp "$TMP/reviewed-pnpm-lock.yaml" "$SOURCE/pnpm-lock.yaml"
 /bin/cp "$NODE_BIN" "$SOURCE/bin/node"
 /bin/chmod 0755 "$SOURCE/bin/node"
 

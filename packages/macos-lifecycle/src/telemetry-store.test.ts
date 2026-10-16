@@ -23,6 +23,35 @@ function memory(size: number) {
 }
 function fixture() { const s = memory(1); const e = memory(3); return { s, e, store: new TelemetryStore(s.files, e.files) }; }
 describe('generation-aware status and safe event persistence', () => {
+  it('samples the observation clock after asynchronous status reading completes', async () => {
+    let now = 1000; let sampled = 0; let finish: () => void = () => { throw new Error('not ready'); };
+    const ready = new Promise<void>(resolve => { finish = resolve; });
+    const f = fixture();
+    const delayed: RecordFiles = {
+      async read() { await ready; return [encodeStatus(status(1005))]; },
+      compareAndSwap: f.s.files.compareAndSwap,
+    };
+    const store = new TelemetryStore(delayed, f.e.files);
+    const reading = store.readStatus('core', owner(), () => { sampled++; return now; });
+    expect(sampled).toBe(0);
+    // The supervisor publishes during trusted descriptor/ACL IO. Its timestamp
+    // is newer than read-start, but is not in the future when the read completes.
+    now = 1010; finish();
+    expect(await reading).toEqual(decodeStatus(encodeStatus(status(1005))));
+    expect(sampled).toBe(1);
+    expect(f.s.calls()).toBe(0);
+  });
+  it.each([
+    { observedAt: 1011, completedAt: 1010, generation: 'gen-1' },
+    { observedAt: 1000, completedAt: 31000, generation: 'gen-1' },
+    { observedAt: 1000, completedAt: 1010, generation: 'different' },
+    { observedAt: 1000, completedAt: NaN, generation: 'gen-1' },
+  ])('still refuses invalid completion-time evidence %#', async ({ observedAt, completedAt, generation }) => {
+    const f = fixture();
+    f.s.data.set('core', [encodeStatus({ ...status(observedAt), generation })]);
+    expect(await f.store.readStatus('core', owner(), () => completedAt)).toBeNull();
+    expect(f.s.calls()).toBe(0);
+  });
   it('reads absence without creating state and persists a current observation', async () => {
     const f = fixture(); expect(await f.store.readStatus('core', owner(), 1000)).toBe(null); expect(f.s.calls()).toBe(0);
     await f.store.writeStatus('core', status(), owner());

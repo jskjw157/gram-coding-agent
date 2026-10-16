@@ -97,7 +97,8 @@ type Probe = 'tcp' | 'core' | 'tunnel' | 'disabled' | 'plist';
 function run(probe: Probe, input?: string): Promise<CommandObservation | null> {
   if (process.platform !== 'darwin') return Promise.resolve(null);
   const commands: Record<Probe, readonly [string, readonly string[]]> = {
-    tcp: ['/usr/sbin/netstat', ['-an', '-p', 'tcp']],
+    // -l preserves complete IPv6 addresses for strict numeric-table parsing.
+    tcp: ['/usr/sbin/netstat', ['-anl', '-p', 'tcp']],
     core: ['/bin/launchctl', ['print', `system/${labels.core}`]],
     tunnel: ['/bin/launchctl', ['print', `system/${labels.tunnel}`]],
     disabled: ['/bin/launchctl', ['print-disabled', 'system']],

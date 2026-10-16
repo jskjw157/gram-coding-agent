@@ -1,0 +1,237 @@
+# MAC-01 / MAC-02 integration checkpoint
+
+## Source and review scope
+
+This Draft integration combines the independent platform diagnostic from PR #137
+with the successful lifecycle follow-up stack ending at PR #203. The merge commit
+is `4f0610bd32fa19472db396de5565be35f6183800`, with these exact parents:
+
+- MAC-02: `268601c9e83b8cd1ae33c9330d264ea8c012ef2d` (#203).
+- MAC-01: `a98c8ff45497f8524bc2ffa9bda19ad60898faf1` (#137).
+
+Both heads were rechecked on GitHub before integration. Main was
+`ba9fc68`; #203 was 317 commits ahead with no missing main commits. #137 was
+12 ahead and 10 behind main. #203 contains #138
+(`e73e5dd04acea611ba6cf9ae5670fa313af06ade`) and all 18 later fixes. The
+integration uses #203, rather than the earlier failing #138 head.
+
+The review base is #203's `fix/143-launchd-absence-wait` branch. This keeps the
+incremental diff focused on MAC-01 and this evidence document instead of repeating
+the entire lifecycle stack. Both prerequisite Draft PRs remain open; this PR is
+not permission to merge the stack or install it.
+
+The merge was conflict-free. Its only lockfile addition is the nine-line platform
+workspace importer; existing dependency resolutions are unchanged. Frozen pnpm
+installation normalizes an empty lifecycle importer; that generated addition was
+checked and restored, without changing resolutions.
+
+## Contract boundary
+
+The packages coexist in the workspace and root test discovery. Neither imports
+the other's production code. Platform compatibility does not authorize service
+installation or imply work readiness. MAC-01's compiled diagnostic remains
+`DIAGNOSTIC_ONLY`, with `liveProbesCollected: false` and unknown capabilities on
+a supported host. MAC-02 stays `LAB_ONLY`, with `businessReadiness: UNAVAILABLE`;
+even `LOCAL_CORE_HEALTHY` does not establish isolation, service/user credentials,
+browser/account readiness or a live business workflow.
+
+No adapter was added to convert lifecycle telemetry into trusted readiness
+observations. That future integration requires independently verified, fresh,
+context-bound evidence and its own behavior tests.
+
+## Local verification
+
+Testing uses a fresh, separate checkout, a fake home and temporary fixtures on
+native macOS 26.2 / arm64, with official Node 24.20.0 (archive SHA-256 verified)
+and workspace-local pnpm 10.34.5. The existing host runtimes are unchanged.
+Verification completed on the integrated tree plus the IPv6 fix below:
+
+| Command / check | Result |
+|---|---|
+| `pnpm install --frozen-lockfile --store-dir <isolated-store>` | PASS; Node 24 SQLite native build completed |
+| `pnpm lint`, `pnpm typecheck`, `pnpm build` | PASS |
+| `pnpm test --maxWorkers=2` | PASS: 125 files / 1,423 tests, no skips |
+| Focused TCP parser, command and native probe tests | PASS: 3 files / 48 tests |
+| Explicit `review/lanes/rollback-regressions.test.ts` collection | PASS: 3 tests |
+| `node --test platform/macos/*.test.mjs` | PASS: 20 tests, including 2 assembly regressions and 4 CI synchronization tests |
+| Compiled MAC-01 CLI on native Mac and unsupported arguments | PASS: UNKNOWN capabilities, exit 0; invalid argument exit 64 |
+| Compiled lifecycle CLI with synthetic healthy evidence | PASS: `LOCAL_CORE_HEALTHY`, business readiness still UNAVAILABLE |
+| Generated plist structure and negative cases | PASS: 2 roles / 12 altered cases refused |
+| Native `plutil -lint` on generated fixture plists | PASS: both roles |
+| Bootstrap/script syntax, backlog JSON, diff checks | PASS |
+| Lifecycle production output excludes tests and test-support | PASS |
+
+The root count includes eight generated test files from the existing non-Mac
+package build configurations; it is the observed count after the workspace build,
+not a claim of 1,423 distinct source test cases. No test was disabled. The local
+Homebrew Python XML extension was unusable; the plist verifier passed unchanged
+with `/usr/bin/python3`. Host Python installations were not modified.
+
+The initial global pnpm launcher recursed during automatic version management in
+the fake home. Only this task's process subtrees were stopped; the pinned local
+pnpm then completed the frozen install. Early lint/test attempts before install
+completion reported missing executables and are not counted as product failures
+or successful validation.
+
+## Native IPv6 defect found and fixed
+
+The first full-suite run after dependency installation passed 1,366 tests and failed
+`macos-service-probes.native.test.ts` at the initial fixed-port observation. A
+focused repeat reproduced it. The fixed `/usr/sbin/netstat -an -p tcp` command
+truncated some unrelated long IPv6 hosts; strict `isIP` parsing correctly refused
+the incomplete table as UNKNOWN. No private addresses were logged.
+
+The local `netstat(1)` manual identifies `-l` as printing full IPv6 addresses.
+Read-only comparison confirmed `-W` did not solve this display format, while
+`-anl` eliminated the malformed hosts. The only production change is adding `l`
+to the fixed argument vector. Parser validation, fail-closed behavior, command
+timeouts and output limits are unchanged.
+
+`macos-tcp-command.test.ts` was run before the change: 1 expected failure / 2
+passes. It simulates the native truncation boundary, requires the complete-address
+request to recognize an occupied local port, continues to refuse incomplete
+rows, and distinguishes a foreign port from a local binding. The focused native
+and parser suite then passed all 48 tests, followed by the complete root suite.
+
+## Release dependency provenance defect found and fixed
+
+An additional real local assembly exposed that pnpm 10.34.5's legacy deploy path
+explicitly disables frozen lockfiles. Despite a preceding frozen install, deploy
+re-resolved some `latest` dependencies and changed the source lockfile. The first
+bundle passed its isolated runtime smoke test, but its lock provenance was
+unsuitable; it is retained only as an investigation fixture, not an installation
+candidate. The generated source-lock changes were saved as local evidence and
+restored to the reviewed commit.
+
+Assembly now selects pnpm's shared-lockfile deployment path with a command-local
+`inject-workspace-packages=true` option and explicit `--frozen-lockfile`. This does
+not modify workspace settings or dependency versions. Command-local
+`force-legacy-deploy=false` and `shared-workspace-lockfile=true` also prevent
+ambient configuration from selecting the non-frozen fallback. It snapshots the
+reviewed lock bytes before build/deploy, refuses `SOURCE_LOCK_CHANGED` before
+sealing if they change, and copies the reviewed snapshot into the release.
+
+Two real assembly-script tests use disposable Git fixtures, a synthetic package
+manager boundary, real native compilation and the existing sealer. Before the
+fix, both failed: deployment changed the lock and assembly still sealed it.
+Afterward, both pass, including refusal with no published output on mutation.
+The lifecycle workflow now collects these alongside the 14 packaging tests.
+An independent actual offline shared-lockfile deploy also succeeded without
+changing the source lock. Final committed-source assembly and hosted final-SHA
+CI are recorded on the Draft PR after completion.
+
+Independent review identified the ambient-setting override. The fixture then
+reproduced one failure with those settings before explicit overrides were added;
+the complete 16-test packaging suite passed afterward.
+
+## Hosted stopped-fixture synchronization
+
+The first integration head (`f250107`) passed root, platform Mac/Linux and
+lifecycle Linux CI. Hosted Mac lifecycle reached a successful apply and parked
+the owned service, then its immediate post-apply preview refused PORT_IN_USE.
+Failure-only diagnostics showed both jobs absent, Core disabled, and only a
+Core-port TIME_WAIT entry. This is residual TCP state from the fixture's
+authenticated health connection, not evidence that an owned service is running.
+
+The product's conservative occupancy policy is unchanged. The CI fixture now
+observes both ports as free before each stopped checkpoint's single preview;
+it never retries preview or interprets port idleness as ownership/health.
+Observation is limited to 90 seconds plus the in-flight native command's existing
+two-second bound. UNKNOWN, persistent occupancy and late success all fail.
+Four synthetic-clock tests cover recovery and these refusal paths. The job
+budget is 20 minutes to allow bounded residual-state drainage. The diagnostic
+netstat command also uses full IPv6 output. No local launchd action was used to
+reproduce or validate this CI-only synchronization.
+
+Independent review found no blocking issue in this fixture change. Its actual
+hosted acceptance remains separate from the local synthetic tests and is
+reported for the final remote SHA on the Draft PR.
+
+## Restart acceptance still under investigation
+
+Hosted `efa1403` passed apply, the synchronized post-apply preview, and start.
+Restart then returned `PARTIAL_INSTALL`. This is distinct from the earlier
+TIME_WAIT failure; no restart fix or successful installed acceptance is claimed
+from that run. Public JSON does not identify the exact rejecting internal gate.
+
+The next observation reuses the existing failure-only runtime diagnostic after
+restart failure, before cleanup, alongside the fixed registry/TCP snapshot.
+The 376-line read-only diagnostic was moved unchanged from the apply-failure
+heredoc to `platform/macos/tests/native-runtime-snapshot.mjs`. It retains its
+60-second deadline, fixed record families and sanitized fields. No credential
+use, HTTP, state recovery, restart retry or product policy change is added.
+The original restart failure still exits nonzero. The final SHA's actual CI
+result and any remaining uncertainty must be reported separately.
+
+The preceding `ed36bbd` run had passed restart and then refused stop with
+`CONFIG_CHANGED`. Failure-only diagnostics are therefore also retained for stop.
+No stop/restart retry or mutation is added.
+
+## Independently reproduced asynchronous telemetry clock race
+
+Review found a concrete race in the running observer: it captured `Date.now()`
+before awaiting the status read, which includes asynchronous descriptor/ACL
+checks. A supervisor publication during that read can be newer than the captured
+read-start time and be falsely rejected as a future observation.
+
+`TelemetryStore.readStatus` now additionally accepts a trusted completion-clock
+callback; the native observer supplies `Date.now` rather than a pre-read number.
+The clock is evaluated once after reading and decoding. Existing numeric-clock
+fixtures remain supported. The 30-second freshness limit, rejection of actual
+future values, exact owner/generation/release binding and read-only behavior are
+unchanged.
+
+A deferred read fixture reproduces publication at 1005 while read-start is 1000
+and completion is 1010. RED: 1 failed / 12 passed; GREEN: all 13 passed. The added
+refusal cases cover actual future timestamps, stale status, a different
+generation and an invalid completion clock. Root suite: 1,423 passed; lint and
+typecheck passed. Independent review found no blocking issue.
+
+This reproduces and fixes the clock race independently. Attribution of the
+earlier hosted stop/restart refusals still requires the native diagnostic and
+final-SHA acceptance; that causal link is not asserted by the unit test.
+
+## Running-control telemetry publication gaps
+
+Hosted `1060fff` passed restart, then stop refused `PARTIAL_INSTALL` while the
+owned Core remained listening. Failure-only diagnostics showed matching held
+execution/registration/config/release, healthy status and native ownership.
+Actual recent publication intervals included 30,425 ms and 30,667 ms, exceeding
+the unchanged 30,000 ms status TTL. Thus brief stale windows exist; the log does
+not identify the exact inner gate that refused this stop.
+
+The running-control health gate previously made one complete observation per
+role. It now repeats only those read-only observations within the ORIGINAL
+shared 60-second budget. Every successful sample still passes the same full
+sealed review, native ownership, exact identity and fresh-status checks. Core
+and tunnel share one absolute deadline and the original single hard timer;
+clock rollback cannot extend the budget. Non-abort exceptions remain failures.
+Service calls, mutations, TTL and registry/config validation are unchanged.
+
+The one-shot gate was extracted unchanged and reproduced a 30.7-second
+publication gap: RED 1 failed / 5 passed. The correction and an independent
+review finding about wall-clock rollback are covered by 9 regression cases
+plus existing service/control tests: 19 passed. Persistent stale/future/foreign
+status, hung/late observers, shared role budget and clock rollback all refuse.
+Root suite: 126 files / 1,432 tests passed; lint, typecheck, build and 20
+packaging tests passed. Independent re-review confirmed the hard-timer fix and
+found no blocking issue. Hosted causal attribution and final-SHA acceptance
+remain separate observations.
+
+## Review and remaining acceptance
+
+An independent read-only reviewer examined the exact staged merge, package and
+architecture boundaries, lockfile and focused workflows. No integration-induced
+defect was found. This was a static review, not a full security audit of the 317
+preexisting lifecycle commits.
+The same reviewer separately examined the IPv6 production fix, new regression
+tests and their RED/GREEN logs, and found no blocking defect.
+
+No local system-service installation, launchctl mutation, account/security
+change, credential/trust provisioning, tunnel registration or deployment is part
+of this checkpoint. Fixture-only modes and ACLs do not establish an installed
+service boundary. Dedicated non-admin service operation, reboot/logout recovery,
+production trust and credentials, tunnel/provider acceptance, Keychain/TCC and
+live browser/store work remain NOT_RUN on the user's Mac and require separately
+scoped approval. The existing hosted disposable launchd workflow is separate
+evidence and must be checked on this PR's final SHA.
