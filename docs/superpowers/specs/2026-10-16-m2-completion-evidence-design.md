@@ -71,16 +71,21 @@ The wrapper persists only a sanitized endpoint kind, HTTP method, and numeric pa
 Every sample carries:
 
 ```text
-task_id
-repo_id
-head_sha
-operation_correlation_id
-phase
-request_id
-sample_edge = BEFORE | AFTER
-observed_at
-pull_request_id = nullable
+taskId
+repoId
+headSha
+correlationId
+endpoint = PR_FIND | PR_CREATE | RULES | STATUSES | PROTECTION | CHECK_RUNS
+requestId
+boundary = BEFORE | AFTER
+observedAt
+pullRequestId = nullable
 ```
+
+`endpoint` is the canonical phase discriminator: PR_FIND and PR_CREATE belong to
+PR operations; the other endpoints belong to CI observation. No separate `phase`
+field is stored. `dbObservedAt` and `fileObservedAt` identify the two independent
+measurements; `observedAt` is the journal append time.
 
 The provider PR number is stored on the validated PR_BINDING record, rather than
 on each BOUNDARY sample. CI samples reference the internal PR row directly.

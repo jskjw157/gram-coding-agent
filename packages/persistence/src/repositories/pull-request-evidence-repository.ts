@@ -49,20 +49,11 @@ function nonEmptyString(value: unknown): string | undefined {
     : undefined;
 }
 
-function stringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value
-      .filter((item): item is string => typeof item === 'string')
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0),
-  )];
-}
-
 function pathsFromDiffReview(rows: readonly VerificationEvidenceRow[]): string[] {
   const diffReview = rows.find((row) => row.name === 'diff-review');
   const ref = diffReview?.evidence_ref;
-  if (ref === null || ref === undefined || !ref.startsWith('diff-review:')) {
+  if (diffReview?.required !== 1 || diffReview.status !== 'PASS' ||
+      ref === null || ref === undefined || !ref.startsWith('diff-review:')) {
     return [];
   }
   return [...new Set(
@@ -75,7 +66,7 @@ function pathsFromDiffReview(rows: readonly VerificationEvidenceRow[]): string[]
 }
 
 function publishablePath(path: string): boolean {
-  // Legacy metadata also crosses this public-output boundary. Keep canonical
+  // Legacy review paths also cross this public-output boundary. Keep canonical
   // repository paths, and reject Markdown injection and recognizable credentials.
   return path.length > 0 && !/^[-/]/.test(path) && !/[\\:*?[\]`<>]/.test(path) &&
     ![...path].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) &&
@@ -130,7 +121,6 @@ export class PullRequestEvidenceRepository {
       (plan !== undefined && this.db.prepare(
         'SELECT 1 FROM verification_reviews WHERE plan_id = ? LIMIT 1',
       ).get(plan.id) !== undefined);
-    const metadataPaths = stringArray(metadata.changedPaths);
     let changedPaths: string[];
     if (external) {
       // Review HEAD is the sealed pre-commit baseline, not the later published SHA.
@@ -139,7 +129,7 @@ export class PullRequestEvidenceRepository {
         new VerificationRepository(this.db).getBoundPlan(taskId, plan.head_sha, plan.id);
       changedPaths = bound?.approvedPaths ?? [];
     } else {
-      changedPaths = metadataPaths.length > 0 ? metadataPaths : pathsFromDiffReview(rows);
+      changedPaths = pathsFromDiffReview(rows);
     }
     if (!changedPaths.every(publishablePath)) changedPaths = [];
 
