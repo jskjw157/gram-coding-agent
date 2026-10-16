@@ -35,6 +35,7 @@ import { PolicyGitAdapter, PolicyWorktreeAdapter, PolicyWslPathRunner } from './
 import { PersistentCiContextResolver, RegisteredRepositoryProfiles } from './persistence-adapters.js';
 import { createTaskRunner, type CompositionLocks } from './task-runner-composition.js';
 import { createProductionGitHubServices } from './github-services.js';
+import { SmokeLockObserver } from './smoke-lock-observer.js';
 import { ExternalCodingCapability } from './external-coding-capability.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { TaskVerificationSnapshots } from './verification-snapshot.js';
@@ -111,6 +112,18 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
 
   const database = openDatabase(join(options.stateDirectory, 'agent.sqlite'));
   runMigrations(database);
+  // Trusted local service configuration; never exposed to MCP callers.
+  const smokeRepo = process.env.GRAM_AGENT_SMOKE_REPOSITORY_ID;
+  let smokeObserver: SmokeLockObserver | undefined;
+  if (smokeRepo !== undefined) {
+    try {
+      if (!/^[1-9][0-9]*$/u.test(smokeRepo) || !Number.isSafeInteger(Number(smokeRepo))) throw new Error('Invalid smoke repository');
+      smokeObserver = new SmokeLockObserver({ stateDirectory: options.stateDirectory, repoId: Number(smokeRepo) });
+    } catch {
+      database.close();
+      throw new Error('Smoke observer startup failed');
+    }
+  }
 
   let mcpReady = false;
   let closed = false;
@@ -179,7 +192,11 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   });
 
   const secretProvider = new FileSecretProvider(options.secretDirectory);
-  const secretLease = await secretProvider.getForUse('mcp-internal-secret');
+  const secretLease = await secretProvider.getForUse('mcp-internal-secret').catch((error: unknown) => {
+    smokeObserver?.close();
+    database.close();
+    throw error;
+  });
 
   try {
     const composed = await secretLease.withValue(async (internalSecret) => {
@@ -241,6 +258,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         pullRequests: pullRequestRepository,
         evidence: new PullRequestEvidenceRepository(database),
         ciRuns: new CiRunRepository(database),
+        ...(smokeObserver === undefined ? {} : { observer: smokeObserver }),
       });
       const taskRunner = createTaskRunner({
         ...githubServices,
@@ -351,6 +369,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       await composed.mcp.close();
       await drained;
       await quiesceHeldLeases();
+      smokeObserver?.close();
       database.close();
       composed.logger.info('agent stopped');
     };
@@ -374,6 +393,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       close,
     };
   } catch (error) {
+    smokeObserver?.close();
     database.close();
     throw error;
   } finally {

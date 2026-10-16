@@ -219,6 +219,16 @@ export async function createFakeGitHubServer(
       }
 
 
+      // This fixture models Classic Branch Protection only: no active rulesets
+      // and no legacy commit statuses. Unknown routes still fail closed below.
+      if (method === 'GET' && (
+        /^\/repos\/[^/]+\/[^/]+\/rules\/branches\/[^/]+$/.test(url.pathname) ||
+        /^\/repos\/[^/]+\/[^/]+\/commits\/[0-9a-f]{40}\/statuses$/.test(url.pathname)
+      )) {
+        sendJson(response, 200, []);
+        return;
+      }
+
       const protectionRepo = parseRequiredStatusChecksPath(url.pathname);
       if (protectionRepo !== undefined && method === 'GET') {
         sendJson(response, 200, {

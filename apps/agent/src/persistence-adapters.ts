@@ -189,6 +189,7 @@ export class PersistentCiContextResolver implements CompositionCiContext {
     }
     return {
       taskId,
+      repoId: task.repoId,
       pullRequestId: pullRequest.id,
       owner: repository.owner,
       name: repository.name,

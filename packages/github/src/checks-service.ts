@@ -17,6 +17,8 @@ export interface RequiredCheckSnapshot {
 
 export interface CiPullRequestContext {
   taskId: TaskId;
+  /** Immutable repository identity supplied by persisted runtime composition. */
+  repoId?: number;
   pullRequestId: number;
   owner: string;
   name: string;
