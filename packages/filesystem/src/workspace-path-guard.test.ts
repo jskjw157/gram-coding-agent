@@ -1,6 +1,7 @@
 import {
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -16,7 +17,7 @@ import {
 const roots: string[] = [];
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), 'gram-filesystem-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'gram-filesystem-')));
   roots.push(root);
   return root;
 }

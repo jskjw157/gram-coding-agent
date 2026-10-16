@@ -262,7 +262,7 @@ describe('shell-text syntax fail-closed boundary', () => {
 
 describe('shell filesystem target expansion fail-closed boundary', () => {
   it('rejects tilde expansion even when a literal decoy path canonicalizes', () => {
-    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'gram-policy-expand-')));
     tempDirs.push(root);
     mkdirSync(join(root, '~'), { recursive: true });
     writeFileSync(join(root, '~', 'tmpfile'), 'decoy');
