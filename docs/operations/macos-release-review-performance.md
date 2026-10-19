@@ -199,8 +199,9 @@ code fit the existing budgets under the current load. Neither result attributes
 the original failure solely to the adapter or predicts behavior under all loads.
 
 Disposable CI keeps the existing apply/start/restart/stop/uninstall acceptance.
-Its follow-up requires an initially absent scope and a root-owned, job-specific
-creation receipt before replacing only that job's closed synthetic private data.
+A separate disposable Mac VM requires an initially absent scope and a root-owned,
+job-specific creation receipt. It refuses nonempty private directories and never
+resets private records or a database.
 A preparation-only run uses the synthetic runtime identity without a session or
 credential use. The pre-Core failure case injects only a waiting sealed Node and
 negative health result: real fixed-label launchd control, production start-attempt
@@ -208,10 +209,17 @@ composition and native helper must compensate it, retaining FREE0, PUBLISHED,
 staging and key metadata. This is native compensation-fixture coverage, not a
 claim that the default factory's entire failure path was exercised. A fresh
 production factory then must complete owned Core health, exact stopped proof and
-COMMITTED publication on the same pristine installation without another reset.
+COMMITTED publication on the same pristine installation without a reset.
 Neither CI setup/cleanup script may be run on a user's installed Mac.
 
 The external volume path contains a space. Test aliases now decode file URLs
 with `fileURLToPath`, and release assembly quotes the resolved Node executable
 for its three host/version probes. The first external assembly attempt failed
 before any build or installation because that executable was split at the space.
+
+The first exact-head Mac run passed the original lifecycle phases, then failed
+at the prepare-only child in the appended recovery fixture. Required CI guard
+environment was provided to sudo's parent and could be removed by sudo's reset.
+The fixture now uses a fixed `sudo ... /usr/bin/env -i ... node` vector and emits
+bounded preparation diagnostics. Recovery runs as a separate job so its results
+are distinct from normal lifecycle acceptance. Production deadlines are unchanged.

@@ -10,10 +10,13 @@ if [[ "${EUID:-$(/usr/bin/id -u)}" -ne 0 ]]; then
   echo 'ROOT_REQUIRED' >&2
   exit 77
 fi
-if [[ $# -ne 3 ]]; then
-  echo 'usage: disposable-launchd-apply.sh <sealed-release-dir> <independent-file-acl-helper> <expected-release-digest>' >&2
+if [[ $# -ne 3 && $# -ne 4 ]]; then
+  echo 'usage: disposable-launchd-apply.sh <sealed-release-dir> <independent-file-acl-helper> <expected-release-digest> [fresh-published]' >&2
   exit 64
 fi
+
+ACCEPTANCE_CASE="${4:-lifecycle}"
+[[ "$ACCEPTANCE_CASE" == lifecycle || "$ACCEPTANCE_CASE" == fresh-published ]] || exit 64
 
 SOURCE_RELEASE="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && /bin/pwd -P)"
@@ -130,6 +133,12 @@ writeFileSync(process.argv[2] + '/config/ci-owned-scope.json', bytes, { mode: 0o
 process.stdout.write(createHash('sha256').update(bytes).digest('hex'));
 CI_SCOPE_RECEIPT
 )"
+
+if [[ "$ACCEPTANCE_CASE" == fresh-published ]]; then
+  echo 'NATIVE_PHASE=fresh-published-resume'
+  "$NODE" "$SCRIPT_DIR/published-resume-acceptance.mjs" "$EXPECTED_DIGEST" "$CI_SCOPE_DIGEST"
+  exit 0
+fi
 
 runtime_snapshot() {
   # Failure-only, unchanged read-only diagnostic previously embedded at apply.
@@ -490,8 +499,5 @@ if [[ "$SECOND_EXIT" -ne 0 ]]; then
   exit 2
 fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$SECOND"; then echo "NATIVE_RESULT=$SECOND" >&2; exit 2; fi
-
-echo 'NATIVE_PHASE=fresh-published-resume'
-"$NODE" "$SCRIPT_DIR/published-resume-acceptance.mjs" "$EXPECTED_DIGEST" "$CI_SCOPE_DIGEST"
 
 echo "DISPOSABLE_LAUNCHD_APPLY_UNINSTALL_PASS release_id=$RELEASE_ID release_digest=$EXPECTED_DIGEST runtime_uid=$RUNTIME_UID"

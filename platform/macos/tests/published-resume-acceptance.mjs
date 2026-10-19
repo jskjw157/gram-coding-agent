@@ -1,7 +1,7 @@
 // Destructive synthetic fixture setup ONLY in the disposable hosted CI VM.
 // NEVER use this setup script to repair an actual installation. Production
 // recovery lives in published-resume.ts and never resets private data.
-import { lstat, readFile, rm, mkdir, chown, chmod, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -41,28 +41,12 @@ const [
   { inspectMacAccount },
   { inspectMacRegistry, inspectMacPorts },
   files,
-  { createNativePeerProof },
-  { coreStartIdentity, CoreRegistrationStore },
-  { ExecutionLeaseStore },
-  { inspectRuntimeDirectories },
-  { createExecutionFilesAt },
-  { createCoreProcessFilesAt },
-  { createRuntimeStores },
-  { createTrustedFiles },
 ] = await Promise.all([
   load('a-system-sources.js'),
   load('a-native-storage.js'),
   load('adapters/macos-inspection.js'),
   load('adapters/macos-service-probes.js'),
   load('adapters/install-files.js'),
-  load('adapters/owned-process.js'),
-  load('core-registration.js'),
-  load('execution-lease.js'),
-  load('adapters/runtime-directories.js'),
-  load('adapters/execution-files.js'),
-  load('adapters/core-process-files.js'),
-  load('adapters/runtime-stores.js'),
-  load('adapters/trusted-files.js'),
 ]);
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 if (sha(await readFile(`${release}/release.json`)) !== expectedDigest) throw new Error('CI_RELEASE_DRIFT');
@@ -101,47 +85,6 @@ for (const kind of ['configuration', 'manifest', 'journal', 'core', 'tunnel']) {
     throw new Error('CI_NOT_UNINSTALLED');
 }
 const layout = { anchor: '/', relative: root.slice(1), ownerUid: 0 };
-const directories = await inspectRuntimeDirectories(layout, account.uid, acl, new AbortController().signal);
-const execution = new ExecutionLeaseStore(createExecutionFilesAt(directories.runPolicy));
-const held = await execution.read('core');
-const history = await createRuntimeStores(directories).lifecycle.read('core');
-const registration = await new CoreRegistrationStore(createCoreProcessFilesAt(directories.runPolicy), execution).read();
-if (
-  held.state !== 'FREE' ||
-  held.releaseDigest !== expectedDigest ||
-  history.history.activeAttempt !== null ||
-  history.history.blocked ||
-  !registration ||
-  registration.child.uid !== account.uid ||
-  held.revision !== registration.executionRevision + 1 ||
-  held.token !== registration.executionToken ||
-  held.generation !== registration.child.generation ||
-  history.history.lastGeneration !== registration.child.generation
-)
-  throw new Error('CI_PRIOR_NOT_CLOSED');
-const releaseFiles = createTrustedFiles('/', 0, acl, `${root.slice(1)}/releases/${config.releaseId}`);
-const releaseManifest = JSON.parse(await readFile(`${release}/release.json`, 'utf8'));
-for (const name of ['bin/node', 'bin/peer-owner']) {
-  const entry = releaseManifest.files.find((value) => value.path === name);
-  if (!entry || (await releaseFiles.hash(name, 256 * 1024 * 1024)) !== entry.sha256)
-    throw new Error('CI_PROOF_BINARY_DRIFT');
-}
-const executable = await lstat(`${release}/bin/node`, { bigint: true });
-const start = coreStartIdentity(registration.child.startIdentity);
-const peer = createNativePeerProof(`${release}/bin/peer-owner`);
-if (
-  (await peer.current(
-    {
-      pid: registration.child.pid,
-      uid: account.uid,
-      startSec: start.sec,
-      startUsec: start.usec,
-      executable: { dev: executable.dev, ino: executable.ino },
-    },
-    new AbortController().signal,
-  )) !== 'FOREIGN'
-)
-  throw new Error('CI_PRIOR_CHILD_NOT_STOPPED');
 const keyMetadata = async () => {
   const stat = await lstat(`${root}/secrets/mcp-internal-secret`, { bigint: true });
   if (
@@ -157,17 +100,18 @@ const keyMetadata = async () => {
     .join(':');
 };
 const keyBefore = await keyMetadata();
-// Prior account, root and private directories were created by this same
-// disposable acceptance script. Remove only its closed synthetic records/DB.
+// This separate CI VM has just created the account/scope. Refuse any
+// pre-existing private data; no private record or database reset is needed.
 for (const name of ['run', 'state', 'logs']) {
   const path = `${root}/${name}`;
   const stat = await lstat(path);
-  if (!stat.isDirectory() || stat.uid !== account.uid || (stat.mode & 0o7777) !== 0o700)
-    throw new Error('CI_PRIVATE_SCOPE');
-  await rm(path, { recursive: true });
-  await mkdir(path, { mode: 0o700 });
-  await chown(path, account.uid, account.gid);
-  await chmod(path, 0o700);
+  if (
+    !stat.isDirectory() ||
+    stat.uid !== account.uid ||
+    (stat.mode & 0o7777) !== 0o700 ||
+    (await readdir(path)).length !== 0
+  )
+    throw new Error('CI_PRIVATE_NOT_EMPTY');
 }
 const configBytes = files.canonicalConfigBytes(config);
 const core = files.expectedPlistBytes(config, 'core');
@@ -202,7 +146,27 @@ const childCode = await readFile(new URL('published-resume-prepare-only.mjs', im
 const prepared = await new Promise((resolve) => {
   const child = execFile(
     '/usr/bin/sudo',
-    ['-n', '-u', 'gram-agent', '-g', 'staff', '--', `${release}/bin/node`, '--input-type=module', '-'],
+    [
+      '-n',
+      '-u',
+      'gram-agent',
+      '-g',
+      'staff',
+      '--',
+      '/usr/bin/env',
+      '-i',
+      'GITHUB_ACTIONS=true',
+      `RUNNER_TEMP=${process.env.RUNNER_TEMP}`,
+      'PATH=/usr/bin:/bin:/usr/sbin:/sbin',
+      'HOME=/var/empty',
+      'USER=gram-agent',
+      'LOGNAME=gram-agent',
+      'LC_ALL=C',
+      'LANG=C',
+      `${release}/bin/node`,
+      '--input-type=module',
+      '-',
+    ],
     {
       encoding: 'utf8',
       timeout: 85000,
@@ -219,15 +183,33 @@ const prepared = await new Promise((resolve) => {
         LANG: 'C',
       },
     },
-    (error, stdout) => {
+    (error, stdout, stderr) => {
       try {
         const value = JSON.parse(stdout);
+        process.stdout.write(
+          'CI_PREPARE_DIAG ' +
+            JSON.stringify({ prepared: value.prepared === true, exit: value.exit, commandOk: !error, ciGuard: false }) +
+            '\n',
+        );
         resolve(!error && value.prepared === true && value.exit === 0);
       } catch {
+        process.stdout.write(
+          'CI_PREPARE_DIAG ' +
+            JSON.stringify({
+              prepared: false,
+              exit: Number.isInteger(error?.code) ? error.code : null,
+              commandOk: !error,
+              ciGuard: stderr.trim() === 'CI_ONLY',
+            }) +
+            '\n',
+        );
         resolve(false);
       }
     },
   );
+  child.stdin.on('error', () => {
+    /* callback reports a bounded failed child */
+  });
   child.stdin.end(childCode);
 });
 if (!prepared) throw new Error('CI_PREPARE_ONLY_FAILED');
