@@ -25,9 +25,9 @@ REPO="$(cd "$SCRIPT_DIR/../.." && /bin/pwd -P)"
 NODE_BIN="$(command -v node)"
 PNPM_BIN="$(command -v pnpm)"
 [[ -x "$NODE_BIN" && -x "$PNPM_BIN" ]] || { echo 'BUILD_TOOL_UNAVAILABLE' >&2; exit 2; }
-[[ "$($NODE_BIN -p 'process.platform')" == 'darwin' ]] || { echo 'WRONG_NODE_PLATFORM' >&2; exit 2; }
-[[ "$($NODE_BIN -p 'process.arch')" == 'arm64' ]] || { echo 'WRONG_NODE_ARCH' >&2; exit 2; }
-[[ "$($NODE_BIN -p 'process.versions.node.split(`.`)[0]')" == '24' ]] || { echo 'WRONG_NODE_MAJOR' >&2; exit 2; }
+[[ "$("$NODE_BIN" -p 'process.platform')" == 'darwin' ]] || { echo 'WRONG_NODE_PLATFORM' >&2; exit 2; }
+[[ "$("$NODE_BIN" -p 'process.arch')" == 'arm64' ]] || { echo 'WRONG_NODE_ARCH' >&2; exit 2; }
+[[ "$("$NODE_BIN" -p 'process.versions.node.split(`.`)[0]')" == '24' ]] || { echo 'WRONG_NODE_MAJOR' >&2; exit 2; }
 
 SOURCE_COMMIT="$(/usr/bin/git -C "$REPO" rev-parse HEAD)"
 [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo 'INVALID_SOURCE_COMMIT' >&2; exit 2; }

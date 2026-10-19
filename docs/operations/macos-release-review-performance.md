@@ -210,3 +210,8 @@ claim that the default factory's entire failure path was exercised. A fresh
 production factory then must complete owned Core health, exact stopped proof and
 COMMITTED publication on the same pristine installation without another reset.
 Neither CI setup/cleanup script may be run on a user's installed Mac.
+
+The external volume path contains a space. Test aliases now decode file URLs
+with `fileURLToPath`, and release assembly quotes the resolved Node executable
+for its three host/version probes. The first external assembly attempt failed
+before any build or installation because that executable was split at the space.
