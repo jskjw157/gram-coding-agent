@@ -80,6 +80,14 @@ function verifyLinks(inventory: InventoryEntry[]): void {
  * Tool metadata is not runtime tool-surface proof; Task 4 must check that too.
  */
 export async function inspectRelease(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles, signal?: AbortSignal): Promise<ReleaseEvidence> {
+  try {
+    if (signal?.aborted || !digest(expectedDigest) || parseConfig(config).releaseDigest !== expectedDigest) refuse();
+    const use = (scoped: ReleaseFiles) => inspectReleaseContents(config, expectedDigest, scoped, signal);
+    return files.withReadSession === undefined ? await use(files) : await files.withReadSession(use, signal);
+  } catch { return refuse(); }
+}
+
+async function inspectReleaseContents(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles, signal?: AbortSignal): Promise<ReleaseEvidence> {
   const checkActive = () => { if (signal?.aborted) refuse(); };
   try {
     checkActive();
