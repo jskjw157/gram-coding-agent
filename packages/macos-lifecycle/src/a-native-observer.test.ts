@@ -13,9 +13,15 @@ const fixture = vi.hoisted(() => ({
   changeLease: false,
   changeRegistration: false,
   loseProcess: false,
+  inode: 1n,
+  device: 1n,
+  requireExactIdentity: false,
 }));
 vi.mock('node:fs/promises', () => ({
-  lstat: async () => ({ isFile: () => true, uid: 0, nlink: 1, mode: 0o755, dev: 1, ino: 1 }),
+  lstat: async (_path: string, options?: { bigint?: boolean }) =>
+    options?.bigint
+      ? { isFile: () => true, uid: 0n, nlink: 1n, mode: 0o755n, dev: fixture.device, ino: fixture.inode }
+      : { isFile: () => true, uid: 0, nlink: 1, mode: 0o755, dev: Number(fixture.device), ino: Number(fixture.inode) },
 }));
 vi.mock('./adapters/macos-inspection.js', () => ({
   inspectMacAccount: async () => ({ name: 'gram-agent', admin: false, uid: 550, gid: 550 }),
@@ -24,7 +30,9 @@ vi.mock('./a-system-sources.js', () => ({
   createInstalledRuntimeReviewSource: () => ({
     read: async () => ({
       config: { tunnel: { enabled: false }, releaseId: 'release', releaseDigest: fixture.releaseDigest },
-      configDigest: fixture.configDigest, peerOwnerDigest: 'hash', nodeDigest: 'hash',
+      configDigest: fixture.configDigest,
+      peerOwnerDigest: 'hash',
+      nodeDigest: 'hash',
     }),
   }),
 }));
@@ -37,14 +45,22 @@ vi.mock('./adapters/execution-files.js', async () => {
     createExecutionFilesAt: () => ({
       async read() {
         fixture.executionReads++;
-        return [encodeExecution({
-          schemaVersion: 1, role: 'core', state: 'HELD',
-          revision: fixture.changeLease && fixture.executionReads > 1 ? 3 : 1,
-          token: '12345678-1234-4234-8234-123456789abc', generation: 'gen1',
-          releaseDigest: fixture.releaseDigest, configDigest: fixture.configDigest,
-        })];
+        return [
+          encodeExecution({
+            schemaVersion: 1,
+            role: 'core',
+            state: 'HELD',
+            revision: fixture.changeLease && fixture.executionReads > 1 ? 3 : 1,
+            token: '12345678-1234-4234-8234-123456789abc',
+            generation: 'gen1',
+            releaseDigest: fixture.releaseDigest,
+            configDigest: fixture.configDigest,
+          }),
+        ];
       },
-      async compareAndSwap() { throw new Error('UNEXPECTED_WRITE'); },
+      async compareAndSwap() {
+        throw new Error('UNEXPECTED_WRITE');
+      },
     }),
   };
 });
@@ -55,15 +71,27 @@ vi.mock('./adapters/core-process-files.js', async () => {
       async read() {
         fixture.registrationReads++;
         if (fixture.registrationReads > 1) vi.setSystemTime(fixture.completedAtMs);
-        return [encodeCoreRegistration({
-          schemaVersion: 1, role: 'core', configDigest: fixture.configDigest,
-          executionRevision: 1, executionToken: '12345678-1234-4234-8234-123456789abc',
-          child: { role: 'core', pid: 42, startIdentity: '1.1',
-            generation: fixture.changeRegistration && fixture.registrationReads > 1 ? 'other' : 'gen1',
-            releaseDigest: fixture.releaseDigest, uid: 550 },
-        })];
+        return [
+          encodeCoreRegistration({
+            schemaVersion: 1,
+            role: 'core',
+            configDigest: fixture.configDigest,
+            executionRevision: 1,
+            executionToken: '12345678-1234-4234-8234-123456789abc',
+            child: {
+              role: 'core',
+              pid: 42,
+              startIdentity: '1.1',
+              generation: fixture.changeRegistration && fixture.registrationReads > 1 ? 'other' : 'gen1',
+              releaseDigest: fixture.releaseDigest,
+              uid: 550,
+            },
+          }),
+        ];
       },
-      async compareAndSwap() { throw new Error('UNEXPECTED_WRITE'); },
+      async compareAndSwap() {
+        throw new Error('UNEXPECTED_WRITE');
+      },
     }),
   };
 });
@@ -72,8 +100,13 @@ vi.mock('./adapters/trusted-files.js', () => ({
 }));
 vi.mock('./adapters/owned-process.js', () => ({
   createNativePeerProof: () => ({
-    async current() {
+    async current(identity: { executable: { dev: bigint; ino: bigint } }) {
       fixture.proofCalls++;
+      if (
+        fixture.requireExactIdentity &&
+        (identity.executable.dev !== fixture.device || identity.executable.ino !== fixture.inode)
+      )
+        return 'FOREIGN';
       return fixture.loseProcess && fixture.proofCalls > 1 ? 'UNKNOWN' : 'OWNED';
     },
   }),
@@ -83,17 +116,35 @@ vi.mock('./adapters/runtime-stores.js', async () => {
   const { encodeStatus } = await import('./telemetry.js');
   return {
     createRuntimeStores: () => ({
-      telemetry: new TelemetryStore({
-        async read() {
-          return [encodeStatus({ schemaVersion: 1, role: 'core', generation: 'gen1',
-            releaseDigest: fixture.releaseDigest, code: 'OK', state: 'LOCAL_CORE_HEALTHY',
-            observedAtMs: fixture.observedAtMs, attemptCount: 0 })];
+      telemetry: new TelemetryStore(
+        {
+          async read() {
+            return [
+              encodeStatus({
+                schemaVersion: 1,
+                role: 'core',
+                generation: 'gen1',
+                releaseDigest: fixture.releaseDigest,
+                code: 'OK',
+                state: 'LOCAL_CORE_HEALTHY',
+                observedAtMs: fixture.observedAtMs,
+                attemptCount: 0,
+              }),
+            ];
+          },
+          async compareAndSwap() {
+            throw new Error('UNEXPECTED_WRITE');
+          },
         },
-        async compareAndSwap() { throw new Error('UNEXPECTED_WRITE'); },
-      }, {
-        async read() { throw new Error('UNEXPECTED_EVENT_READ'); },
-        async compareAndSwap() { throw new Error('UNEXPECTED_WRITE'); },
-      }),
+        {
+          async read() {
+            throw new Error('UNEXPECTED_EVENT_READ');
+          },
+          async compareAndSwap() {
+            throw new Error('UNEXPECTED_WRITE');
+          },
+        },
+      ),
     }),
   };
 });
@@ -107,9 +158,19 @@ beforeEach(() => {
   Object.defineProperty(process, 'arch', { value: 'arm64', configurable: true });
   vi.useFakeTimers();
   vi.setSystemTime(60_000);
-  Object.assign(fixture, { executionReads: 0, registrationReads: 0, proofCalls: 0,
-    observedAtMs: 40_000, completedAtMs: 60_002,
-    changeLease: false, changeRegistration: false, loseProcess: false });
+  Object.assign(fixture, {
+    executionReads: 0,
+    registrationReads: 0,
+    proofCalls: 0,
+    observedAtMs: 40_000,
+    completedAtMs: 60_002,
+    changeLease: false,
+    changeRegistration: false,
+    loseProcess: false,
+    inode: 1n,
+    device: 1n,
+    requireExactIdentity: false,
+  });
 });
 afterEach(() => {
   if (platform) Object.defineProperty(process, 'platform', platform);
@@ -127,6 +188,14 @@ describe('native installed health at completion of all asynchronous guards', () 
     expect(fixture.executionReads).toBe(2);
     expect(fixture.registrationReads).toBe(2);
     expect(Date.now()).toBe(60_002);
+  });
+
+  it('preserves native device/inode identity above the Number precision limit', async () => {
+    fixture.device = 9007199254740995n;
+    fixture.inode = 9007199254740993n;
+    fixture.requireExactIdentity = true;
+    expect(await observer().healthy('core', signal())).toBe(true);
+    expect(fixture.proofCalls).toBe(2);
   });
 
   it('refuses status that expires during the final guard, despite unchanged live ownership', async () => {
@@ -156,7 +225,8 @@ describe('native installed health at completion of all asynchronous guards', () 
   });
 
   it.each(['changeLease', 'changeRegistration', 'loseProcess'] as const)(
-    'continues refusing changed ownership evidence: %s', async change => {
+    'continues refusing changed ownership evidence: %s',
+    async (change) => {
       fixture[change] = true;
       expect(await observer().healthy('core', signal())).toBe(false);
     },

@@ -50,7 +50,7 @@ describe('installed health observation deadline', () => {
     void work.then(value => { result = value; });
     const signal = await entered.promise;
     try {
-      await vi.advanceTimersByTimeAsync(179_999);
+      await vi.advanceTimersByTimeAsync(239_999);
       expect(result).toBeUndefined();
       expect(signal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
@@ -83,7 +83,7 @@ describe('installed health observation deadline', () => {
       await vi.advanceTimersByTimeAsync(200);
       const signal = await entered.promise;
       expect(signal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(79_800);
+      await vi.advanceTimersByTimeAsync(139_800);
       expect(signal.aborted).toBe(true);
       expect(result).toBe(false);
       expect(probes.healthy).toHaveBeenCalledTimes(2);
@@ -105,7 +105,7 @@ describe('installed health observation deadline', () => {
     const work = createSystemServiceHandle(async () => true).ownedHealthy('core');
     const signal = await entered.promise;
     try {
-      await vi.advanceTimersByTimeAsync(60_000 + 60_000);
+      await vi.advanceTimersByTimeAsync(120_000 + 60_000);
       expect(signal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(10_000);
       ready.resolve(true);
@@ -113,7 +113,7 @@ describe('installed health observation deadline', () => {
       expect(probes.healthy).toHaveBeenCalledTimes(1);
     } finally {
       ready.resolve(false);
-      await vi.advanceTimersByTimeAsync(180_000);
+      await vi.advanceTimersByTimeAsync(240_000);
       await work;
     }
   });

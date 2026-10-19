@@ -80,6 +80,14 @@ function verifyLinks(inventory: InventoryEntry[]): void {
  * Tool metadata is not runtime tool-surface proof; Task 4 must check that too.
  */
 export async function inspectRelease(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles, signal?: AbortSignal): Promise<ReleaseEvidence> {
+  try {
+    if (signal?.aborted || !digest(expectedDigest) || parseConfig(config).releaseDigest !== expectedDigest) refuse();
+    const use = (scoped: ReleaseFiles) => inspectReleaseContents(config, expectedDigest, scoped, signal);
+    return files.withReadSession === undefined ? await use(files) : await files.withReadSession(use, signal);
+  } catch { return refuse(); }
+}
+
+async function inspectReleaseContents(config: ServiceConfig, expectedDigest: string, files: ReleaseFiles, signal?: AbortSignal): Promise<ReleaseEvidence> {
   const checkActive = () => { if (signal?.aborted) refuse(); };
   try {
     checkActive();
@@ -108,7 +116,7 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
     const lock = map.get('pnpm-lock.yaml');
     if (!lock || !('sha256' in lock) || lock.sha256 !== m.lockDigest) refuse();
     checkActive();
-    const before = await files.inventory();
+    const before = await files.inventory(signal);
     checkActive();
     const leaves = before.filter(e => e.kind !== 'directory' && e.path !== 'release.json');
     if (leaves.length !== entries.length) refuse();
@@ -139,7 +147,7 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
     const hashes = await Promise.allSettled([hashWorker(), hashWorker()]);
     checkActive();
     if (failed || hashes.some(result => result.status === 'rejected')) refuse();
-    const after = await files.inventory();
+    const after = await files.inventory(signal);
     checkActive();
     if (JSON.stringify(after) !== JSON.stringify(before)) refuse();
     const finalBytes = await files.read('release.json', 1024 * 1024);

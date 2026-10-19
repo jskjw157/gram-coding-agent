@@ -1,9 +1,10 @@
 import { root, type Role } from './contracts.js';
 import { abortable } from './health-probe.js';
-import { RELEASE_REVIEW_TIMEOUT_MS } from './release-review-budget.js';
+import { SUPERVISOR_PREPARE_TIMEOUT_MS } from './release-review-budget.js';
 import type { ServiceSession } from './service-session.js';
 export interface SupervisorInvocation { role: Role; configPath: string }
-/** Trusted local bootstrap. prepare must not spawn, mutate or retain resources.
+/** Trusted local bootstrap. prepare must not spawn or retain runtime resources.
+ * Installed preparation may provision missing create-only runtime records.
  * It supplies independently established trust, not modules named by argv/env.
  */
 export interface SupervisorBootstrap {
@@ -55,7 +56,7 @@ export async function runSupervisorEntry(argv: readonly string[], bootstrap?: Su
     signals.on('SIGINT', stop); signals.on('SIGTERM', stop);
     if (controller.signal.aborted) return 0;
     const deadline = new AbortController(); let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; deadline.abort(); }, RELEASE_REVIEW_TIMEOUT_MS);
+    const timer = setTimeout(() => { timedOut = true; deadline.abort(); }, SUPERVISOR_PREPARE_TIMEOUT_MS);
     const signal = AbortSignal.any([controller.signal, deadline.signal]);
     let session: ServiceSession | null;
     try { session = await abortable(Promise.resolve(prepare(invocation, signal)), signal); }

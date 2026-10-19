@@ -1,5 +1,5 @@
 import { chmod, readFile, rm, unlink, writeFile } from 'node:fs/promises';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createInstalledRuntimeReviewSource,
   createRuntimeCoreCredentials,
@@ -15,13 +15,14 @@ import {
   FIXED_FILES,
   shaBytes,
 } from './adapters/install-files.js';
-import { decodeExecution } from './execution-lease.js';
+import { ExecutionLeaseStore, decodeExecution } from './execution-lease.js';
 import { decodeHistory, LifecycleStore } from './lifecycle-store.js';
 import { createCircuitFilesAt } from './adapters/service-files.js';
 import { fixture } from './test-support/runtime/fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.useRealTimers(); vi.restoreAllMocks();
   for (const path of roots.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
@@ -72,6 +73,24 @@ describe('A fixed bootstrap trust sources', () => {
     });
 
     expect(await source.read(new AbortController().signal)).toEqual(f.review);
+  });
+
+  it('caps the complete installed source read while a configuration ACL read is unresolved', async () => {
+    const f = await installedFixture();
+    let enter!: () => void; const entered = new Promise<void>(done => { enter = done; });
+    let release!: (value: boolean) => void; const gate = new Promise<boolean>(done => { release = done; });
+    const source = createInstalledRuntimeReviewSource({ anchor: f.anchor, relative: 'installed',
+      ownerUid: f.uid, runtimeUid: f.uid, runtimeGid: f.gid,
+      acl: async () => { enter(); return gate; } });
+    vi.useFakeTimers();
+    const work = source.read(new AbortController().signal);
+    await entered;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await work).toBeNull(); expect(vi.getTimerCount()).toBe(0);
+    release(true);
+    // An already-dispatched read may unwind; no release review is authorized.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await work).toBeNull();
   });
 
   it('uses the core secret only inside the callback and rejects unsafe permissions', async () => {
@@ -175,6 +194,43 @@ describe('A fixed bootstrap trust sources', () => {
     expect(await provisioner.ensure(review, new AbortController().signal)).toBe(true);
     expect(await readFile(`${f.base}/run/core.execution.json`)).toEqual(executionBefore);
     expect(await readFile(`${f.base}/run/core.circuit.json`)).toEqual(circuitBefore);
+  });
+
+  it('does not create lifecycle history after an in-flight execution creation completes on cancellation', async () => {
+    const f = await installedFixture(); await unlink(`${f.base}/run/core.execution.json`);
+    await writePublishedJournal(f, null); const controller = new AbortController();
+    const initialize = ExecutionLeaseStore.prototype.initializeNew;
+    vi.spyOn(ExecutionLeaseStore.prototype, 'initializeNew').mockImplementation(async function(role) {
+      await initialize.call(this, role); controller.abort();
+    });
+    const provisioner = createRuntimeRecordProvisioner({ anchor: f.anchor, relative: 'installed',
+      ownerUid: f.uid, runtimeUid: f.uid, runtimeGid: f.gid, acl: f.acl });
+    expect(await provisioner.ensure(f.review, controller.signal)).toBe(false);
+    expect(decodeExecution(await readFile(`${f.base}/run/core.execution.json`))).toMatchObject({ state: 'FREE', revision: 0 });
+    await expect(readFile(`${f.base}/run/core.circuit.json`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it.each(['execution', 'lifecycle'] as const)('does not dispatch a %s CAS when directory revalidation observes cancellation', async kind => {
+    const f = await installedFixture(); await unlink(`${f.base}/run/core.execution.json`);
+    await writePublishedJournal(f, null); const controller = new AbortController(); let initializing = false;
+    if (kind === 'execution') {
+      const initialize = ExecutionLeaseStore.prototype.initializeNew;
+      vi.spyOn(ExecutionLeaseStore.prototype, 'initializeNew').mockImplementation(async function(role) {
+        initializing = true; return initialize.call(this, role);
+      });
+    } else {
+      const initialize = LifecycleStore.prototype.initializeNew;
+      vi.spyOn(LifecycleStore.prototype, 'initializeNew').mockImplementation(async function(role, now) {
+        initializing = true; return initialize.call(this, role, now);
+      });
+    }
+    const provisioner = createRuntimeRecordProvisioner({ anchor: f.anchor, relative: 'installed',
+      ownerUid: f.uid, runtimeUid: f.uid, runtimeGid: f.gid,
+      acl: async () => { if (initializing) controller.abort(); return true; } });
+    expect(await provisioner.ensure(f.review, controller.signal)).toBe(false);
+    expect(controller.signal.aborted).toBe(true);
+    const path = kind === 'execution' ? 'core.execution.json' : 'core.circuit.json';
+    await expect(readFile(`${f.base}/run/${path}`)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('does not manufacture missing history for an upgrade journal', async () => {

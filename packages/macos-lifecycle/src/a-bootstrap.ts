@@ -13,6 +13,7 @@ import {
 } from './reviewed-bootstrap.js';
 import type { SupervisorBootstrap, SupervisorInvocation } from './supervisor-entry.js';
 import { createSystemBootstrapSources, type InstalledRuntimeReviewSource } from './a-system-sources.js';
+import { runPreparePhase } from './prepare-phase.js';
 import type { RuntimeReview } from './runtime-review.js';
 import type { ReviewedTunnelProvider } from './tunnel-supervisor-runtime.js';
 
@@ -124,9 +125,9 @@ export function createAInstalledReviewedSupervisorBootstrap(
           || (invocation.role !== 'core' && invocation.role !== 'tunnel')
           || invocation.configPath !== configPath) return null;
 
-        const review = await reviewSource.read(signal);
+        const review = await runPreparePhase(signal, phase => reviewSource.read(phase));
         if (review === null || signal.aborted) return null;
-        const runtime = await bind(review, signal);
+        const runtime = await runPreparePhase(signal, phase => bind(review, phase));
         if (runtime === null || signal.aborted) return null;
 
         const actual = parseConfig(runtime.configuration);
@@ -161,7 +162,8 @@ export function createASystemSupervisorBootstrapFromFixedSources(): SupervisorBo
     review: sources.review,
     credentials: sources.credentials,
     bind: async (review, signal) => {
-      if (review === null || await sources.records.ensure(review, signal) !== true) return null;
+      if (signal.aborted || review === null
+        || await sources.records.ensure(review, signal) !== true || signal.aborted) return null;
       return bindReviewedCoreRuntime(review, sources.acl, signal);
     },
   });

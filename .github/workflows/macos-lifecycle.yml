@@ -123,6 +123,8 @@ jobs:
           bash -n platform/macos/provision-bootstrap.sh
           node --check platform/macos/stage-candidate-config.mjs
           node --check platform/macos/tests/native-runtime-snapshot.mjs
+          node --check platform/macos/tests/published-resume-acceptance.mjs
+          node --check platform/macos/tests/published-resume-prepare-only.mjs
           bash -n platform/macos/tests/disposable-launchd-apply.sh
       - name: Build independent bootstrap ACL helper on Apple Silicon
         if: runner.os == 'macOS'
@@ -240,6 +242,48 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/mac02"
           digest="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(typeof j.digest!=="string") process.exit(2); process.stdout.write(j.digest)' "$RUNNER_TEMP/core-release.json")"
-          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" /bin/bash \
+          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" /bin/bash \
             platform/macos/tests/disposable-launchd-apply.sh \
             "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/bootstrap-helper/file-acl" "$digest"
+
+  published-resume:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Build an isolated exact-head recovery fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "if(process.platform!=='darwin'||process.arch!=='arm64')process.exit(1)"
+          git worktree add --detach "$RUNNER_TEMP/mac-resume" HEAD
+          cd "$RUNNER_TEMP/mac-resume"
+          pnpm install --frozen-lockfile
+          python3 - <<'PY'
+          import pathlib, subprocess
+          before = subprocess.check_output(['git', 'show', 'HEAD:pnpm-lock.yaml'])
+          after = pathlib.Path('pnpm-lock.yaml').read_bytes()
+          empty = b'  packages/macos-lifecycle: {}\n\n'
+          assert after == before or (after.count(empty) == 1 and after.replace(empty, b'', 1) == before), 'unrelated lockfile change'
+          PY
+          git checkout -- pnpm-lock.yaml
+          mkdir -p "$RUNNER_TEMP/bootstrap-helper"
+          clang -std=c11 -O2 -Wall -Wextra -Werror platform/macos/native/file-acl.c -o "$RUNNER_TEMP/bootstrap-helper/file-acl"
+          bash platform/macos/assemble-core-release.sh "ci-resume-${GITHUB_SHA:0:12}" "$RUNNER_TEMP/resume-release" > "$RUNNER_TEMP/resume-release.json"
+      - name: Disposable native fresh-PUBLISHED recovery acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/mac-resume"
+          digest="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(typeof j.digest!=="string") process.exit(2); process.stdout.write(j.digest)' "$RUNNER_TEMP/resume-release.json")"
+          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" /bin/bash \
+            platform/macos/tests/disposable-launchd-apply.sh \
+            "$RUNNER_TEMP/resume-release" "$RUNNER_TEMP/bootstrap-helper/file-acl" "$digest" fresh-published

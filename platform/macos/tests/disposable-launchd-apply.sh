@@ -10,10 +10,13 @@ if [[ "${EUID:-$(/usr/bin/id -u)}" -ne 0 ]]; then
   echo 'ROOT_REQUIRED' >&2
   exit 77
 fi
-if [[ $# -ne 3 ]]; then
-  echo 'usage: disposable-launchd-apply.sh <sealed-release-dir> <independent-file-acl-helper> <expected-release-digest>' >&2
+if [[ $# -ne 3 && $# -ne 4 ]]; then
+  echo 'usage: disposable-launchd-apply.sh <sealed-release-dir> <independent-file-acl-helper> <expected-release-digest> [fresh-published]' >&2
   exit 64
 fi
+
+ACCEPTANCE_CASE="${4:-lifecycle}"
+[[ "$ACCEPTANCE_CASE" == lifecycle || "$ACCEPTANCE_CASE" == fresh-published ]] || exit 64
 
 SOURCE_RELEASE="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && /bin/pwd -P)"
@@ -26,13 +29,16 @@ TUNNEL_LABEL='com.haar.gram-agent.tunnel'
 CORE_PLIST="/Library/LaunchDaemons/$CORE_LABEL.plist"
 TUNNEL_PLIST="/Library/LaunchDaemons/$TUNNEL_LABEL.plist"
 CREATED_USER=0
+CREATED_ROOT=0
 
 cleanup() {
   set +e
+  if [[ "$CREATED_ROOT" -eq 1 ]]; then
   /bin/launchctl bootout "system/$TUNNEL_LABEL" >/dev/null 2>&1 || true
   /bin/launchctl bootout "system/$CORE_LABEL" >/dev/null 2>&1 || true
   /bin/rm -f "$CORE_PLIST" "$TUNNEL_PLIST"
   /bin/rm -rf "$ROOT"
+  fi
   if [[ "$CREATED_USER" -eq 1 ]]; then
     /usr/bin/dscl . -delete /Users/gram-agent >/dev/null 2>&1 || true
   fi
@@ -45,6 +51,19 @@ trap cleanup EXIT
 [[ "$EXPECTED_DIGEST" =~ ^[a-f0-9]{64}$ ]] || { echo 'INVALID_RELEASE_DIGEST' >&2; exit 2; }
 ACTUAL_DIGEST="$(/usr/bin/shasum -a 256 "$SOURCE_RELEASE/release.json" | /usr/bin/awk '{print $1}')"
 [[ "$ACTUAL_DIGEST" == "$EXPECTED_DIGEST" ]] || { echo 'RELEASE_DIGEST_MISMATCH' >&2; exit 2; }
+
+# Refuse existing scope before creating an account or arming owned cleanup.
+for target in "$ROOT" "$CORE_PLIST" "$TUNNEL_PLIST"; do
+  [[ ! -e "$target" && ! -L "$target" ]] || { echo 'FOREIGN_CI_SCOPE' >&2; exit 2; }
+done
+for label in "$CORE_LABEL" "$TUNNEL_LABEL"; do
+  set +e
+  job_output="$(/bin/launchctl print "system/$label" 2>&1)"
+  job_exit=$?
+  set -e
+  [[ "$job_exit" -eq 113 && "$job_output" == *"Could not find service \"$label\" in domain for system"* ]] || { echo 'FOREIGN_CI_JOB' >&2; exit 2; }
+done
+[[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ && "${GITHUB_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]] || { echo 'CI_RUN_ID_REQUIRED' >&2; exit 2; }
 
 if /usr/bin/dscl . -read /Users/gram-agent >/dev/null 2>&1; then
   echo 'FOREIGN_GRAM_AGENT_ACCOUNT' >&2
@@ -75,6 +94,9 @@ fi
 RELEASE_ID="$(/usr/bin/plutil -extract releaseId raw -o - "$SOURCE_RELEASE/release.json")"
 [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { echo 'INVALID_RELEASE_ID' >&2; exit 2; }
 DEST_RELEASE="$ROOT/releases/$RELEASE_ID"
+/bin/mkdir -p "$VENDOR_ROOT"
+/bin/mkdir "$ROOT"
+CREATED_ROOT=1
 /bin/mkdir -p "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap/bin" "$ROOT/run" "$ROOT/state" "$ROOT/secrets" "$ROOT/logs"
 /usr/sbin/chown root:wheel "$VENDOR_ROOT" "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
 /bin/chmod 0755 "$VENDOR_ROOT" "$ROOT" "$ROOT/releases" "$ROOT/config" "$ROOT/bootstrap" "$ROOT/bootstrap/bin"
@@ -100,6 +122,24 @@ NODE="$DEST_RELEASE/bin/node"
 OPERATOR="$DEST_RELEASE/packages/macos-lifecycle/dist/operator-cli.js"
 [[ -x "$NODE" && -f "$OPERATOR" ]] || { echo 'OPERATOR_MISSING' >&2; exit 2; }
 
+# Receipt created only after the absent-scope preflight and owned creation.
+CI_SCOPE_DIGEST="$("$NODE" --input-type=module - "$ROOT" "$RUNTIME_UID" "$EXPECTED_DIGEST" <<'CI_SCOPE_RECEIPT'
+import { writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+const bytes = JSON.stringify({ schemaVersion: 1, runId: process.env.GITHUB_RUN_ID,
+  runAttempt: process.env.GITHUB_RUN_ATTEMPT, nonce: randomUUID(),
+  runtimeUid: Number(process.argv[3]), releaseDigest: process.argv[4] }) + '\n';
+writeFileSync(process.argv[2] + '/config/ci-owned-scope.json', bytes, { mode: 0o600, flag: 'wx' });
+process.stdout.write(createHash('sha256').update(bytes).digest('hex'));
+CI_SCOPE_RECEIPT
+)"
+
+if [[ "$ACCEPTANCE_CASE" == fresh-published ]]; then
+  echo 'NATIVE_PHASE=fresh-published-resume'
+  "$NODE" "$SCRIPT_DIR/published-resume-acceptance.mjs" "$EXPECTED_DIGEST" "$CI_SCOPE_DIGEST"
+  exit 0
+fi
+
 runtime_snapshot() {
   # Failure-only, unchanged read-only diagnostic previously embedded at apply.
   # Stdin keeps the observation code readable in the synthetic runtime account.
@@ -117,7 +157,7 @@ import { writeSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const phases = { initial: 'INITIAL', 'post-apply': 'POST_APPLY',
-  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL', restart: 'RESTART', stop: 'STOP' };
+  'post-stop': 'POST_STOP', 'post-uninstall': 'POST_UNINSTALL', restart: 'RESTART', stop: 'STOP', start: 'START' };
 const failures = { preview: 'PREVIEW', assertion: 'ASSERTION' };
 const phase = Object.hasOwn(phases, process.argv[2]) ? phases[process.argv[2]] : null;
 const failure = Object.hasOwn(failures, process.argv[3]) ? failures[process.argv[3]] : null;
@@ -373,6 +413,8 @@ START_EXIT=$?
 set -e
 if [[ "$START_EXIT" -ne 0 ]]; then
   echo "NATIVE_OPERATOR_EXIT=$START_EXIT NATIVE_RESULT=$START" >&2
+  preview_snapshot start preview >&2
+  runtime_snapshot
   exit 2
 fi
 if ! "$NODE" -e 'const j=JSON.parse(process.argv[1]); if(j.result?.ok!==true||j.result?.code!=="OK") process.exit(2)' "$START"; then echo "NATIVE_RESULT=$START" >&2; exit 2; fi
