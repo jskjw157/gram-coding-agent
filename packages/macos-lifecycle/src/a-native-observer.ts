@@ -1,3 +1,4 @@
+import type { BigIntStats } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { root, type Role } from './contracts.js';
@@ -16,11 +17,7 @@ import {
   encodeCoreRegistration,
   matchesCoreExecution,
 } from './core-registration.js';
-import {
-  TunnelRegistrationStore,
-  encodeTunnelRegistration,
-  matchesTunnelExecution,
-} from './tunnel-registration.js';
+import { TunnelRegistrationStore, encodeTunnelRegistration, matchesTunnelExecution } from './tunnel-registration.js';
 import { createInstalledRuntimeReviewSource } from './a-system-sources.js';
 import type { RecordFiles } from './telemetry-store.js';
 import type { RoleObservation } from './cli-contracts.js';
@@ -31,15 +28,14 @@ export interface InstalledHealthObserver {
   healthy(role: Role, signal: AbortSignal): Promise<boolean>;
 }
 
-function sameExecutable(
-  stat: Awaited<ReturnType<typeof lstat>>,
-  ownerUid: number,
-): boolean {
-  return stat.isFile()
-    && stat.uid === ownerUid
-    && stat.nlink === 1
-    && (Number(stat.mode) & 0o6022) === 0
-    && (Number(stat.mode) & 0o111) !== 0;
+function sameExecutable(stat: BigIntStats, ownerUid: number): boolean {
+  return (
+    stat.isFile() &&
+    stat.uid === BigInt(ownerUid) &&
+    stat.nlink === 1n &&
+    (stat.mode & 0o6022n) === 0n &&
+    (stat.mode & 0o111n) !== 0n
+  );
 }
 
 export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObserver {
@@ -47,8 +43,13 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
 
   const observe = async (role: Role, signal: AbortSignal): Promise<RoleObservation> => {
     try {
-      if ((role !== 'core' && role !== 'tunnel') || signal.aborted
-        || process.platform !== 'darwin' || process.arch !== 'arm64') return unknown();
+      if (
+        (role !== 'core' && role !== 'tunnel') ||
+        signal.aborted ||
+        process.platform !== 'darwin' ||
+        process.arch !== 'arm64'
+      )
+        return unknown();
 
       const account = await inspectMacAccount();
       if (account === null || account.admin !== false || signal.aborted) return unknown();
@@ -72,52 +73,50 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
         signal,
       );
       const verify = directories.verify.bind(directories);
-      const guard = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
-        async read(candidate) {
-          await verify();
-          const value = await raw.read(candidate);
-          await verify();
-          return value;
-        },
-        async compareAndSwap(candidate, expected, slot, bytes) {
-          await verify();
-          await raw.compareAndSwap(candidate, expected, slot, bytes);
-          await verify();
-        },
-      });
+      const guard = (raw: RecordFiles): RecordFiles =>
+        Object.freeze<RecordFiles>({
+          async read(candidate) {
+            await verify();
+            const value = await raw.read(candidate);
+            await verify();
+            return value;
+          },
+          async compareAndSwap(candidate, expected, slot, bytes) {
+            await verify();
+            await raw.compareAndSwap(candidate, expected, slot, bytes);
+            await verify();
+          },
+        });
 
-      const execution = new ExecutionLeaseStore(
-        guard(createExecutionFilesAt(directories.runPolicy)),
-      );
+      const execution = new ExecutionLeaseStore(guard(createExecutionFilesAt(directories.runPolicy)));
       const coreRegistration = new CoreRegistrationStore(
         guard(createCoreProcessFilesAt(directories.runPolicy)),
         execution,
       );
       const tunnelRegistration = review.config.tunnel.enabled
-        ? new TunnelRegistrationStore(
-          guard(createTunnelProcessFilesAt(directories.runPolicy)),
-          execution,
-        )
+        ? new TunnelRegistrationStore(guard(createTunnelProcessFilesAt(directories.runPolicy)), execution)
         : null;
       const stores = createRuntimeStores(directories);
 
       const held = await execution.read(role);
-      if (held.state !== 'HELD'
-        || held.releaseDigest !== review.config.releaseDigest
-        || held.configDigest !== review.configDigest) return unknown();
+      if (
+        held.state !== 'HELD' ||
+        held.releaseDigest !== review.config.releaseDigest ||
+        held.configDigest !== review.configDigest
+      )
+        return unknown();
 
-      const registration = role === 'core'
-        ? await coreRegistration.read()
-        : await tunnelRegistration?.read() ?? null;
+      const registration =
+        role === 'core' ? await coreRegistration.read() : ((await tunnelRegistration?.read()) ?? null);
       if (registration === null) return unknown();
-      const matched = role === 'core'
-        ? registration.role === 'core' && matchesCoreExecution(registration, held)
-        : registration.role === 'tunnel' && matchesTunnelExecution(registration, held);
+      const matched =
+        role === 'core'
+          ? registration.role === 'core' && matchesCoreExecution(registration, held)
+          : registration.role === 'tunnel' && matchesTunnelExecution(registration, held);
       if (!matched) return unknown();
 
-      const registrationBytes = role === 'core'
-        ? encodeCoreRegistration(registration)
-        : encodeTunnelRegistration(registration);
+      const registrationBytes =
+        role === 'core' ? encodeCoreRegistration(registration) : encodeTunnelRegistration(registration);
       const executionBytes = encodeExecution(held);
 
       const releasePrefix = `${root.slice(1)}/releases/${review.config.releaseId}`;
@@ -130,18 +129,20 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
       if (signal.aborted) return unknown();
 
       const helperPath = join(root, 'releases', review.config.releaseId, 'bin', 'peer-owner');
-      const helperStat = await lstat(helperPath);
-      if (!sameExecutable(helperStat, 0)
-        || await releaseFiles.hash('bin/peer-owner', 256 * 1024 * 1024) !== review.peerOwnerDigest) {
+      const helperStat = await lstat(helperPath, { bigint: true });
+      if (
+        !sameExecutable(helperStat, 0) ||
+        (await releaseFiles.hash('bin/peer-owner', 256 * 1024 * 1024)) !== review.peerOwnerDigest
+      ) {
         return unknown();
       }
 
       const executableRelative = role === 'core' ? 'bin/node' : 'bin/tunnel-client';
       const executablePath = join(root, 'releases', review.config.releaseId, executableRelative);
-      const executableStat = await lstat(executablePath);
+      const executableStat = await lstat(executablePath, { bigint: true });
       if (!sameExecutable(executableStat, 0)) return unknown();
-      if (role === 'core'
-        && await releaseFiles.hash('bin/node', 256 * 1024 * 1024) !== review.nodeDigest) return unknown();
+      if (role === 'core' && (await releaseFiles.hash('bin/node', 256 * 1024 * 1024)) !== review.nodeDigest)
+        return unknown();
 
       const start = coreStartIdentity(registration.child.startIdentity);
       const proof = createNativePeerProof(helperPath);
@@ -150,36 +151,35 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
         uid: registration.child.uid,
         startSec: start.sec,
         startUsec: start.usec,
-        executable: Object.freeze({ dev: BigInt(executableStat.dev), ino: BigInt(executableStat.ino) }),
+        executable: Object.freeze({ dev: executableStat.dev, ino: executableStat.ino }),
       });
-      if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return unknown();
+      if ((await proof.current(identity, signal)) !== 'OWNED' || signal.aborted) return unknown();
 
       const currentIdentity: StatusIdentity = Object.freeze({
         role,
         generation: registration.child.generation,
         releaseDigest: registration.child.releaseDigest,
       });
-      const status: ServiceStatus | null = await stores.telemetry.readStatus(
-        role,
-        currentIdentity,
-        Date.now,
-      );
+      const status: ServiceStatus | null = await stores.telemetry.readStatus(role, currentIdentity, Date.now);
       if (status === null) return unknown();
 
-      if (await proof.current(identity, signal) !== 'OWNED' || signal.aborted) return unknown();
+      if ((await proof.current(identity, signal)) !== 'OWNED' || signal.aborted) return unknown();
 
       const afterExecution = await execution.read(role);
       if (!encodeExecution(afterExecution).equals(executionBytes)) return unknown();
-      const afterRegistration = role === 'core'
-        ? await coreRegistration.read()
-        : await tunnelRegistration?.read() ?? null;
+      const afterRegistration =
+        role === 'core' ? await coreRegistration.read() : ((await tunnelRegistration?.read()) ?? null);
       if (afterRegistration === null) return unknown();
-      const afterRegistrationBytes = role === 'core'
-        ? afterRegistration.role === 'core' ? encodeCoreRegistration(afterRegistration) : null
-        : afterRegistration.role === 'tunnel' ? encodeTunnelRegistration(afterRegistration) : null;
-      if (afterRegistrationBytes === null
-        || !afterRegistrationBytes.equals(registrationBytes)
-        || signal.aborted) return unknown();
+      const afterRegistrationBytes =
+        role === 'core'
+          ? afterRegistration.role === 'core'
+            ? encodeCoreRegistration(afterRegistration)
+            : null
+          : afterRegistration.role === 'tunnel'
+            ? encodeTunnelRegistration(afterRegistration)
+            : null;
+      if (afterRegistrationBytes === null || !afterRegistrationBytes.equals(registrationBytes) || signal.aborted)
+        return unknown();
 
       // The final ownership/record guards are asynchronous. Evidence must still
       // be fresh when they complete, including after a wall-clock rollback.
@@ -199,11 +199,11 @@ export function createInstalledHealthObserver(acl: AclProbe): InstalledHealthObs
     async healthy(role: Role, signal: AbortSignal): Promise<boolean> {
       const observation = await observe(role, signal);
       const status = observation.status as ServiceStatus | null;
-      return status !== null
-        && status.code === 'OK'
-        && (role === 'core'
-          ? status.state === 'LOCAL_CORE_HEALTHY'
-          : status.state === 'TRANSPORT_READY');
+      return (
+        status !== null &&
+        status.code === 'OK' &&
+        (role === 'core' ? status.state === 'LOCAL_CORE_HEALTHY' : status.state === 'TRANSPORT_READY')
+      );
     },
   });
 }

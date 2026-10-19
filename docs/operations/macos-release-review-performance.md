@@ -48,8 +48,8 @@ handles close on success, refusal and cancellation.
 Cancellation now reaches both inventories, checks at walk boundaries, and stops
 subsequent dispatch once observed.
 The two hash workers, both complete inventories, all content hashes and the final
-manifest read remain required. No production timeout or native probe deadline
-has been increased. No cache retains open descriptors across independent reads.
+manifest read remain required. The inventory optimization itself does not
+change deadlines; the later preparation budget correction is described below. No cache retains open descriptors across independent reads.
 
 ## Actual Mac state and safe resumption
 
@@ -125,8 +125,8 @@ The optimized adapter passed a full read-only native ACL review in 4,819 ms:
 verdicts. This ran as ordinary UID 501 and grants no runtime authority. A complete
 prepare-only run in an owned external fixture passed in 13,712 ms (review 5,727,
 record provisioning 884, binding 5,961), with no session run or credential use.
-No deadline was raised. These results supersede the earlier timing refusal for
-the current verification environment; they do not prove the exact cause of the
+No deadline was raised for those historical measurements. They superseded
+the earlier timing refusal under that verification environment; they do not prove the exact cause of the
 original installation failure or establish actual UID 550 startup readiness.
 
 The new internal recovery candidate is `resumeFreshPublished` with the fixed
@@ -185,8 +185,8 @@ normal Core startup remain normal application work, not a recovery reset.
 
 ## Candidate validation and CI scope
 
-Final full lint, typecheck, build and 1,511 tests across 134 suites passed
-locally after the port-drain addition. Never-settling proof reads, uncertain
+Before the preparation budget correction, full lint, typecheck, build and
+1,511 tests across 134 suites passed locally after the port-drain addition. Never-settling proof reads, uncertain
 journal readback, lock cleanup and refusal/compensation paths have regression
 coverage. Exact-head CI is recorded in the PR; local timings are evidence for
 this environment only.
@@ -195,7 +195,7 @@ A separate external synthetic deployment also used the unchanged **installed
 old sealed implementation**, including its original review adapter. Preparation
 passed in 15,567 ms (review 6,530; provisioning 947; binding 6,980), 5,688 native
 ACL calls, no negative verdicts and no session/credential use. Both old and new
-code fit the existing budgets under the current load. Neither result attributes
+code fit the existing budgets under that measurement load. Neither result attributes
 the original failure solely to the adapter or predicts behavior under all loads.
 
 Disposable CI keeps the existing apply/start/restart/stop/uninstall acceptance.
@@ -222,4 +222,50 @@ at the prepare-only child in the appended recovery fixture. Required CI guard
 environment was provided to sudo's parent and could be removed by sudo's reset.
 The fixture now uses a fixed `sudo ... /usr/bin/env -i ... node` vector and emits
 bounded preparation diagnostics. Recovery runs as a separate job so its results
-are distinct from normal lifecycle acceptance. Production deadlines are unchanged.
+are distinct from normal lifecycle acceptance. This fixture split itself does
+not alter production deadlines.
+
+The later normal-start CI returned HEALTH_UNKNOWN without a detailed runtime
+snapshot. A synthetic native-proof regression independently reproduced precision
+loss in the observer: numeric lstat rounded a device/inode above 2^53 before
+conversion to bigint. The observer now requests bigint stat values directly,
+preserving exact ownership evidence. This is a proven correctness fix, not a
+claim that it explains that CI failure. The start failure branch now collects
+the existing bounded read-only snapshots before disposable cleanup.
+
+
+## Preparation budget correction
+
+A later external prepare-only run using the sealed a75fa99 bundle passed source
+review in 27,730 ms and record provisioning in 4,412 ms. Binding consumed another
+27,854 ms before the **combined** 60-second preparation timer cancelled it; the
+session did not run and credentials were not used. This exposed a budget model
+that forced two independent full sealed reviews into one review window.
+
+Installed preparation now has two separately bounded 60-second phases: the
+complete installed-source read (configuration/installation metadata through final
+release evidence), followed by record provisioning plus runtime binding. The
+supervisor's overall preparation cap is 120 seconds. Installed owned-health
+observation has one absolute 240-second deadline for preparation, 60-second Core
+startup and a final 60-second sealed review. Retries and backoff share that one
+deadline. Hash coverage, inventory counts and native short probe limits remain
+unchanged. Every earlier caller cancellation wins; each phase stops authorizing
+later work and discards late results. Runtime operations use fresh signals rather
+than the expired preparation signal. Already-dispatched create-only record writes
+may finish after cancellation; there is no rollback or writer-quiescence claim,
+and late completion cannot dispatch a binder or session.
+
+The already installed old sealed runtime retains its original 60-second combined
+preparation limit. Changing this candidate does not retroactively change that
+release or clear the actual Mac recovery gate. Actual UID550 preparation,
+recovery and activation remain unexecuted. The hosted CI and external fixture
+results must be reported separately from the user's installed state.
+
+Final local validation after the phase correction and cancellation guards:
+lint, typecheck and build passed; 1,522 tests across 135 suites passed. The external
+volume run used two workers and a 30-second test-case timeout for durable fixture
+IO. An earlier default-concurrency run hit only 5-second fixture test timeouts;
+no production timer or fake-clock deadline assertion was changed for that run.
+Independent static review found and verified the additional record-CAS abort
+guards; no blocking findings remain in the reviewed source scope. Exact-head
+hosted checks and actual installed-Mac acceptance are separate gates.

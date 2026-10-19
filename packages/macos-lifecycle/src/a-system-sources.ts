@@ -1,6 +1,7 @@
 import { constants } from 'node:fs';
 import { lstat, open, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { runPreparePhase } from './prepare-phase.js';
 import { root } from './contracts.js';
 import { configDigest, parseConfig } from './config.js';
 import type { CoreCredentials } from './health-probe.js';
@@ -9,7 +10,8 @@ import { inspectRelease } from './release-inspection.js';
 import { FIXED_FILES, shaBytes, validateManifestBytes } from './adapters/install-files.js';
 import { inspectRuntimeDirectories } from './adapters/runtime-directories.js';
 import { createExecutionFilesAt } from './adapters/execution-files.js';
-import { createRuntimeStores } from './adapters/runtime-stores.js';
+import { createCircuitFilesAt } from './adapters/service-files.js';
+import { LifecycleStore, type CircuitFiles } from './lifecycle-store.js';
 import { ExecutionLeaseStore } from './execution-lease.js';
 import type { RecordFiles } from './telemetry-store.js';
 import { checkMacAcl } from './adapters/macos-acl.js';
@@ -147,56 +149,58 @@ export function createInstalledRuntimeReviewSource(
 
   return Object.freeze({
     async read(signal: AbortSignal): Promise<Readonly<RuntimeReview> | null> {
-      try {
-        if (signal.aborted) return null;
-        const [configBytes, installationBytes] = await Promise.all([
-          configFiles.read('service.json', 262_144),
-          configFiles.read('installation.json', 262_144),
-        ]);
-        if (signal.aborted || !validateManifestBytes(installationBytes)) return null;
+      return runPreparePhase(signal, async signal => {
+        try {
+          if (signal.aborted) return null;
+          const [configBytes, installationBytes] = await Promise.all([
+            configFiles.read('service.json', 262_144),
+            configFiles.read('installation.json', 262_144),
+          ]);
+          if (signal.aborted || !validateManifestBytes(installationBytes)) return null;
 
-        const config = parseConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(configBytes)));
-        const installation = data(
-          JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(installationBytes)),
-          ['schemaVersion', 'state', 'runtime', 'configSha256', 'releaseId', 'releaseDigest', 'plistSha256', 'desiredEnabled'],
-        );
-        const runtime = data(installation?.runtime, ['name', 'uid', 'gid']);
-        if (installation === null || runtime === null
-          || installation.schemaVersion !== 1 || installation.state !== 'COMMITTED'
-          || runtime.name !== 'gram-agent'
-          || runtime.uid !== layout.runtimeUid
-          || runtime.gid !== layout.runtimeGid
-          || installation.configSha256 !== shaBytes(configBytes)
-          || installation.releaseId !== config.releaseId
-          || installation.releaseDigest !== config.releaseDigest) return null;
+          const config = parseConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(configBytes)));
+          const installation = data(
+            JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(installationBytes)),
+            ['schemaVersion', 'state', 'runtime', 'configSha256', 'releaseId', 'releaseDigest', 'plistSha256', 'desiredEnabled'],
+          );
+          const runtime = data(installation?.runtime, ['name', 'uid', 'gid']);
+          if (installation === null || runtime === null
+            || installation.schemaVersion !== 1 || installation.state !== 'COMMITTED'
+            || runtime.name !== 'gram-agent'
+            || runtime.uid !== layout.runtimeUid
+            || runtime.gid !== layout.runtimeGid
+            || installation.configSha256 !== shaBytes(configBytes)
+            || installation.releaseId !== config.releaseId
+            || installation.releaseDigest !== config.releaseDigest) return null;
 
-        const releaseFiles = createTrustedFiles(
-          layout.anchor,
-          layout.ownerUid,
-          layout.acl,
-          `${layout.relative}/releases/${config.releaseId}`,
-        );
-        await inspectRelease(config, config.releaseDigest, releaseFiles, signal);
-        if (signal.aborted) return null;
-        const releaseBytes = await releaseFiles.read('release.json', 1024 * 1024);
-        if (signal.aborted || shaBytes(releaseBytes) !== config.releaseDigest) return null;
-        const releaseJson: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(releaseBytes));
+          const releaseFiles = createTrustedFiles(
+            layout.anchor,
+            layout.ownerUid,
+            layout.acl,
+            `${layout.relative}/releases/${config.releaseId}`,
+          );
+          await inspectRelease(config, config.releaseDigest, releaseFiles, signal);
+          if (signal.aborted) return null;
+          const releaseBytes = await releaseFiles.read('release.json', 1024 * 1024);
+          if (signal.aborted || shaBytes(releaseBytes) !== config.releaseDigest) return null;
+          const releaseJson: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(releaseBytes));
 
-        const nodeDigest = entryDigest(releaseJson, 'bin/node');
-        const fileAclDigest = entryDigest(releaseJson, 'bin/file-acl');
-        const peerOwnerDigest = entryDigest(releaseJson, 'bin/peer-owner');
-        if (nodeDigest === null || fileAclDigest === null || peerOwnerDigest === null) return null;
+          const nodeDigest = entryDigest(releaseJson, 'bin/node');
+          const fileAclDigest = entryDigest(releaseJson, 'bin/file-acl');
+          const peerOwnerDigest = entryDigest(releaseJson, 'bin/peer-owner');
+          if (nodeDigest === null || fileAclDigest === null || peerOwnerDigest === null) return null;
 
-        return copyRuntimeReview({
-          config,
-          configDigest: configDigest(config),
-          nodeDigest,
-          fileAclDigest,
-          peerOwnerDigest,
-        });
+          return copyRuntimeReview({
+            config,
+            configDigest: configDigest(config),
+            nodeDigest,
+            fileAclDigest,
+            peerOwnerDigest,
+          });
       } catch {
         return null;
       }
+      });
     },
   });
 }
@@ -259,29 +263,38 @@ export function createRuntimeRecordProvisioner(
         );
         if (signal.aborted) return false;
 
+        const active = () => { if (signal.aborted) throw new Error('PREPARATION_ABORTED'); };
         const guardRecords = (raw: RecordFiles): RecordFiles => Object.freeze<RecordFiles>({
           async read(role: 'core' | 'tunnel') {
-            await directories.verify();
+            active(); await directories.verify(); active();
             const result = await raw.read(role);
-            await directories.verify();
+            active(); await directories.verify(); active();
             return result;
           },
-          async compareAndSwap(
-            role: 'core' | 'tunnel',
-            expected: readonly (string | null)[],
-            slot: number,
-            bytes: Buffer,
-          ) {
-            await directories.verify();
+          async compareAndSwap(role, expected, slot, bytes) {
+            active(); await directories.verify(); active();
+            // No await between this cancellation check and raw CAS dispatch.
             await raw.compareAndSwap(role, expected, slot, bytes);
-            await directories.verify();
+            active(); await directories.verify(); active();
           },
         });
-
         const execution = new ExecutionLeaseStore(
           guardRecords(createExecutionFilesAt(directories.runPolicy)),
         );
-        const lifecycle = createRuntimeStores(directories).lifecycle;
+        const circuit = createCircuitFilesAt(directories.runPolicy);
+        const guardedCircuit: CircuitFiles = Object.freeze<CircuitFiles>({
+          async read(role) {
+            active(); await directories.verify(); active();
+            const result = await circuit.read(role);
+            active(); await directories.verify(); active(); return result;
+          },
+          async compareAndSwap(role, expected, bytes) {
+            active(); await directories.verify(); active();
+            await circuit.compareAndSwap(role, expected, bytes);
+            active(); await directories.verify(); active();
+          },
+        });
+        const lifecycle = new LifecycleStore(guardedCircuit);
         const roles = review.config.tunnel.enabled
           ? (['core', 'tunnel'] as const)
           : (['core'] as const);
@@ -345,8 +358,11 @@ export function createRuntimeRecordProvisioner(
         for (const role of roles) {
           const current = state.get(role);
           if (!current) return false;
+          active();
           if (current.execution === 'missing') await execution.initializeNew(role);
+          active();
           if (current.lifecycle === 'missing') await lifecycle.initializeNew(role, now);
+          active();
         }
 
         // Re-read exact create-only state before allowing runtime bind.
