@@ -123,6 +123,8 @@ jobs:
           bash -n platform/macos/provision-bootstrap.sh
           node --check platform/macos/stage-candidate-config.mjs
           node --check platform/macos/tests/native-runtime-snapshot.mjs
+          node --check platform/macos/tests/published-resume-acceptance.mjs
+          node --check platform/macos/tests/published-resume-prepare-only.mjs
           bash -n platform/macos/tests/disposable-launchd-apply.sh
       - name: Build independent bootstrap ACL helper on Apple Silicon
         if: runner.os == 'macOS'
@@ -240,6 +242,6 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/mac02"
           digest="$(node -e 'const fs=require("fs"); const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(typeof j.digest!=="string") process.exit(2); process.stdout.write(j.digest)' "$RUNNER_TEMP/core-release.json")"
-          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" /bin/bash \
+          sudo env GITHUB_ACTIONS=true RUNNER_TEMP="$RUNNER_TEMP" GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" /bin/bash \
             platform/macos/tests/disposable-launchd-apply.sh \
             "$RUNNER_TEMP/core-release" "$RUNNER_TEMP/bootstrap-helper/file-acl" "$digest"

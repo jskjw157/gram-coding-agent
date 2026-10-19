@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -6,7 +7,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@gram/domain': new URL('../domain/src/index.ts', import.meta.url).pathname,
+      '@gram/domain': fileURLToPath(new URL('../domain/src/index.ts', import.meta.url)),
     },
   },
 });

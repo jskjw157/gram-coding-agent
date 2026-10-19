@@ -108,7 +108,7 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
     const lock = map.get('pnpm-lock.yaml');
     if (!lock || !('sha256' in lock) || lock.sha256 !== m.lockDigest) refuse();
     checkActive();
-    const before = await files.inventory();
+    const before = await files.inventory(signal);
     checkActive();
     const leaves = before.filter(e => e.kind !== 'directory' && e.path !== 'release.json');
     if (leaves.length !== entries.length) refuse();
@@ -139,7 +139,7 @@ export async function inspectRelease(config: ServiceConfig, expectedDigest: stri
     const hashes = await Promise.allSettled([hashWorker(), hashWorker()]);
     checkActive();
     if (failed || hashes.some(result => result.status === 'rejected')) refuse();
-    const after = await files.inventory();
+    const after = await files.inventory(signal);
     checkActive();
     if (JSON.stringify(after) !== JSON.stringify(before)) refuse();
     const finalBytes = await files.read('release.json', 1024 * 1024);

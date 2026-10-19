@@ -8,7 +8,7 @@ export type InventoryEntry = { path: string; kind: 'directory' } | { path: strin
 export interface ReleaseFiles {
   read(path: string, limit: number): Promise<Buffer>;
   hash(path: string, limit: number): Promise<string>;
-  inventory(): Promise<InventoryEntry[]>;
+  inventory(signal?: AbortSignal): Promise<InventoryEntry[]>;
 }
 const MAX_BYTES = 256 * 1024 * 1024;
 function unsafe(): never { throw new Error('UNSAFE_PATH'); }
@@ -54,12 +54,20 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
     aclCache.set(path, stat);
     return true;
   };
-  async function checked<T>(parts: readonly string[], directory: boolean, use: (file: FileHandle, stat: BigIntStats, path: string) => Promise<T>): Promise<T> {
+  const checkActive = (signal?: AbortSignal) => { if (signal?.aborted) unsafe(); };
+  const verifyHeld = async (held: readonly Snapshot[]) => {
+    for (const snapshot of held) {
+      if (!same(snapshot.stat, await snapshot.file.stat({ bigint: true }))
+        || !same(snapshot.stat, await lstat(snapshot.path, { bigint: true }))) unsafe();
+    }
+  };
+  async function checked<T>(parts: readonly string[], directory: boolean, use: (file: FileHandle, stat: BigIntStats, path: string, held: readonly Snapshot[]) => Promise<T>, signal?: AbortSignal): Promise<T> {
     const held: Snapshot[] = [];
     try {
       let path = anchor;
       const all = [...prefixParts, ...parts];
       for (let i = -1; i < all.length; i++) {
+        checkActive(signal);
         if (i >= 0) { const part = all[i]; if (part === undefined) unsafe(); path = join(path, part); }
         const isDir = i < all.length - 1 || directory;
         const before = await lstat(path, { bigint: true });
@@ -68,17 +76,16 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
         const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
           | (isDir ? constants.O_DIRECTORY : 0));
         held.push({ path, file, stat: before });
+        checkActive(signal);
         if (!same(before, await file.stat({ bigint: true })) || await trustedAcl(path, file, before) !== true
           || !same(before, await file.stat({ bigint: true }))
           || !same(before, await lstat(path, { bigint: true }))) unsafe();
       }
       const last = held.at(-1);
       if (last === undefined) unsafe();
-      const result = await use(last.file, last.stat, last.path);
-      for (const snapshot of held) {
-        if (!same(snapshot.stat, await snapshot.file.stat({ bigint: true }))
-          || !same(snapshot.stat, await lstat(snapshot.path, { bigint: true }))) unsafe();
-      }
+      checkActive(signal);
+      const result = await use(last.file, last.stat, last.path, held);
+      await verifyHeld(held);
       return result;
     } catch { return unsafe(); }
     finally { await Promise.all(held.map(async entry => { await entry.file.close().catch(() => undefined); })); }
@@ -105,34 +112,51 @@ export function createTrustedFiles(anchor: string, ownerUid: number, acl: AclPro
   return {
     async read(path, limit) { return await consume(path, limit, true) as Buffer; },
     async hash(path, limit) { return await consume(path, limit, false) as string; },
-    async inventory() {
+    async inventory(signal) {
       const found: InventoryEntry[] = [];
-      const walk = async (parts: string[]): Promise<void> => {
+      const walk = async (parts: string[], directory: string, held: readonly Snapshot[]): Promise<void> => {
+        checkActive(signal);
         if (parts.length > 64) unsafe();
-        await checked(parts, true, async (_file, _stat, directory) => {
-          const names = await readdir(directory);
-          if (names.length > 20000) unsafe();
-          for (const name of names.sort()) {
-            if (relativeParts(name).length !== 1 || found.length >= 20000) unsafe();
-            const childParts = [...parts, name]; const path = childParts.join('/');
-            const absolute = join(directory, name); const stat = await lstat(absolute, { bigint: true });
-            if (stat.uid !== BigInt(ownerUid)) unsafe();
-            if (stat.isSymbolicLink()) {
-              if (stat.nlink !== 1n) unsafe();
-              const target = await readlink(absolute);
-              if (!same(stat, await lstat(absolute, { bigint: true }))) unsafe();
-              found.push({ path, kind: 'link', target });
-            } else if (stat.isDirectory()) {
-              if (!modeSafe(stat, ownerUid)) unsafe();
-              found.push({ path, kind: 'directory' }); await walk(childParts);
-            } else if (stat.isFile() && modeSafe(stat, ownerUid) && stat.nlink === 1n) {
-              // Metadata only: unlisted files are rejected before any data open.
-              found.push({ path, kind: 'file', executable: (stat.mode & 0o111n) !== 0n });
-            } else unsafe();
-          }
-        });
+        // Reuse only descriptors held by this active recursive walk. Verify
+        // the complete ancestry at directory boundaries, as checked() does,
+        // without reopening every ancestor at every depth. Nothing survives
+        // this inventory call or authorizes a later independent file read.
+        await verifyHeld(held);
+        checkActive(signal);
+        const names = await readdir(directory);
+        if (names.length > 20000) unsafe();
+        for (const name of names.sort()) {
+          checkActive(signal);
+          if (relativeParts(name).length !== 1 || found.length >= 20000) unsafe();
+          const childParts = [...parts, name]; const path = childParts.join('/');
+          const absolute = join(directory, name); const stat = await lstat(absolute, { bigint: true });
+          checkActive(signal);
+          if (stat.uid !== BigInt(ownerUid)) unsafe();
+          if (stat.isSymbolicLink()) {
+            if (stat.nlink !== 1n) unsafe();
+            const target = await readlink(absolute);
+            if (!same(stat, await lstat(absolute, { bigint: true }))) unsafe();
+            found.push({ path, kind: 'link', target });
+          } else if (stat.isDirectory()) {
+            if (!modeSafe(stat, ownerUid)) unsafe();
+            found.push({ path, kind: 'directory' });
+            const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_DIRECTORY);
+            try {
+              checkActive(signal);
+              if (!same(stat, await file.stat({ bigint: true })) || await trustedAcl(absolute, file, stat) !== true
+                || !same(stat, await file.stat({ bigint: true }))
+                || !same(stat, await lstat(absolute, { bigint: true }))) unsafe();
+              await walk(childParts, absolute, [...held, { path: absolute, file, stat }]);
+            } finally { await file.close().catch(() => undefined); }
+          } else if (stat.isFile() && modeSafe(stat, ownerUid) && stat.nlink === 1n) {
+            // Metadata only: unlisted files are rejected before any data open.
+            found.push({ path, kind: 'file', executable: (stat.mode & 0o111n) !== 0n });
+          } else unsafe();
+        }
+        checkActive(signal);
+        await verifyHeld(held);
       };
-      await walk([]);
+      await checked([], true, async (_file, _stat, directory, held) => walk([], directory, held), signal);
       return found.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
     },
   };

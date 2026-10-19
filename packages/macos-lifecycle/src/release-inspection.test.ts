@@ -135,6 +135,18 @@ describe('independently anchored sealed release', () => {
     await expect(inspectRelease(f.config, f.digest, files, controller.signal)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
     expect(reads).toBe(0);
   });
+  it('cancels the active real inventory before another directory ACL check or file hash', async () => {
+    const f = await fixture(); const controller = new AbortController(); let inventory = false; let directoryChecks = 0; let hashes = 0;
+    const trusted = createTrustedFiles(root, process.getuid?.() ?? -1, async handle => {
+      if (inventory && (await handle.stat()).isDirectory() && ++directoryChecks === 2) controller.abort();
+      return true;
+    });
+    const files = { ...trusted,
+      inventory: async (signal?: AbortSignal) => { inventory = true; return trusted.inventory(signal); },
+      hash: async (path: string, limit: number) => { hashes++; return trusted.hash(path, limit); } };
+    await expect(inspectRelease(f.config, f.digest, files, controller.signal)).rejects.toThrow(/^UNTRUSTED_RELEASE$/);
+    expect(directoryChecks).toBe(2); expect(hashes).toBe(0);
+  });
   it.each(['initial read', 'initial inventory', 'final inventory', 'final read'])('refuses cancellation after %s before further I/O or evidence', async boundary => {
     const f = await fixture(); const controller = new AbortController(); let reads = 0; let inventories = 0; let hashes = 0;
     const files = { ...f.files,
