@@ -1,0 +1,39 @@
+{
+  "status": "RESTORED",
+  "observedAtUtc": "2026-10-20T09:14:42.700235+00:00",
+  "originalRuntimeHead": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+  "testedCandidateHead": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+  "productionCandidateDeployed": false,
+  "units": {
+    "gram-coding-agent.service": {
+      "MainPID": "78194",
+      "ActiveState": "active",
+      "SubState": "running",
+      "NRestarts": "0",
+      "configurationMatchesOriginal": true
+    },
+    "openai-mcp-tunnel.service": {
+      "MainPID": "78234",
+      "ActiveState": "active",
+      "SubState": "running",
+      "NRestarts": "0",
+      "configurationMatchesOriginal": true
+    }
+  },
+  "externalProof": {
+    "observedAtUtc": "2026-10-20T09:13:15Z",
+    "nativeCatalogToolCount": 13,
+    "nativeAgentHealth": {
+      "status": "healthy",
+      "database": "ok",
+      "mcp": "ready"
+    },
+    "evidenceSource": "native_connector_catalog_and_agent_health"
+  },
+  "completedDatabaseFingerprintMatches": {
+    "agent.sqlite": true,
+    "smoke-lock-evidence.sqlite": true
+  },
+  "ownedTemporaryOverridesAbsent": true,
+  "privateRestorationReceiptSha256": "cd7b06bd9217da822c6f80f9ad4ca1b3ce6faf9f8aeee0824a796d876e3fca5b"
+}

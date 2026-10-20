@@ -1,0 +1,116 @@
+{
+    "observedAtUtc":  "2026-10-20T09:07:40.6179909Z",
+    "mainSha":  "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+    "candidateSha":  "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "candidateTree":  "780b2f3fa00a9d5804e5e106918be1ad9a9a6f9a",
+    "mergeTree":  "780b2f3fa00a9d5804e5e106918be1ad9a9a6f9a",
+    "mainIsAncestor":  true,
+    "actualMainMerged":  false,
+    "preview215MustNotDuplicate":  true,
+    "pullRequests":  [
+                         {
+                             "baseRefName":  "main",
+                             "headRefOid":  "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  135,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/135"
+                         },
+                         {
+                             "baseRefName":  "feat/m2-vertical-slice",
+                             "headRefOid":  "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+                             "isDraft":  false,
+                             "mergeable":  "MERGEABLE",
+                             "number":  196,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/196"
+                         },
+                         {
+                             "baseRefName":  "fix/77-ci-observation-evidence",
+                             "headRefOid":  "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  213,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/213"
+                         },
+                         {
+                             "baseRefName":  "fix/77-external-review-paths-20261016",
+                             "headRefOid":  "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  214,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/214"
+                         },
+                         {
+                             "baseRefName":  "fix/77-independent-lock-observations-20261016",
+                             "headRefOid":  "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  216,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/216"
+                         },
+                         {
+                             "baseRefName":  "fix/77-approved-legacy-paths-20261016",
+                             "headRefOid":  "786e7de141c7f82500d4b5122238fa5991fabb0b",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  217,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/217"
+                         },
+                         {
+                             "baseRefName":  "main",
+                             "headRefOid":  "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  215,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/215"
+                         },
+                         {
+                             "baseRefName":  "feat/m2-vertical-slice",
+                             "headRefOid":  "35f199d6b6960303f5909f19d65d3422ac2d8f3c",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  206,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/206"
+                         },
+                         {
+                             "baseRefName":  "feat/m2-vertical-slice",
+                             "headRefOid":  "70aeb057ac5a2c37a206e2d8152c7124b7d5b48d",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  208,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/208"
+                         },
+                         {
+                             "baseRefName":  "feat/m2-vertical-slice",
+                             "headRefOid":  "3e6edd49f3654b7c9161d7c1b64212d216fc5cb0",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  211,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/211"
+                         },
+                         {
+                             "baseRefName":  "fix/77-approved-legacy-paths-20261016",
+                             "headRefOid":  "432b443b14045f13c6e85e87e256e640c05ad028",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  221,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/221"
+                         },
+                         {
+                             "baseRefName":  "security/119-command-isolation-20261020",
+                             "headRefOid":  "96d12b85c845188a123b3848152a122b6f3da10f",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  222,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/222"
+                         },
+                         {
+                             "baseRefName":  "fix/77-bounded-task-branches-20261020",
+                             "headRefOid":  "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+                             "isDraft":  true,
+                             "mergeable":  "MERGEABLE",
+                             "number":  223,
+                             "url":  "https://github.com/jskjw157/gram-coding-agent/pull/223"
+                         }
+                     ]
+}
