@@ -22,7 +22,24 @@ import {
 } from '@gram/persistence';
 import { normalizeExecutableCommand, PolicyEngine } from '@gram/policy';
 import { FileSecretProvider, SecretRedactor, type SecretProvider } from '@gram/secrets';
-import { CommandRunner, NodeProcessSpawner, OutputCapture } from '@gram/shell';
+import { CommandRunner, LinuxIsolatedProcessSpawner, OutputCapture,
+  type SpawnRequest } from '@gram/shell';
+
+// Faithful laboratory view only: mount the existing synthetic controller files
+// read-only so the unchanged EACCES/EPERM assertions exercise Landlock rather
+// than missing paths. The production profile has no extra-mount option and
+// never exposes a provider directory. Every other setup/exec step is production.
+class CanaryViewSpawner extends LinuxIsolatedProcessSpawner {
+  constructor(private readonly canaryRoot: string, taskId: string, worktree: string) {
+    super({ workspaceForTask: (id) => id === taskId ? { workspace: worktree, identity: taskId } : undefined });
+  }
+  protected override argumentsFor(workspace: string, runtime: string, entry: string,
+    request: SpawnRequest): string[] {
+    const args = super.argumentsFor(workspace, runtime, entry, request);
+    args.splice(args.indexOf('--bind-fd'), 0, '--ro-bind', this.canaryRoot, this.canaryRoot);
+    return args;
+  }
+}
 
 export type ProbeRoute = 'direct' | 'descendant' | 'npm-test';
 type CredentialLabel = 'github' | 'tunnel' | 'mcp';
@@ -188,8 +205,8 @@ export async function createSecretBoundaryFixture() {
       private: true,
       scripts: { test: 'node ./secret-boundary-probe.mjs npm-test' },
     }), { mode: 0o600 });
-    const npmUserConfig = path.join(root, 'npm-user-empty.conf');
-    const npmGlobalConfig = path.join(root, 'npm-global-empty.conf');
+    const npmUserConfig = path.join(worktree, 'npm-user-empty.conf');
+    const npmGlobalConfig = path.join(worktree, 'npm-global-empty.conf');
     writeFileSync(npmUserConfig, '', { mode: 0o600 });
     writeFileSync(npmGlobalConfig, '', { mode: 0o600 });
     const environment = {
@@ -212,7 +229,7 @@ export async function createSecretBoundaryFixture() {
           throw new Error('The fixture grants no extra authority or credential access');
         },
       },
-      spawner: new NodeProcessSpawner(),
+      spawner: new CanaryViewSpawner(root, task.id, worktree),
       commandRuns,
       outputCapture: new OutputCapture({
         homeDir: home,
@@ -231,7 +248,7 @@ export async function createSecretBoundaryFixture() {
               'test', '--silent', '--offline', '--no-audit', '--no-fund', '--no-update-notifier',
               '--userconfig=' + npmUserConfig,
               '--globalconfig=' + npmGlobalConfig,
-              '--cache=' + path.join(root, 'npm-cache'),
+              '--cache=' + path.join(worktree, 'npm-cache'),
               '--script-shell=/bin/sh',
             ]
           : ['secret-boundary-probe.mjs', route === 'descendant' ? 'descendant-parent' : 'direct'];

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -18,6 +18,27 @@ afterEach(() => {
 });
 
 describe('FileSecretProvider', () => {
+  it('rejects a secret inode also reachable through another hard link', async () => {
+    const dir = tempSecretDir();
+    const outside = join(tempSecretDir(), 'outside-token');
+    writeFileSync(outside, 'synthetic-hardlink-canary', { mode: 0o600 });
+    linkSync(outside, join(dir, 'github_token'));
+
+    // A private secret must have one name: an alias outside the secret root
+    // can otherwise retain access when the configured pathname is replaced.
+    await expect(new FileSecretProvider(dir).getForUse('github_token'))
+      .rejects.toThrow(/hard link/i);
+  });
+
+  it('rejects a final symlink to a private regular file', async () => {
+    const dir = tempSecretDir();
+    const target = join(tempSecretDir(), 'target-token');
+    writeFileSync(target, 'synthetic-symlink-canary', { mode: 0o600 });
+    symlinkSync(target, join(dir, 'github_token'));
+
+    await expect(new FileSecretProvider(dir).getForUse('github_token')).rejects.toThrow();
+  });
+
   it('leases a 0600 secret without exposing a public value property', async () => {
     const dir = tempSecretDir();
     const path = join(dir, 'github_token');

@@ -8,10 +8,11 @@ import process from 'node:process';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath, URL } from 'node:url';
 
-// PREPARATORY DRAFT #119. Run this entry point so neither a host environment nor
+// Run this entry point so neither a host environment nor
 // an unbounded npm/process startup can invalidate the fake-only experiment.
 // Usage: node tests/security/run-secret-boundary.mjs
-// Expected M2 result: exit 1, 3 environment PASS + 3 file-isolation RED.
+// Historical unsandboxed M2 baseline: 3 environment PASS + 3 file-isolation RED.
+// The mandatory isolated profile must pass all six original assertions.
 assert.equal(process.platform, 'linux', 'Linux is required');
 assert.equal(process.versions.node.split('.')[0], '24', 'Use the repository Node 24 runtime');
 assert.equal(process.argv.length, 2, 'This dedicated runner accepts no arbitrary commands or filters');
