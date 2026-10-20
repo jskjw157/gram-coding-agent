@@ -58,7 +58,7 @@ Windows-only pnpm vendor artifacts are excluded from the Linux profile.
   integrity is pinned in the installer and runtime contract.
 - Canonical tree: **3705 entries**, SHA256
   `2e89512825a43334ef6e73a62bd71b777b029042eecbca361d9c7a62df6ebc61`.
-- Runtime: `/opt/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified`.
+- Runtime: `/var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified`.
 
 The controller independently rechecks the exact receipt and full tree against
 these constants, including the official Node executable matching the running

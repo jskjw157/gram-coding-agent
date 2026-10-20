@@ -26,7 +26,7 @@ PNPM_SHA512 = 'pO4F8vc2WCVb1qiYWcBlpFwopX2u+uLIk6Fo7itzFow3uR6D5X6mdlStA/AwMXRkM
 EXPECTED_TREE_SHA256 = '2e89512825a43334ef6e73a62bd71b777b029042eecbca361d9c7a62df6ebc61'
 EXPECTED_FILE_COUNT = 3705
 POLICY = 'linux-node-v1-runtime-1'
-DESTINATION = Path('/opt/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified')
+DESTINATION = Path('/var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified')
 CACHE = Path('/var/cache/gram-sandbox-artifacts')
 ARTIFACTS = {
     'node': (f'https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-linux-x64.tar.xz', 'sha256', NODE_SHA256),

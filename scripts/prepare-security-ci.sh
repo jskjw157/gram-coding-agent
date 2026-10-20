@@ -33,7 +33,9 @@ sh apps/execution-sandbox/build.sh "$temporary/gram-sandbox-entry"
 sudo install -d -o root -g root -m 0755 /usr/local/libexec
 test ! -e /usr/local/libexec/gram-sandbox-entry
 sudo install -o root -g root -m 0755 "$temporary/gram-sandbox-entry" /usr/local/libexec/gram-sandbox-entry
+stat -c '%n uid=%u mode=%a' /opt /var/lib /var/cache
 sudo python3 scripts/stage-sandbox-node.py
+stat -c '%n uid=%u mode=%a' /var/lib /var/cache /var/lib/gram-sandbox-runtime
 uname -r
 /usr/bin/bwrap --version
-sha256sum /usr/bin/bwrap /usr/local/libexec/gram-sandbox-entry /opt/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified/bin/node
+sha256sum /usr/bin/bwrap /usr/local/libexec/gram-sandbox-entry /var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified/bin/node
