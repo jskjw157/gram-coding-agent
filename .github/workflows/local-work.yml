@@ -1,0 +1,48 @@
+name: local-work
+on:
+  pull_request:
+    paths:
+      - 'packages/local-work/**'
+      - 'packages/filesystem/**'
+      - 'packages/shell/**'
+      - 'packages/policy/**'
+      - 'packages/domain/**'
+      - 'packages/secrets/**'
+      - 'scripts/local-work-smoke.mjs'
+      - 'scripts/local-work-cancel-smoke.mjs'
+      - '.github/workflows/local-work.yml'
+      - 'pnpm-lock.yaml'
+      - 'tsconfig.base.json'
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: local-work-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  local-work:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter '@gram/local-work...' lint
+      - run: pnpm --filter '@gram/local-work...' typecheck
+      - run: pnpm exec vitest run --project local-work --project filesystem --project shell
+      - run: pnpm --filter '@gram/local-work...' build
+      - run: node scripts/local-work-smoke.mjs
+      - run: node scripts/local-work-cancel-smoke.mjs
+      - run: git diff --exit-code && git diff --check
