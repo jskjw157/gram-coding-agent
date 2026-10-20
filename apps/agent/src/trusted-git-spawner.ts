@@ -219,7 +219,7 @@ function validateArgs(args: readonly string[], context: TrustedGitContext, cwd: 
   if (
     args.length === 3 &&
     args[0] === 'ls-remote' &&
-    (args[1] === url || args[1] === url.slice(0, -4)) &&
+    (args[1] === 'origin' || args[1] === url || args[1] === url.slice(0, -4)) &&
     (args[2] ?? '').startsWith('refs/heads/') &&
     branch((args[2] ?? '').slice(11))
   )
@@ -479,7 +479,12 @@ export class TrustedGitSpawner implements ProcessSpawner {
     );
     if (config.exitCode !== 0) reject();
     validateConfig(config.stdout, url);
-    const args = [...fixedConfig, ...request.args];
+    // RemoteService confirms pushes using the fixed origin alias. Resolve it only
+    // after metadata/config admission, and never pass a mutable alias to transport.
+    const admittedArgs = request.args[0] === 'ls-remote' && request.args[1] === 'origin'
+      ? ['ls-remote', url, request.args[2] ?? '']
+      : request.args;
+    const args = [...fixedConfig, ...admittedArgs];
     // These options are command-specific and cannot be supplied as global flags.
     if (request.args[0] === 'diff' || request.args[0] === 'show')
       args.splice(fixedConfig.length + 1, 0, '--no-ext-diff', '--no-textconv');
