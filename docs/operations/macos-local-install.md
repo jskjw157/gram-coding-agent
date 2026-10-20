@@ -10,7 +10,7 @@ Main merge and remote account/trust/enrollment/tunnel setup are separate actions
 
 Native macOS 26.2 / arm64. Read-only preflight observed no HAAR/GramAgent root,
 Gram launchd plists, registered Core/Tunnel jobs, disabled overrides or
-`gram-agent` account. Ports 3847 and 3848 were both free. `/Library`,
+`gram-agent` account. Core port 3847 and tunnel probe port 8080 were both free. `/Library`,
 `/Library/LaunchDaemons` and `/Library/Application Support` were root-owned
 and not group/world writable. Noninteractive sudo returned AUTH_REQUIRED.
 These observations must be repeated immediately before any privileged write.
@@ -42,7 +42,7 @@ its hash, complete inventory, reviewed lockfile and current-SHA checks pass.
   It runs as `gram-agent`, with RunAtLoad/KeepAlive and fixed executable paths.
   Its persistence includes restart after a crash and startup after reboot.
 - Bind Core only to 127.0.0.1:3847. Keep tunnel disabled, with no tunnel plist,
-  no 3848 listener, no remote exposure and only the `agent_health` tool surface.
+  no 8080 tunnel listener, no remote exposure and only the `agent_health` tool surface.
 
 Do not alter existing installations/accounts/plists or unrelated HAAR data.
 An unexpected existing target, occupied/unknown port, unsafe path, mismatched

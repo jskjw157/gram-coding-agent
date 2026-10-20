@@ -72,7 +72,7 @@ describe('fixed supervisor invocation and cancellation', () => {
     const observed = work.then(value => value as unknown, (error: unknown) => error);
     let settled = false; void observed.then(() => { settled = true; });
     try {
-      await vi.advanceTimersByTimeAsync(59999); expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(119999); expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1); expect(await observed).toBe(78);
     } finally { ready.resolve({ async run() { runs++; return 0; } }); await observed; }
     await Promise.resolve(); await Promise.resolve();

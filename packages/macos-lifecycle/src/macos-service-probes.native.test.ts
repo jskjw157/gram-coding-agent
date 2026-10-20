@@ -8,8 +8,13 @@ describe.skipIf(process.platform !== 'darwin')('actual macOS read-only service p
   it('queries the system registry without installing or starting a job', async () => {
     const state = await inspectMacRegistry();
     expect(state).not.toBeNull();
-    expect(state?.jobs).toEqual({ core: 'absent', tunnel: 'absent' });
-    expect(state?.overrides).toEqual({ core: null, tunnel: null });
+    // An existing stopped installation can retain a disabled override. Read
+    // the actual registry without requiring a pristine Mac or changing it.
+    for (const role of ['core', 'tunnel'] as const) {
+      expect(['absent', 'present']).toContain(state?.jobs[role]);
+      expect([null, false, true]).toContain(state?.overrides[role]);
+    }
+    expect(await inspectMacRegistry()).toEqual(state);
   });
   it('observes a real fixed-port fixture without connecting to it', async context => {
     const initial = await inspectMacPorts();
