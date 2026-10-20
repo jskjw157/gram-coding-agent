@@ -1,0 +1,182 @@
+{
+  "collectedAtUtc": "2026-10-16T01:58:11.607943+00:00",
+  "disposition": "BLOCKED_WITH_EVIDENCE",
+  "newLiveTask": null,
+  "finalIntegrationHead": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+  "gates": [
+    {
+      "gate": "lint",
+      "exitCode": 0,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "startedAt": "2026-10-16T01:52:47.730759+00:00",
+      "finishedAt": "2026-10-16T01:53:21.423746+00:00",
+      "log": "/mnt/c/source/gram-agent-diagnostics/m2-final-integration-lint-20261016.log"
+    },
+    {
+      "gate": "typecheck",
+      "exitCode": 0,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "startedAt": "2026-10-16T01:53:21.433780+00:00",
+      "finishedAt": "2026-10-16T01:53:50.590721+00:00",
+      "log": "/mnt/c/source/gram-agent-diagnostics/m2-final-integration-typecheck-20261016.log"
+    },
+    {
+      "gate": "test",
+      "exitCode": 0,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "startedAt": "2026-10-16T01:53:50.603215+00:00",
+      "finishedAt": "2026-10-16T01:54:12.927467+00:00",
+      "log": "/mnt/c/source/gram-agent-diagnostics/m2-final-integration-test-20261016.log"
+    },
+    {
+      "gate": "test:e2e",
+      "exitCode": 0,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "startedAt": "2026-10-16T01:54:12.937202+00:00",
+      "finishedAt": "2026-10-16T01:54:19.105038+00:00",
+      "log": "/mnt/c/source/gram-agent-diagnostics/m2-final-integration-test-e2e-20261016.log"
+    },
+    {
+      "gate": "build",
+      "exitCode": 0,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "startedAt": "2026-10-16T01:54:19.115128+00:00",
+      "finishedAt": "2026-10-16T01:54:50.887443+00:00",
+      "log": "/mnt/c/source/gram-agent-diagnostics/m2-final-integration-build-20261016.log"
+    }
+  ],
+  "githubCi": {
+    "paths": {
+      "headSha": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38832838110"
+    },
+    "observer": {
+      "headSha": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38835990155"
+    },
+    "legacy": {
+      "headSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837666171"
+    },
+    "integration": {
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837663393"
+    }
+  },
+  "previewTrees": [
+    {
+      "pr": 215,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "previewSha": "32982710774b5025c50057696d409e4e5aef730c",
+      "tree": "65b9b26fc0f7501ee625c3e70e22b6740be194d2",
+      "equal": true
+    },
+    {
+      "pr": 216,
+      "headSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "previewSha": "5141f62fd1df5d390ca915809b6247103fbab8e7",
+      "tree": "01a2b6b0cb2b2278979cd5881bb662857d5533a7",
+      "equal": true
+    }
+  ],
+  "isolatedCandidate": {
+    "status": "ISOLATED_CANDIDATE_PREFLIGHT_PASS",
+    "observedAtUtc": "2026-10-16T01:55:11.134Z",
+    "candidateHead": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+    "productionSourceHead": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+    "candidateSourceManifestSha256": "c90a27c050cf5c44357283ee507e6ad01a11fe3ad7b6dbb274af8ac4f4794e86",
+    "candidateDistManifestSha256": "c338b13ee9042b9786240b0e36c04e069aed7f745b4e40bf47c39a7cf406b323",
+    "sourceFileCount": 292,
+    "distFileCount": 556,
+    "directory": "/home/jskjw/.gram-agent/recovery/M2-final-isolated-candidate-20261016-qIfkES",
+    "node": "v24.21.0",
+    "npm": "11.19.0",
+    "nodePath": "/home/jskjw/.nvm/versions/node/v24.21.0/bin/node",
+    "npmPath": "/home/jskjw/.nvm/versions/node/v24.21.0/bin/npm",
+    "safeCommandPath": "/home/jskjw/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin",
+    "loginBashPath": "/home/jskjw/.local/bin:/home/jskjw/.nvm/versions/node/v24.21.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin",
+    "mcpToolCount": 13,
+    "health": {
+      "status": "healthy",
+      "database": "ok",
+      "mcp": "ready"
+    },
+    "observerRepoId": 1421490705,
+    "observerSamples": 0,
+    "productionDatabaseUnchanged": true,
+    "copiedDatabaseUnchanged": true,
+    "productionServicesUnchanged": true,
+    "productionTaskFingerprint": "96becaf2430fddf5f5e9e8dd28b1af1b4f19e97fa08e1e12ae2550298a1e2c4a"
+  },
+  "runtimeAuthentication": {
+    "observedAtUtc": "2026-10-16T01:55:53.535Z",
+    "records": [
+      {
+        "path": "/user",
+        "outcome": "HTTP_RESPONSE",
+        "status": 401
+      },
+      {
+        "path": "/repos/jskjw157/gram-m2-smoke-20261016-evidence",
+        "outcome": "HTTP_RESPONSE",
+        "status": 401
+      }
+    ],
+    "credentialChanged": false,
+    "tokenIssued": false,
+    "permissionsExpanded": false,
+    "taskCreated": false,
+    "retries": 0,
+    "runtimeAgentPID": 186,
+    "isolatedCandidateHead": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+    "status": "RUNTIME_GITHUB_AUTH_BLOCKED_401"
+  },
+  "preservation": {
+    "observedAtUtc": "2026-10-16T01:48:43.439550+00:00",
+    "historicalTaskRowsUnchanged": true,
+    "historical8EvidenceHashesUnchanged": true,
+    "integrity": "ok",
+    "repoLocks": 0,
+    "worktrees": [
+      {
+        "taskId": "01a12eae-2cd6-7259-8c49-1d86f4410e3b",
+        "headSha": "9955288587adef907076136fe764e40f11899651",
+        "status": "",
+        "counterSha256": "f83a49d72b6ca2d359a3eb88e7f27bd5833ca506600f38b330c4e162ed13c13a"
+      },
+      {
+        "taskId": "01a132c1-e383-76e3-95c7-3e0b08392992",
+        "headSha": "9955288587adef907076136fe764e40f11899651",
+        "status": " M src/counter.ts\n",
+        "counterSha256": "956697742967f4ff00bd5056ca56355d3839eef22a1ae526a7e970a93e05cf68"
+      },
+      {
+        "taskId": "01a13849-a337-717d-9475-97b4e9aa5fd5",
+        "headSha": "07642c3c864332e89745fb803e9de2e650150150",
+        "status": "M  src/counter.ts\n",
+        "counterSha256": "dd7e060086586d4162d5c1182be1aaabc327639fda20bcec866e3240a5d59d5a"
+      },
+      {
+        "taskId": "01a13895-d4f0-7659-98d5-c53c06fed32c",
+        "headSha": "9c786a29167c1cf58a51f66952e6640bfb2d2f54",
+        "status": "",
+        "counterSha256": "dd7e060086586d4162d5c1182be1aaabc327639fda20bcec866e3240a5d59d5a"
+      }
+    ]
+  },
+  "rawReceiptSHA256": {
+    "m2-final-integration-gates-20261016.json": "f58f25b4519e0a95274d766a6977925bc14a19fda9efb67f9bab6e6c1430eb24",
+    "m2-final-ci-preview-trees-20261016.json": "59552b564941a70e4e72f8e02c042a67df896be62ea1d631f2a0ca424eb34175",
+    "m2-final-isolated-candidate-preflight-20261016.json": "52457e063a00f920f47e34df39d58e99f9fb78c31e010ee23431509f7f7c8c95",
+    "m2-final-runtime-github-auth-20261016.json": "2e1e7137dbb7ccf9fcfe855b4bd048dbfc5ff3987b30dc12541d16a3b47564b5",
+    "m2-final-preservation-20261016.json": "0157b4d4f0394a360dd8b1dd3200cb8b4ec5e2381407fa72ba7cf7936999d66c"
+  }
+}
