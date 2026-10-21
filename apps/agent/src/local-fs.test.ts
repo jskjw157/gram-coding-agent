@@ -128,6 +128,19 @@ describe('multi-root local file operations', () => {
     expect(readFileSync(join(root, 'src/main.ts'), 'utf8')).toContain('true');
   });
 
+  it('never follows a pre-existing symlinked recovery-trash directory', () => {
+    const { fs, root } = fixture();
+    const external = mkdtempSync(join(tmpdir(), 'gram-mcp-trash-outside-'));
+    created.push(external);
+    writeFileSync(join(root, 'safe.txt'), 'safe entry');
+    symlinkSync(external, join(root, '.gram-local-trash'));
+    expect(() => fs.trash({
+      root: 'windows-c', path: 'safe.txt', expectedSha256: hash('safe entry'),
+    })).toThrow(/denied/u);
+    expect(readFileSync(join(root, 'safe.txt'), 'utf8')).toBe('safe entry');
+    expect(existsSync(join(external, 'safe.txt'))).toBe(false);
+  });
+
   it('refuses writes in read-only roots and rejects invalid root configuration', () => {
     const { fs } = fixture({ readOnly: true });
     expect(() => fs.mkdir({ root: 'windows-c', path: 'new' })).toThrow(/denied/u);
