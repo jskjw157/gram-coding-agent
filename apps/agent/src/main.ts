@@ -377,9 +377,9 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         verificationReviews,
         approvals: approvalTools,
         // Disabled unless trusted service configuration opts in to one specific root.
-        localProject: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT === undefined
-          ? undefined
-          : new ReadOnlyLocalProject({ root: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT, redactor }),
+        ...(process.env.GRAM_AGENT_READONLY_PROJECT_ROOT === undefined
+          ? {}
+          : { localProject: new ReadOnlyLocalProject({ root: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT, redactor }) }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
