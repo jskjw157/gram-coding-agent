@@ -1,13 +1,14 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApprovalService, type ApprovalRecord, type ApprovalStore } from './approval-service.js';
-import { normalizeShellCommand } from './command-parser.js';
+import { normalizeExecutableCommand, normalizeShellCommand } from './command-parser.js';
 import { PolicyEngine, type PolicyContext } from './policy-engine.js';
 
 const tempDirs: string[] = [];
 const risk = { ALLOW: 0, NEEDS_APPROVAL: 1, DENY: 2 } as const;
+const BACKTICK = String.fromCharCode(96);
 
 function decide(command: string, context: PolicyContext = { taskId: 'task-1', protectedBranches: ['main'] }) {
   const engine = new PolicyEngine();
@@ -28,6 +29,7 @@ afterEach(() => {
 describe('Policy Engine v1 rule matrix', () => {
   it.each([
     ['git status', 'ALLOW'],
+    ['git ls-remote origin refs/heads/feature', 'ALLOW'],
     ['pnpm test', 'ALLOW'],
     ['sudo apt install jq', 'ALLOW'],
     ['powershell.exe -Command Get-ChildItem', 'NEEDS_APPROVAL'],
@@ -50,20 +52,80 @@ describe('Policy Engine v1 rule matrix', () => {
     ['git push --all origin', 'NEEDS_APPROVAL'],
     ['git push --force --all origin', 'DENY'],
     ['git push --mirror origin', 'DENY'],
-    ['git push --force origin refs/heads/*:refs/heads/*', 'DENY'],
-    ['git push origin refs/heads/*:refs/heads/*', 'NEEDS_APPROVAL'],
   ] as const)('%s -> %s', (command, expected) => {
     expect(decide(command).kind).toBe(expected);
+  });
+
+
+  it.each([
+    ['parameter expansion', 'git push origin HEAD:$BRANCH'],
+    ['double-quoted parameter expansion', 'git push origin "HEAD:$BRANCH"'],
+    ['glob expansion', 'git add *.ts'],
+    ['brace expansion', 'git push origin HEAD:{main,feature}'],
+    ['tilde expansion', 'git show ~/ref'],
+  ] as const)('rejects policy-sensitive shell %s before hashing', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it('preserves literal wildcard/ref arguments when the shell cannot expand them', () => {
+    expect(decide("git push origin 'refs/heads/*:refs/heads/*'").kind).toBe(
+      'NEEDS_APPROVAL',
+    );
+    expect(
+      decide("git push --force origin 'refs/heads/*:refs/heads/*'").kind,
+    ).toBe('DENY');
+
+    const engine = new PolicyEngine();
+    const normal = normalizeExecutableCommand(
+      'git',
+      ['push', 'origin', 'refs/heads/*:refs/heads/*'],
+      process.cwd(),
+    );
+    const forced = normalizeExecutableCommand(
+      'git',
+      ['push', '--force', 'origin', 'refs/heads/*:refs/heads/*'],
+      process.cwd(),
+    );
+    expect(engine.evaluate(normal, { taskId: 'task-1', protectedBranches: ['main'] }).kind)
+      .toBe('NEEDS_APPROVAL');
+    expect(engine.evaluate(forced, { taskId: 'task-1', protectedBranches: ['main'] }).kind)
+      .toBe('DENY');
+  });
+
+  it.each([
+    ["git push origin 'HEAD:$BRANCH'", 'HEAD:$BRANCH'],
+    ['git push origin HEAD:\\$BRANCH', 'HEAD:$BRANCH'],
+  ] as const)('keeps literal parameter marker when quoted or escaped: %s', (command, expected) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.args.at(-1)).toBe(expected);
   });
 
   it('requires the direct-main grant for protected destinations expressed as refspecs', () => {
     expect(decide('git push origin HEAD:main').kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:refs/heads/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin HEAD:refs/heads/main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: false,
+      targetBranch: 'main',
+      publishMode: 'PULL_REQUEST',
+    }).kind).toBe('NEEDS_APPROVAL');
     expect(decide('git push origin HEAD:main', {
       taskId: 'task-1',
       protectedBranches: ['main'],
       directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
     }).kind).toBe('ALLOW');
+    expect(decide('git push --force-with-lease origin HEAD:main', {
+      taskId: 'task-1',
+      protectedBranches: ['main'],
+      directMainGranted: true,
+      targetBranch: 'main',
+      publishMode: 'DIRECT_MAIN',
+    }).kind).toBe('DENY');
   });
 
   it('uses the highest risk decision across composed commands', () => {
@@ -75,6 +137,244 @@ describe('Policy Engine v1 rule matrix', () => {
     const operations = normalizeShellCommand('git status && pnpm test | cat', process.cwd());
     expect(operations.map((operation) => operation.executable)).toEqual(['git', 'pnpm', 'cat']);
     expect(operations.map((operation) => operation.precededBy)).toEqual([null, '&&', '|']);
+  });
+
+  it('allows only the issued task worktree lifecycle argument shapes', () => {
+    expect(decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main').kind).toBe('ALLOW');
+    expect(decide('git worktree remove --force /tmp/wt-1').kind).toBe('ALLOW');
+    expect(decide('git worktree prune').kind).toBe('ALLOW');
+  });
+
+  it('keeps other worktree shapes and an absent task identity approval-required', () => {
+    expect(decide('git worktree').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree list').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree lock /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree move /tmp/wt-1 /tmp/wt-2').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree repair').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree unlock /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree add feat/task-1 /tmp/wt-1 origin/main').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree remove /tmp/wt-1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main --checkout').kind).toBe(
+      'NEEDS_APPROVAL',
+    );
+    expect(
+      decide('git worktree add -b feat/task-1 /tmp/wt-1 origin/main', {
+        taskId: '   ',
+        protectedBranches: ['main'],
+      }).kind,
+    ).toBe('NEEDS_APPROVAL');
+  });
+
+  it('preserves approval decisions for unresolved push and destructive or unknown git commands', () => {
+    expect(decide('git push origin').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git push origin feature').kind).toBe('ALLOW');
+    expect(decide('git reset --hard HEAD~1').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git clean -fdx').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('git worktree frobnicate').kind).toBe('NEEDS_APPROVAL');
+  });
+
+  it('allows only a single Windows path conversion with wslpath -w', () => {
+    expect(decide('wslpath -w /home/agent/.gram-agent/worktrees/7/task-1').kind).toBe('ALLOW');
+  });
+
+  it('requires approval for unsupported wslpath forms', () => {
+    expect(decide('wslpath').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -u /mnt/c/x').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w relative/path').kind).toBe('NEEDS_APPROVAL');
+    expect(decide('wslpath -w /tmp/x --extra').kind).toBe('NEEDS_APPROVAL');
+  });
+});
+
+
+describe('shell-text syntax fail-closed boundary', () => {
+  it.each([
+    ['stdout redirect', 'echo ok > /tmp/probe'],
+    ['stdout append', 'echo ok >> /tmp/probe'],
+    ['stderr redirect', 'echo ok 2>/tmp/probe'],
+    ['stderr append', 'echo ok 2>>/tmp/probe'],
+    ['combined redirect', 'echo ok &>/tmp/probe'],
+    ['heredoc', 'cat <<EOF\nhello\nEOF'],
+    [
+      'worktree suffix redirect',
+      'git worktree add -b feat/x /home/agent/.gram-agent/worktrees/7/task-1 HEAD>/tmp/probe',
+    ],
+    ['command substitution', 'echo $(touch /tmp/probe)'],
+    ['double-quoted command substitution', 'echo "$(touch /tmp/probe)"'],
+    ['backtick command substitution', `echo ${BACKTICK}touch /tmp/probe${BACKTICK}`],
+    [
+      'double-quoted backtick command substitution',
+      `echo "a ${BACKTICK}touch /tmp/probe${BACKTICK} c"`,
+    ],
+  ] as const)('rejects %s before classification', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['double-quoted redirect literal', 'echo "a>b"', ['a>b']],
+    ['single-quoted redirect literal', "echo 'a>b'", ['a>b']],
+    ['escaped redirect literal', 'echo a\\>b', ['a>b']],
+    [
+      'single-quoted command-substitution literal',
+      "echo '$(touch /tmp/probe)'",
+      ['$(touch /tmp/probe)'],
+    ],
+    [
+      'single-quoted backtick literal',
+      `echo '${BACKTICK}touch /tmp/probe${BACKTICK}'`,
+      [`${BACKTICK}touch /tmp/probe${BACKTICK}`],
+    ],
+    [
+      'escaped backtick literal',
+      `echo a\\${BACKTICK}b`,
+      [`a${BACKTICK}b`],
+    ],
+  ] as const)('keeps %s literal', (_label, command, expectedArgs) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.executable).toBe('echo');
+    expect(operation?.args).toEqual(expectedArgs);
+  });
+
+  it('does not apply shell syntax rejection to executable-form requests', () => {
+    const operation = normalizeExecutableCommand(
+      'echo',
+      ['a>b', '$(literal)'],
+      process.cwd(),
+    );
+    expect(operation.args).toEqual(['a>b', '$(literal)']);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe(
+      'ALLOW',
+    );
+  });
+
+  it.each([
+    ['rm', 'rm ./a', ['./a']],
+    ['cp', 'cp ./a ./b', ['./a', './b']],
+    ['mv', 'mv ./a ./b', ['./a', './b']],
+  ] as const)('preserves existing %s filesystem target extraction', (_label, command, targets) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.requestedTargets).toEqual(targets);
+  });
+});
+
+
+describe('shell filesystem target expansion fail-closed boundary', () => {
+  it('rejects tilde expansion even when a literal decoy path canonicalizes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, '~'), { recursive: true });
+    writeFileSync(join(root, '~', 'tmpfile'), 'decoy');
+
+    expect(realpathSync(join(root, '~', 'tmpfile'))).toBe(
+      join(root, '~', 'tmpfile'),
+    );
+
+    expect(() => normalizeShellCommand('rm ~/tmpfile', root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['rm', 'rm *.log'],
+    ['cp', 'cp *.log copy.log'],
+    ['mv', 'mv *.log moved.log'],
+  ] as const)('rejects unquoted glob expansion for %s filesystem targets', (_label, command) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, '*.log'), 'literal-decoy');
+    writeFileSync(join(root, 'victim.log'), 'victim');
+
+    expect(() => normalizeShellCommand(command, root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['parameter expansion', 'rm $HOME/tmpfile', '$HOME/tmpfile'],
+    ['double-quoted parameter expansion', 'rm "${HOME}/tmpfile"', '${HOME}/tmpfile'],
+    ['brace expansion', 'rm file{1,2}.log', 'file{1,2}.log'],
+  ] as const)('rejects %s when a literal decoy target exists', (_label, command, literalTarget) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    const targetPath = join(root, ...literalTarget.split('/'));
+    mkdirSync(join(targetPath, '..'), { recursive: true });
+    writeFileSync(targetPath, 'literal-decoy');
+
+    expect(() => normalizeShellCommand(command, root)).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+  it.each([
+    ["rm '~/tmpfile'", ['~/tmpfile']],
+    ['rm "*.log"', ['*.log']],
+    ['rm \\*.log', ['*.log']],
+    ["rm '$HOME/tmpfile'", ['$HOME/tmpfile']],
+    ['rm "\\$HOME/tmpfile"', ['$HOME/tmpfile']],
+    ["rm 'file{1,2}.log'", ['file{1,2}.log']],
+  ] as const)('keeps quoted or escaped filesystem target literal: %s', (command, targets) => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    const literalTarget = targets[0];
+    if (literalTarget === undefined) throw new Error('literal target missing');
+    const literalPath = join(root, ...literalTarget.split('/'));
+    mkdirSync(dirname(literalPath), { recursive: true });
+    writeFileSync(literalPath, 'literal');
+
+    const [operation] = normalizeShellCommand(command, root);
+    expect(operation?.requestedTargets).toEqual(targets);
+    expect(operation?.pathResolutionFailed).toBe(false);
+  });
+
+  it('does not apply shell pathname expansion checks to executable-form requests', () => {
+    const root = mkdtempSync(join(tmpdir(), 'gram-policy-expand-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, '*.log'), 'literal');
+
+    const operation = normalizeExecutableCommand('rm', ['*.log'], root);
+    expect(operation.requestedTargets).toEqual(['*.log']);
+    expect(operation.pathResolutionFailed).toBe(false);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe('ALLOW');
+  });
+});
+
+
+describe('shell composition fail-closed boundary', () => {
+  it.each([
+    ['background separator', 'echo ok & rm -rf /'],
+    ['pipe-stderr separator', 'echo ok |& rm -rf /'],
+    ['newline separator', 'echo ok\nrm -rf /'],
+    ['CRLF separator', 'echo ok\r\nrm -rf /'],
+    ['escaped newline continuation', 'echo ok\\\nrm -rf /'],
+  ] as const)('rejects unsupported %s before classification', (_label, command) => {
+    expect(() => normalizeShellCommand(command, process.cwd())).toThrow(
+      /unsupported shell syntax/i,
+    );
+  });
+
+  it.each([
+    ['double-quoted ampersand', 'echo "a&b"', ['a&b']],
+    ['single-quoted ampersand', "echo 'a&b'", ['a&b']],
+    ['escaped ampersand', 'echo a\\&b', ['a&b']],
+    ['single-quoted newline', "echo 'a\nb'", ['a\nb']],
+    ['double-quoted newline', 'echo "a\nb"', ['a\nb']],
+  ] as const)('keeps supported literal composition marker: %s', (_label, command, expectedArgs) => {
+    const [operation] = normalizeShellCommand(command, process.cwd());
+    expect(operation?.executable).toBe('echo');
+    expect(operation?.args).toEqual(expectedArgs);
+  });
+
+  it('keeps composition-looking executable-form arguments literal', () => {
+    const operation = normalizeExecutableCommand(
+      'echo',
+      ['a&b', 'a\nb'],
+      process.cwd(),
+    );
+    expect(operation.args).toEqual(['a&b', 'a\nb']);
+    expect(new PolicyEngine().evaluate(operation, { taskId: 'task-1' }).kind).toBe(
+      'ALLOW',
+    );
   });
 });
 

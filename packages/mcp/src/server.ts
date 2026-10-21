@@ -1,18 +1,46 @@
+import { registerVerificationReviewTools, type VerificationReviewPort } from './tools/verification-review-tools.js';
+import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import {
-  localhostHostValidation,
-  toNodeHandler,
-  type NodeIncomingMessageLike,
-} from '@modelcontextprotocol/node';
+import { localhostHostValidation, toNodeHandler, type NodeIncomingMessageLike } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { verifyInternalSecret } from './auth.js';
+import { registerAgentTools, type AgentToolsPort } from './tools/agent-tools.js';
+import { registerApprovalTools, type ApprovalToolsPort } from './tools/approval-tools.js';
+import { registerCodeTools, type CodeToolsPort } from './tools/code-tools.js';
+import { registerGitTools, type GitToolsPort } from './tools/git-tools.js';
+import {
+  registerGitHubPullRequestTools,
+  registerGitHubReadTools,
+  type GitHubPullRequestToolsPort,
+  type GitHubReadToolsPort,
+} from './tools/github-tools.js';
+import { registerRepoTools, type RepoToolsPort } from './tools/repo-tools.js';
+import {
+  registerTaskReadTools,
+  registerTaskTools,
+  type TaskCreatePort,
+  type TaskReadPort,
+} from './tools/task-tools.js';
+import { registerVerificationTools, type VerificationToolsPort } from './tools/verification-tools.js';
 
 export interface CreateMcpHttpServerOptions {
   host: string;
   port: number;
   internalSecret: string;
   health?: () => unknown | Promise<unknown>;
+  taskCreate?: TaskCreatePort;
+  codingCapability?: CodingCapabilityPort;
+  verificationReviews?: VerificationReviewPort;
+  taskRead?: TaskReadPort;
+  repos?: RepoToolsPort;
+  codeTools?: CodeToolsPort;
+  gitTools?: GitToolsPort;
+  verificationTools?: VerificationToolsPort;
+  githubPullRequests?: GitHubPullRequestToolsPort;
+  githubRead?: GitHubReadToolsPort;
+  agentTools?: AgentToolsPort;
+  approvals?: ApprovalToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -47,14 +75,34 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
 
   const mcpHandler = createMcpHandler(() => {
     const server = new McpServer({ name: 'gram-coding-agent', version: '0.0.0' });
-    server.registerTool(
-      'agent_health',
-      { description: 'Return the Gram coding agent health status.' },
-      async () => {
+
+    if (options.verificationReviews !== undefined) registerVerificationReviewTools(server, options.verificationReviews);
+    if (options.agentTools !== undefined) {
+      registerAgentTools(server, options.agentTools);
+    } else {
+      server.registerTool('agent_health', { description: 'Return the Gram coding agent health status.' }, async () => {
         const health = options.health ? await options.health() : { status: 'healthy' };
         return { content: [{ type: 'text' as const, text: JSON.stringify(health) }] };
-      },
-    );
+      });
+    }
+
+    if (options.codingCapability !== undefined) registerCodingCapabilityTools(server, options.codingCapability);
+    if (options.taskCreate !== undefined) registerTaskTools(server, options.taskCreate);
+    if (options.taskRead !== undefined) registerTaskReadTools(server, options.taskRead);
+    if (options.repos !== undefined) registerRepoTools(server, options.repos);
+    if (options.codeTools !== undefined) registerCodeTools(server, options.codeTools);
+    if (options.gitTools !== undefined) registerGitTools(server, options.gitTools);
+    if (options.verificationTools !== undefined) {
+      registerVerificationTools(server, options.verificationTools);
+    }
+    if (options.githubPullRequests !== undefined) {
+      registerGitHubPullRequestTools(server, options.githubPullRequests);
+    }
+    if (options.githubRead !== undefined) registerGitHubReadTools(server, options.githubRead);
+    if (options.approvals !== undefined) {
+      registerApprovalTools(server, options.approvals);
+    }
+
     return server;
   });
   const nodeHandler = toNodeHandler(mcpHandler);
