@@ -390,7 +390,46 @@ Confirm the ordering invariant explicitly and link the disposable PR.
 
 Do not include tokens, request authorization headers, secret-file contents, or raw credential metadata.
 
-## Cleanup
+## Opt-in independent boundary evidence
+
+For a new, isolated smoke only, configure the trusted local agent environment
+`GRAM_AGENT_SMOKE_REPOSITORY_ID=<actual disposable repository ID>` before starting
+the exact tested build. This is not an MCP argument. Leave it unset in normal
+operation. Preflight must still reject an existing active Task or unrecovered lock;
+enabling observation does not authorize lock recovery or Task duplication.
+
+The observer opens `agent.sqlite` through a separate read-only connection and uses
+`lstat` on the exact `locks/<repoId>.lock` path. It writes to the separate private
+`smoke-lock-evidence.sqlite` journal in the state directory. Every actual PR and CI
+HTTP request, including pagination, receives BEFORE and AFTER samples. An AFTER
+record distinguishes an HTTP response from a transport error. An observation
+failure aborts the scoped operation; an AFTER failure can occur after a remote
+effect and requires reconciliation before retrying.
+
+Preserve an SQLite online backup of this journal after the run and read it with a
+read-only SQLite connection:
+
+```sql
+SELECT sequence, id, payload FROM observations ORDER BY sequence;
+```
+
+Filter and cross-check the actual repository ID, Task UUID, confirmed HEAD SHA,
+observer session, request IDs and PR row. Pre-create samples have a null PR row;
+the appended `PR_BINDING` record links their correlation ID to the independently
+validated persisted PR row and provider PR number. CI samples contain the actual
+PR row directly. Verify complete BEFORE/AFTER pairs, all expected endpoints/pages,
+and both `dbPresent=false` and `filePresent=false` for the isolated smoke. Retain
+the separate database and file observation timestamps, not only the append time.
+
+The journal is append-only through its API and UPDATE/DELETE triggers; restarts
+append new session IDs rather than replacing earlier samples. It is not protection
+against a malicious process running as the same OS user. Samples prove the measured
+boundary instants, not continuous absence during network latency. Lock presence is
+recorded as data: a later legitimate Task may hold the repository lock while an
+older PR's CI is observed. Do not turn this smoke evidence into a global CI lock
+prohibition. Never synthesize observations for historical TASK-000005.
+
+## Cleanup after evidence retention
 
 After the acceptance evidence is recorded:
 

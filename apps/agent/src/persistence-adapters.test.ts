@@ -169,6 +169,7 @@ describe('persistence adapters', () => {
     await expect(resolver.resolve(task.id)).resolves.toEqual({
       taskId: task.id,
       pullRequestId: pr.id,
+      repoId: REPO_ID,
       owner: 'acme',
       name: 'web',
       number: PR_NUMBER,

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import { CommitService, RemoteService } from '@gram/git';
 import {
@@ -46,6 +47,8 @@ import { createTaskRunner } from '../../apps/agent/src/task-runner-composition.j
 import { TaskScheduler } from '../../apps/agent/src/task-scheduler.js';
 import { TaskVerificationSnapshots } from '../../apps/agent/src/verification-snapshot.js';
 import { BoundPublishingVerification } from '../../apps/agent/src/verified-publishing.js';
+import { createProductionGitHubServices } from '../../apps/agent/src/github-services.js';
+import { SmokeLockObserver, type SmokeBoundary, type SmokeContext } from '../../apps/agent/src/smoke-lock-observer.js';
 import {
   createFakeGitHubServer,
   type FakeGitHubServer,
@@ -56,6 +59,11 @@ import {
 } from './fixtures/create-test-repo.js';
 
 const REPO_ID = 730001;
+
+function defined<T>(value: T | undefined | null): T {
+  if (value === undefined || value === null) throw new Error('Expected persisted fixture evidence');
+  return value;
+}
 
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim();
@@ -122,11 +130,12 @@ async function waitForTerminalTask(
 }
 
 describe('M2 deterministic vertical slice', () => {
-  it('proves task_create through remote-confirmed publish, lock-free PR/CI, and COMPLETED', async () => {
+  it.each([false, true])('proves task_create through remote-confirmed publish, lock-free PR/CI, and COMPLETED (independent observer: %s)', async (observeLocks) => {
     let fixture: TestRepositoryFixture | undefined;
     let github: FakeGitHubServer | undefined;
     let database: ReturnType<typeof openDatabase> | undefined;
     let scheduler: TaskScheduler | undefined;
+    let observer: SmokeLockObserver | undefined;
 
     try {
       fixture = createTestRepository();
@@ -334,6 +343,20 @@ describe('M2 deterministic vertical slice', () => {
         fetch: fetchForGitHub,
         apiBaseUrl: github.apiBaseUrl,
       });
+      if (observeLocks) observer = new SmokeLockObserver({ stateDirectory: fixture.rootPath, repoId: REPO_ID });
+      const fakeBaseUrl = github.apiBaseUrl;
+      const productionGitHub = observeLocks ? createProductionGitHubServices({
+        secrets,
+        pullRequests,
+        evidence: new PullRequestEvidenceRepository(database),
+        ciRuns,
+        ...(observer === undefined ? {} : { observer }),
+        fetch: (url, init) => {
+          const source = new URL(url);
+          expect(source.origin).toBe('https://api.github.com');
+          return fetchForGitHub(`${fakeBaseUrl}${source.pathname}${source.search}`, init);
+        },
+      }) : undefined;
 
       const runner = createTaskRunner({
         audit,
@@ -344,9 +367,9 @@ describe('M2 deterministic vertical slice', () => {
         worktrees: worktreeService,
         verification,
         publishing,
-        pullRequests: pullRequestService,
+        pullRequests: productionGitHub?.pullRequests ?? pullRequestService,
         checks: {
-          client: checksClient,
+          client: productionGitHub?.checks.client ?? checksClient,
           persistence: ciRuns,
           delay: { wait: async () => undefined },
           maxAttempts: 2,
@@ -428,7 +451,7 @@ describe('M2 deterministic vertical slice', () => {
         readFileSync(join(fixture.canonicalPath, 'src', 'counter.ts'), 'utf8'),
       ).toContain('return value;');
       expect(
-        readFileSync(join(workspace!.linuxPath, 'src', 'counter.ts'), 'utf8'),
+        readFileSync(join(defined(workspace).linuxPath, 'src', 'counter.ts'), 'utf8'),
       ).toContain('return value + 1;');
       expect(git(fixture.canonicalPath, ['status', '--porcelain'])).toBe('');
       expect(git(fixture.canonicalPath, ['rev-parse', 'HEAD'])).toBe(
@@ -456,7 +479,7 @@ describe('M2 deterministic vertical slice', () => {
       const remoteLine = git(fixture.canonicalPath, [
         'ls-remote',
         'origin',
-        `refs/heads/${published!.branch}`,
+        `refs/heads/${defined(published).branch}`,
       ]);
       expect(remoteLine.split(/\s+/u)[0]).toBe(published?.sha);
 
@@ -510,8 +533,8 @@ describe('M2 deterministic vertical slice', () => {
         'REPO_LOCK_RELEASED',
       ]);
       expect(
-        Date.parse(auditRows[0]!.createdAt),
-      ).toBeLessThanOrEqual(Date.parse(auditRows[1]!.createdAt));
+        Date.parse(defined(auditRows[0]).createdAt),
+      ).toBeLessThanOrEqual(Date.parse(defined(auditRows[1]).createdAt));
 
       const observationRows = database.prepare(`
         SELECT created_at AS createdAt, payload_json AS payloadJson
@@ -521,11 +544,66 @@ describe('M2 deterministic vertical slice', () => {
       `).all(created.id) as Array<{ createdAt: string; payloadJson: string }>;
       expect(observationRows).toHaveLength(2);
       expect(observationRows.map((row) => JSON.parse(row.payloadJson))).toEqual([
-        { pullRequestId: pr!.id, headSha: published!.sha },
-        { pullRequestId: pr!.id, headSha: published!.sha },
+        { pullRequestId: defined(pr).id, headSha: defined(published).sha },
+        { pullRequestId: defined(pr).id, headSha: defined(published).sha },
       ]);
-      expect(Date.parse(auditRows[1]!.createdAt)).toBeLessThan(Date.parse(pr!.createdAt));
-      expect(Date.parse(pr!.createdAt)).toBeLessThanOrEqual(Date.parse(observationRows[0]!.createdAt));
+      expect(Date.parse(defined(auditRows[1]).createdAt)).toBeLessThan(Date.parse(defined(pr).createdAt));
+      expect(Date.parse(defined(pr).createdAt)).toBeLessThanOrEqual(Date.parse(defined(observationRows[0]).createdAt));
+
+      if (observeLocks) {
+        // Read committed evidence through a third, read-only SQLite connection:
+        // these are actual transport boundary samples, not mock observer calls.
+        const journal = new DatabaseSync(join(fixture.rootPath, 'smoke-lock-evidence.sqlite'), { readOnly: true });
+        type Observation = SmokeContext & Partial<SmokeBoundary> & {
+          kind: 'BOUNDARY' | 'PR_BINDING';
+          observedAt: string;
+          dbObservedAt: string;
+          fileObservedAt: string;
+          dbPresent: boolean;
+          filePresent: boolean;
+        };
+        let observations: Observation[];
+        try {
+          observations = journal.prepare('SELECT payload FROM observations ORDER BY sequence').all()
+            .map(row => JSON.parse(String(row.payload)) as Observation);
+        } finally {
+          journal.close();
+        }
+        const boundaries = observations.filter(sample => sample.kind === 'BOUNDARY');
+        expect(github.requests).toHaveLength(10); // PR lookup/create and four endpoints per CI poll.
+        expect(boundaries).toHaveLength(github.requests.length * 2);
+        for (const sample of observations) {
+          expect(sample).toMatchObject({ taskId: created.id, repoId: REPO_ID, headSha: defined(published).sha });
+          expect(Number.isFinite(Date.parse(sample.observedAt))).toBe(true);
+        }
+        const expectedEndpoints = github.requests.map(request =>
+          request.pathname.endsWith('/pulls') ? (request.method === 'POST' ? 'PR_CREATE' : 'PR_FIND') :
+          request.pathname.includes('/rules/branches/') ? 'RULES' :
+          request.pathname.endsWith('/statuses') ? 'STATUSES' :
+          request.pathname.endsWith('/protection/required_status_checks') ? 'PROTECTION' : 'CHECK_RUNS');
+        expect(new Set(expectedEndpoints)).toEqual(new Set(['PR_FIND', 'PR_CREATE', 'RULES', 'STATUSES', 'PROTECTION', 'CHECK_RUNS']));
+        github.requests.forEach((request, index) => {
+          const before = defined(boundaries[index * 2]);
+          const after = defined(boundaries[index * 2 + 1]);
+          expect(request.authorized).toBe(true);
+          expect(before).toMatchObject({ boundary: 'BEFORE', endpoint: expectedEndpoints[index], method: request.method, dbPresent: false, filePresent: false });
+          expect(after).toMatchObject({ boundary: 'AFTER', endpoint: expectedEndpoints[index], method: request.method, requestId: before.requestId,
+            outcome: 'RESPONSE', status: request.method === 'POST' ? 201 : 200, dbPresent: false, filePresent: false });
+          for (const sample of [before, after]) {
+            expect(Date.parse(sample.dbObservedAt)).toBeGreaterThanOrEqual(Date.parse(defined(auditRows[1]).createdAt));
+            expect(Date.parse(sample.fileObservedAt)).toBeGreaterThanOrEqual(Date.parse(defined(auditRows[1]).createdAt));
+            expect(sample.pullRequestId).toBe(request.pathname.endsWith('/pulls') ? null : defined(pr).id);
+          }
+          expect(Date.parse(before.observedAt)).toBeLessThanOrEqual(Date.parse(after.observedAt));
+        });
+        const bindings = observations.filter(sample => sample.kind === 'PR_BINDING');
+        expect(bindings).toHaveLength(1);
+        expect(bindings[0]).toMatchObject({ pullRequestId: defined(pr).id, correlationId: defined(boundaries[0]).correlationId });
+        const bindingIndex = observations.indexOf(defined(bindings[0]));
+        expect(observations[bindingIndex - 1]).toMatchObject({ kind: 'BOUNDARY', endpoint: 'PR_CREATE', boundary: 'AFTER' });
+        expect(observations[bindingIndex + 1]).toMatchObject({ kind: 'BOUNDARY', endpoint: 'RULES', boundary: 'BEFORE' });
+        expect(Date.parse(defined(bindings[0]).observedAt)).toBeGreaterThanOrEqual(Date.parse(defined(pr).createdAt));
+      }
 
       const persistedCommands = database
         .prepare(
@@ -543,12 +621,13 @@ describe('M2 deterministic vertical slice', () => {
       expect(persistedCommands.every((run) => run.status === 'SUCCEEDED')).toBe(true);
       const gitArgs = persistedCommands
         .filter((run) => run.executable === 'git' && run.argsJson !== null)
-        .map((run) => JSON.parse(run.argsJson!) as string[]);
+        .map((run) => JSON.parse(defined(run.argsJson)) as string[]);
       expect(gitArgs.some((args) => args[0] === 'worktree' && args[1] === 'add')).toBe(true);
       expect(gitArgs.some((args) => args[0] === 'push' && args[2] === `${published?.sha}:refs/heads/${published?.branch}`)).toBe(true);
       expect(gitArgs.some((args) => args[0] === 'ls-remote')).toBe(true);
     } finally {
       if (scheduler !== undefined) await scheduler.stop();
+      observer?.close();
       if (database !== undefined && database.open) database.close();
       if (github !== undefined) await github.close();
       fixture?.cleanup();

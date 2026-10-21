@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,7 @@ import { startAgent, type RunningAgent } from './main.js';
 import * as runnerComposition from './task-runner-composition.js';
 import * as githubServices from './github-services.js';
 import { TaskScheduler } from './task-scheduler.js';
+import { SmokeLockObserver } from './smoke-lock-observer.js';
 
 const tempDirs: string[] = [];
 const running: RunningAgent[] = [];
@@ -24,6 +26,92 @@ afterEach(async () => {
   while ((app = running.pop()) !== undefined) await app.close();
   let dir: string | undefined;
   while ((dir = tempDirs.pop()) !== undefined) rmSync(dir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+
+describe('opt-in smoke observer startup', () => {
+  it('wires the real observer, preserves private evidence across shutdown/restart and remains healthy', async () => {
+    vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', '159');
+    const paths = fixture();
+    const db = openDatabase(join(paths.stateDirectory, 'agent.sqlite'));
+    runMigrations(db);
+    new RepositoryRepository(db).upsert({ githubRepositoryId: 159, owner: 'fixture', name: 'repo', defaultBranch: 'main', localBasePath: paths.stateDirectory });
+    const task = new TaskRepository(db).create({ repoId: 159, goal: 'Historical fixture', taskType: 'FIX', publishMode: 'PULL_REQUEST' });
+    db.prepare("UPDATE tasks SET status='FAILED' WHERE id=?").run(task.id);
+    db.prepare("INSERT INTO git_commits(task_id,repo_id,sha,branch,remote_confirmed,remote_confirmed_at,created_at) VALUES (?,159,?,'fix/fixture',1,?,?)").run(task.id, 'a'.repeat(40), new Date().toISOString(), new Date().toISOString());
+    db.close();
+    const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');
+    const first = await startAgent({ ...paths, port: 0, installSignalHandlers: false });
+    running.push(first);
+    const observer = factory.mock.calls[0]?.[0].observer;
+    expect(observer).toBeInstanceOf(SmokeLockObserver);
+    expect(first.health()).toEqual({ status: 'healthy', database: 'ok', mcp: 'ready' });
+    const context = { taskId: task.id, repoId: 159, headSha: 'a'.repeat(40), correlationId: 'startup-fixture', pullRequestId: null };
+    observer?.sample(context, { requestId: 'request-one', boundary: 'BEFORE', endpoint: 'PR_FIND', method: 'GET', page: 1 });
+    const journalPath = join(paths.stateDirectory, 'smoke-lock-evidence.sqlite');
+    expect(statSync(journalPath).mode & 0o777).toBe(0o600);
+    await first.close();
+    expect(() => (observer as SmokeLockObserver).readEvidence()).toThrow();
+    const second = await startAgent({ ...paths, port: 0, installSignalHandlers: false });
+    running.push(second);
+    const reopened = factory.mock.calls[1]?.[0].observer;
+    reopened?.sample(context, { requestId: 'request-two', boundary: 'AFTER', endpoint: 'PR_FIND', method: 'GET', page: 1 });
+    expect(second.health().status).toBe('healthy');
+    await second.close();
+    const evidence = new DatabaseSync(journalPath, { readOnly: true });
+    try {
+      const rows = evidence.prepare('SELECT payload FROM observations ORDER BY sequence').all().map((row) => JSON.parse(String(row.payload)) as { requestId: string; sessionId: string });
+      expect(rows.map((row) => row.requestId)).toEqual(['request-one', 'request-two']);
+      expect(new Set(rows.map((row) => row.sessionId)).size).toBe(2);
+    } finally { evidence.close(); }
+  });
+
+  it.each(['', '0', '-1', '01', 'invalid', '9007199254740992'])('rejects invalid configured repository %j before MCP startup', async (repoId) => {
+    vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', repoId);
+    const paths = fixture();
+    const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');
+    const scheduler = vi.spyOn(TaskScheduler.prototype, 'start');
+    await expect(startAgent({ ...paths, port: 0, installSignalHandlers: false })).rejects.toThrow('Smoke observer startup failed');
+    expect(factory).not.toHaveBeenCalled();
+    expect(scheduler).not.toHaveBeenCalled();
+    expect(existsSync(join(paths.stateDirectory, 'smoke-lock-evidence.sqlite'))).toBe(false);
+  });
+
+  it('rejects a symlink journal before composing MCP or starting the scheduler', async () => {
+    vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', '159');
+    const paths = fixture();
+    symlinkSync(join(paths.stateDirectory, 'forbidden-target'), join(paths.stateDirectory, 'smoke-lock-evidence.sqlite'));
+    const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');
+    const scheduler = vi.spyOn(TaskScheduler.prototype, 'start');
+    await expect(startAgent({ ...paths, port: 0, installSignalHandlers: false })).rejects.toThrow('Smoke observer startup failed');
+    expect(factory).not.toHaveBeenCalled();
+    expect(scheduler).not.toHaveBeenCalled();
+    expect(existsSync(join(paths.stateDirectory, 'forbidden-target'))).toBe(false);
+  });
+
+  it('closes observer handles if the required secret cannot be acquired at startup', async () => {
+    vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', '159');
+    const paths = fixture();
+    rmSync(join(paths.secretDirectory, 'mcp-internal-secret'));
+    const close = vi.spyOn(SmokeLockObserver.prototype, 'close');
+    await expect(startAgent({ ...paths, port: 0, installSignalHandlers: false })).rejects.toThrow();
+    expect(close).toHaveBeenCalledOnce();
+    const observer = close.mock.contexts[0];
+    if (!(observer instanceof SmokeLockObserver)) throw new Error('Observer was not constructed');
+    expect(() => observer.readEvidence()).toThrow();
+    expect(() => observer.sample({ taskId: 'closed', repoId: 159, headSha: 'a'.repeat(40), correlationId: 'closed', pullRequestId: null }, { requestId: 'closed', boundary: 'BEFORE', endpoint: 'PR_FIND', method: 'GET', page: 1 })).toThrow('Smoke lock observation failed');
+  });
+
+  it('creates no observer or evidence journal when not configured', async () => {
+    vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', undefined);
+    const paths = fixture();
+    const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');
+    const app = await startAgent({ ...paths, port: 0, installSignalHandlers: false });
+    running.push(app);
+    expect(factory.mock.calls[0]?.[0].observer).toBeUndefined();
+    expect(existsSync(join(paths.stateDirectory, 'smoke-lock-evidence.sqlite'))).toBe(false);
+  });
 });
 
 function fixture() {
