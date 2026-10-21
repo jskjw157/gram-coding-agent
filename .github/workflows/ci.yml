@@ -25,3 +25,16 @@ jobs:
       - run: pnpm test:e2e
       - run: pnpm test:security
       - run: pnpm build
+
+  windows-workspace-native:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build fixed typed Windows filesystem helper
+        shell: cmd
+        run: scripts\build-windows-workspace-helper.cmd "%RUNNER_TEMP%\gram-workspace.exe"
+      - name: Exercise actual Windows filesystem effects and denials
+        shell: cmd
+        run: python tests\security\windows-workspace-native.test.py "%RUNNER_TEMP%\gram-workspace.exe"

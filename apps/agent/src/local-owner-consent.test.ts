@@ -16,14 +16,19 @@ function fixture(verifier = verified) {
   const consent = new LocalOwnerConsent({ verifier, now: () => now, ttlMs: 100 });
   return { consent, advance: () => { now += 101; } };
 }
+function granted(value: { capability: string; expiresAt: number } | null) {
+  expect(value).not.toBeNull();
+  if (value === null) throw new Error('Expected synthetic fixture grant');
+  return value;
+}
 
 describe('local owner consent capabilities', () => {
   it('grants only a fresh trusted verification and consumes once', async () => {
     const { consent } = fixture();
     const grant = await consent.request(operation);
     expect(grant).not.toBeNull();
-    expect(consent.consume(grant!.capability, operation)).toBe(true);
-    expect(consent.consume(grant!.capability, operation)).toBe(false);
+    expect(consent.consume(granted(grant).capability, operation)).toBe(true);
+    expect(consent.consume(granted(grant).capability, operation)).toBe(false);
   });
   it.each([
     { taskId: 'other' }, { path: 'other.env' }, { action: 'credential-write' as const },
@@ -33,20 +38,20 @@ describe('local owner consent capabilities', () => {
   ])('rejects changed operation %j without spending original grant', async changed => {
     const { consent } = fixture();
     const grant = await consent.request(operation);
-    expect(consent.consume(grant!.capability, { ...operation, ...changed })).toBe(false);
-    expect(consent.consume(grant!.capability, operation)).toBe(true);
+    expect(consent.consume(granted(grant).capability, { ...operation, ...changed })).toBe(false);
+    expect(consent.consume(granted(grant).capability, operation)).toBe(true);
   });
   it('rejects expired and restarted capabilities', async () => {
     const f = fixture();
     const grant = await f.consent.request(operation);
-    expect(fixture().consent.consume(grant!.capability, operation)).toBe(false);
+    expect(fixture().consent.consume(granted(grant).capability, operation)).toBe(false);
     f.advance();
-    expect(f.consent.consume(grant!.capability, operation)).toBe(false);
+    expect(f.consent.consume(granted(grant).capability, operation)).toBe(false);
   });
   it('allows exactly one concurrent consumer', async () => {
     const { consent } = fixture();
     const grant = await consent.request(operation);
-    const results = await Promise.all(Array.from({ length: 10 }, async () => consent.consume(grant!.capability, operation)));
+    const results = await Promise.all(Array.from({ length: 10 }, async () => consent.consume(granted(grant).capability, operation)));
     expect(results.filter(Boolean)).toHaveLength(1);
   });
   it.each(['UNAVAILABLE', 'CANCELLED', 'DENIED'] as const)('fails closed on %s', async status => {
@@ -69,15 +74,15 @@ describe('local owner consent capabilities', () => {
     const mutable = { ...operation };
     const g = fixture(async challenge => { mutable.path = 'changed'; return verified(challenge); });
     const grant = await g.consent.request(mutable);
-    expect(g.consent.consume(grant!.capability, mutable)).toBe(false);
-    expect(g.consent.consume(grant!.capability, operation)).toBe(true);
+    expect(g.consent.consume(granted(grant).capability, mutable)).toBe(false);
+    expect(g.consent.consume(granted(grant).capability, operation)).toBe(true);
   });
   it('keeps paths out of receipts and content digests/extensions out of native challenges', async () => {
     let displayed = '';
     const f = fixture(async challenge => { displayed = JSON.stringify(challenge); return verified(challenge); });
     const grant = await f.consent.request(operation);
     expect(JSON.stringify(grant)).not.toContain('.env');
-    expect(displayed).not.toContain(operation.preimageDigest!);
+    expect(displayed).not.toContain(operation.preimageDigest ?? 'missing-fixture-digest');
     expect(await f.consent.request({ ...operation, content: 'fixture-secret' } as LocalOwnerOperation)).toBeNull();
   });
 });

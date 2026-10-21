@@ -1,0 +1,13 @@
+# Issue 228 development evidence — in progress
+
+PR #227 remains the multi-root starter; PR #229 contains the completion work. Neither is deployed or accepted as completion. Production remains v0.1.0 at `85c7c6c6f7ff00868160ef195180b98405159b8c`; the live external health call returned healthy/ok/ready during development. Existing Tasks, locks, DB, failed worktrees and mc-web source have not been changed.
+
+At `5aed21cb84fa25d3c4dc6c4e533b024fe0e76ce5`, a clean Linux checkout passed 934 unit tests, E2E, the mandatory security suite, build and WSL isolation. Typecheck passed. Lint identified non-null assertions in the new consent tests; those assertions have since been replaced with an explicit fixture assertion. The first GitHub run `39554461963` failed that same lint gate, rather than skipping it. New-head CI must prove the correction.
+
+Behavioral RED evidence included three initial filesystem failures: hardlinked reads, YAML/multiline/PEM preview leakage and symlinked recovery storage. Additional REDs covered credential-bearing writes without native consent and malformed JSON credentials. The corrected targeted group passed 43 tests. Native client and executable-integrity tests were introduced as RED before implementation; their subsequent targeted group passed 28 tests including consent.
+
+Seven real Windows fixture tests currently pass: hidden/binary read/list; expected-preimage atomic write and conflict; hardlink/traversal/device-name denial; destination-preserving move; junction/controller-path denial; actual mkdir/move; unknown-operation/field denial. An isolated transient systemd process running as the agent user successfully invoked the fixed native helper and read a non-sensitive diagnostic fixture. This did not restart or modify either production service.
+
+Independent probes found that a Windows directory handle without delete sharing prevents an external ancestor move (ERROR_SHARING_VIOLATION), and native relative no-replace rename preserves existing destinations. Ext4 Landlock rejected reopen/create after an ancestor moved outside its allowed tree, but an already-open writable FD retained authority. The same unchanged entry denied all positive DrvFs operations. These limitations are retained; no successful containment claim is inferred from unsupported operations.
+
+Remaining work includes verified backend/facade integration, encrypted recoverable directory/file operations and journal, native Windows owner presence/protected reveal, real Git/local-command workflow, full new-head CI and independent code/security review, safe backup/deployment, and actual external ChatGPT discovery/calls. This document is a checkpoint, not an acceptance or release-readiness report.
