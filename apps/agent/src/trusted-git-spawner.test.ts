@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import childProcess, { execFileSync } from 'node:child_process';
+import { RemoteService } from '@gram/git';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -329,4 +330,77 @@ it('does not prune unrelated stale metadata', async () => {
   });
   await expect(spawner.spawn(request(['worktree', 'prune']))).rejects.toThrow();
   expect(git(['worktree', 'list', '--porcelain'])).toContain(other);
+});
+
+describe('RemoteService origin confirmation contract', () => {
+  it.each(['origin', 'https://github.com/fixture/smoke.git', 'https://github.com/fixture/smoke'])(
+    'confirms through real metadata and credential admission for %s', async (remote) => {
+      const head = git(['rev-parse', 'HEAD']).trim();
+      const ref = 'refs/heads/fix/task-000008-counter';
+      const secretRoot = path.join(root, 'confirmation-secrets');
+      await mkdir(secretRoot);
+      await writeFile(path.join(secretRoot, 'github.token'), 'synthetic-confirmation-token', { mode: 0o600 });
+      const provider = new FileSecretProvider(secretRoot);
+      const acquire = vi.spyOn(provider, 'getForUse');
+      const boundary = new TrustedGitSpawner({
+        contextForTask: () => ({ basePath: base, owner: 'fixture', name: 'smoke' }), secrets: provider,
+      });
+      const originalSpawn = childProcess.spawn;
+      const transports: string[][] = [];
+      // Only the external network transport is substituted. Git metadata/config reads
+      // and credential acquisition use the real repository and FileSecretProvider.
+      const transport = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+        if (Array.isArray(args) && args.includes('ls-remote')) {
+          transports.push([...args]);
+          return originalSpawn('/usr/bin/printf', ['%s', `${head}\t${ref}\n`], options);
+        }
+        return originalSpawn(command, args, options);
+      });
+      syncBuiltinESMExports();
+      try {
+        const service = new RemoteService({ run: async (command) => boundary.spawn({ ...command, env: {} } as SpawnRequest) }, { taskId: 'task' }, base);
+        expect(await service.confirmRemoteSha(remote, 'fix/task-000008-counter', head)).toBe(true);
+        expect(await service.confirmRemoteSha(remote, 'fix/task-000008-counter', '0'.repeat(40))).toBe(false);
+        expect(acquire).toHaveBeenCalledTimes(2);
+        expect(transports).toHaveLength(2);
+        for (const args of transports) {
+          const index = args.indexOf('ls-remote');
+          expect(args.slice(index)).toEqual(['ls-remote', remote === 'origin' ? 'https://github.com/fixture/smoke.git' : remote, ref]);
+          expect(args.join(' ')).not.toContain('synthetic-confirmation-token');
+        }
+      } finally { transport.mockRestore(); acquire.mockRestore(); syncBuiltinESMExports(); }
+    },
+  );
+
+  it.each([
+    ['remote.origin.url', 'https://github.com/attacker/other.git'],
+    ['url.https://attacker.invalid/.insteadOf', 'https://github.com/'],
+    ['include.path', '/nonexistent/included-config'],
+  ])('rejects unsafe origin configuration %s before acquiring a credential', async (key, value) => {
+    git(['config', key, value]);
+    const provider = new FileSecretProvider(path.join(root, 'never-read-secrets'));
+    const acquire = vi.spyOn(provider, 'getForUse');
+    const boundary = new TrustedGitSpawner({ contextForTask: () => ({ basePath: base, owner: 'fixture', name: 'smoke' }), secrets: provider });
+    try {
+      await expect(boundary.spawn(request(['ls-remote', 'origin', 'refs/heads/fix/task-000008-counter']))).rejects.toThrow();
+      expect(acquire).not.toHaveBeenCalled();
+    } finally { acquire.mockRestore(); }
+  });
+
+  it.each([
+    ['ls-remote', 'other', 'refs/heads/main'],
+    ['ls-remote', 'https://github.com/attacker/other.git', 'refs/heads/main'],
+    ['ls-remote', 'origin', 'refs/tags/main'],
+    ['ls-remote', 'origin', 'refs/heads/--upload-pack=evil'],
+    ['ls-remote', 'origin', 'refs/heads/main', '--upload-pack=evil'],
+    ['ls-remote', '--heads', 'origin', 'refs/heads/main'],
+  ])('refuses unregistered confirmation selector %j without a credential', async (...args) => {
+    const provider = new FileSecretProvider(path.join(root, 'never-read-secrets'));
+    const acquire = vi.spyOn(provider, 'getForUse');
+    const boundary = new TrustedGitSpawner({ contextForTask: () => ({ basePath: base, owner: 'fixture', name: 'smoke' }), secrets: provider });
+    try {
+      await expect(boundary.spawn(request(args))).rejects.toThrow();
+      expect(acquire).not.toHaveBeenCalled();
+    } finally { acquire.mockRestore(); }
+  });
 });
