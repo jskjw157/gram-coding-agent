@@ -42,6 +42,13 @@ export const LocalFsTrashInput = bounds.extend({
 export const LocalFsRootsInput = z.object({}).strict();
 
 type MaybePromise<T> = T | Promise<T>;
+
+// System errors can contain absolute /proc or Windows host paths. Never
+// surface native exception text through the remote MCP transport.
+async function safeCall(operation: () => MaybePromise<unknown>) {
+  try { return safeJsonResult(await operation()); }
+  catch { throw new Error('Local filesystem operation denied or failed'); }
+}
 export interface LocalFsToolsPort {
   roots(): MaybePromise<unknown>;
   list(input: z.infer<typeof LocalFsListInput>): MaybePromise<unknown>;
@@ -60,45 +67,45 @@ export function registerLocalFsTools(server: McpServer, port: LocalFsToolsPort):
   server.registerTool('local_fs_roots', {
     description: 'Discover owner-configured Windows/WSL filesystem roots and their available capabilities.',
     inputSchema: LocalFsRootsInput,
-  }, async () => safeJsonResult(await port.roots()));
+  }, async () => safeCall(() => port.roots()));
   server.registerTool('local_fs_list', {
     description: 'List entries including hidden/config files under an authorized Windows/WSL filesystem root.',
     inputSchema: LocalFsListInput,
-  }, async (input) => safeJsonResult(await port.list(input)));
+  }, async (input) => safeCall(() => port.list(input)));
   server.registerTool('local_fs_stat', {
     description: 'Stat and hash one authorized local filesystem path without reading content.',
     inputSchema: bounds,
-  }, async (input) => safeJsonResult(await port.stat(input)));
+  }, async (input) => safeCall(() => port.stat(input)));
   server.registerTool('local_fs_read', {
     description: 'Read any UTF-8 text/config file under an authorized local root with sensitive values masked by default.',
     inputSchema: LocalFsReadInput,
-  }, async (input) => safeJsonResult(await port.read(input)));
+  }, async (input) => safeCall(() => port.read(input)));
   server.registerTool('local_fs_search', {
     description: 'Perform bounded literal-text search through authorized local directory trees; sensitive matches are masked.',
     inputSchema: LocalFsSearchInput,
-  }, async (input) => safeJsonResult(await port.search(input)));
+  }, async (input) => safeCall(() => port.search(input)));
   server.registerTool('local_fs_write', {
     description: 'Create or atomically replace a text file using an exact expected SHA256; retain a private backup.',
     inputSchema: LocalFsWriteInput,
-  }, async (input) => safeJsonResult(await port.write(input)));
+  }, async (input) => safeCall(() => port.write(input)));
   server.registerTool('local_fs_patch', {
     description: 'Apply one exact text replacement guarded by expected SHA256 and private recovery backup.',
     inputSchema: LocalFsPatchInput,
-  }, async (input) => safeJsonResult(await port.patch(input)));
+  }, async (input) => safeCall(() => port.patch(input)));
   server.registerTool('local_fs_mkdir', {
     description: 'Create one local directory under an authorized writable root; parent must exist.',
     inputSchema: bounds,
-  }, async (input) => safeJsonResult(await port.mkdir(input)));
+  }, async (input) => safeCall(() => port.mkdir(input)));
   server.registerTool('local_fs_move', {
     description: 'Rename a SHA-bound local file safely within the same authorized filesystem root.',
     inputSchema: LocalFsMoveInput,
-  }, async (input) => safeJsonResult(await port.move(input)));
+  }, async (input) => safeCall(() => port.move(input)));
   server.registerTool('local_fs_copy', {
     description: 'Copy a SHA-bound local file only to a destination that does not already exist.',
     inputSchema: LocalFsCopyInput,
-  }, async (input) => safeJsonResult(await port.copy(input)));
+  }, async (input) => safeCall(() => port.copy(input)));
   server.registerTool('local_fs_trash', {
     description: 'Move a SHA-bound file to recoverable private storage rather than deleting it.',
     inputSchema: LocalFsTrashInput,
-  }, async (input) => safeJsonResult(await port.trash(input)));
+  }, async (input) => safeCall(() => port.trash(input)));
 }
