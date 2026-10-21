@@ -1,0 +1,27 @@
+name: ops-native-channel
+on:
+  pull_request:
+    paths:
+      - 'platform/macos/operations-helper/**'
+      - 'docs/operations/parallel/native-channel-fixture.md'
+      - '.github/workflows/ops-native-channel.yml'
+permissions:
+  contents: read
+jobs:
+  native-channel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Collect native channel fixture tests
+        run: pnpm exec vitest run --root platform/macos/operations-helper
+      - name: Typecheck native channel fixture
+        run: pnpm exec tsc -p platform/macos/operations-helper/tsconfig.json --noEmit
+      - name: Lint native channel fixture
+        run: pnpm exec eslint platform/macos/operations-helper/src
