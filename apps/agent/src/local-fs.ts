@@ -53,9 +53,6 @@ function parts(path: string, allowRoot = false): string[] {
 function hash(bytes: Buffer | string): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
-function isMissing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
 function isProtected(path: string, protectedRoots: readonly string[]): boolean {
   return protectedRoots.some(p => within(p, path));
 }
