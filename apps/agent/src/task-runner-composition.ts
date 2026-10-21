@@ -537,20 +537,36 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
 
   // The observer must never complete the task internally: final success is
   // delegated to CompletePort exactly once by TaskRunner.run.
+  const checks = options.checks;
   const checksService =
-    options.checks === undefined
+    checks === undefined
       ? undefined
       : new ChecksService({
-          client: options.checks.client,
-          persistence: options.checks.persistence,
+          client: {
+            listRequiredChecks: (context) => {
+              // Record each local attempt before provider I/O. Unlike ci_runs
+              // upserts, these rows preserve the first timestamp across polls
+              // and failures. An audit failure prevents an unrecorded call.
+              audit.append({
+                taskId: context.taskId,
+                eventType: 'CI_OBSERVATION_STARTED',
+                payload: {
+                  pullRequestId: context.pullRequestId,
+                  headSha: context.headSha,
+                },
+              });
+              return checks.client.listRequiredChecks(context);
+            },
+          },
+          persistence: checks.persistence,
           completion: { complete: () => undefined },
-          ...(options.checks.delay === undefined ? {} : { delay: options.checks.delay }),
-          ...(options.checks.maxAttempts === undefined
+          ...(checks.delay === undefined ? {} : { delay: checks.delay }),
+          ...(checks.maxAttempts === undefined
             ? {}
-            : { maxAttempts: options.checks.maxAttempts }),
-          ...(options.checks.pollIntervalMs === undefined
+            : { maxAttempts: checks.maxAttempts }),
+          ...(checks.pollIntervalMs === undefined
             ? {}
-            : { pollIntervalMs: options.checks.pollIntervalMs }),
+            : { pollIntervalMs: checks.pollIntervalMs }),
         });
 
   const resolveCiContext = async (taskId: TaskId, adapter: string) => {
