@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { TaskId } from '@gram/domain';
+import { VerificationRepository } from './verification-repository.js';
 
 export interface PullRequestVerificationEvidence {
   name: string;
@@ -73,10 +74,23 @@ function pathsFromDiffReview(rows: readonly VerificationEvidenceRow[]): string[]
   )];
 }
 
+function publishablePath(path: string): boolean {
+  // Legacy metadata also crosses this public-output boundary. Keep canonical
+  // repository paths, and reject Markdown injection and recognizable credentials.
+  return path.length > 0 && !/^[-/]/.test(path) && !/[\\:*?[\]`<>]/.test(path) &&
+    ![...path].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) &&
+    path.split('/').every(part => part !== '' && part !== '.' && part !== '..' && part.toLowerCase() !== '.git') &&
+    !/(?:sk-[A-Za-z0-9_-]{10,}|github_pat_[A-Za-z0-9_]{10,}|gh[opusr]_[A-Za-z0-9]{10,})/.test(path);
+}
+
 export class PullRequestEvidenceRepository {
   constructor(private readonly db: Database.Database) {}
 
   readForTask(taskId: TaskId): StoredPullRequestEvidence {
+    return this.db.transaction(() => this.readSnapshot(taskId))();
+  }
+
+  private readSnapshot(taskId: TaskId): StoredPullRequestEvidence {
     const task = this.db
       .prepare(
         'SELECT goal, result_summary, metadata_json FROM tasks WHERE id = ?',
@@ -106,9 +120,28 @@ export class PullRequestEvidenceRepository {
       `)
       .all(taskId, taskId) as VerificationEvidenceRow[];
 
+    const plan = this.db.prepare(`
+      SELECT id, head_sha, plan_json FROM verification_plans
+      WHERE task_id = ? ORDER BY id DESC LIMIT 1
+    `).get(taskId) as { id: number; head_sha: string | null; plan_json: string } | undefined;
+    const externalReviews = parseMetadata(plan?.plan_json ?? null).externalReviews === true;
+    const external = externalReviews ||
+      rows.some(row => row.evidence_ref?.startsWith('external-review:')) ||
+      (plan !== undefined && this.db.prepare(
+        'SELECT 1 FROM verification_reviews WHERE plan_id = ? LIMIT 1',
+      ).get(plan.id) !== undefined);
     const metadataPaths = stringArray(metadata.changedPaths);
-    const changedPaths =
-      metadataPaths.length > 0 ? metadataPaths : pathsFromDiffReview(rows);
+    let changedPaths: string[];
+    if (external) {
+      // Review HEAD is the sealed pre-commit baseline, not the later published SHA.
+      // Reuse the publication gate's exact task/plan/check/review/snapshot bindings.
+      const bound = !externalReviews || plan?.head_sha === null || plan === undefined ? undefined :
+        new VerificationRepository(this.db).getBoundPlan(taskId, plan.head_sha, plan.id);
+      changedPaths = bound?.approvedPaths ?? [];
+    } else {
+      changedPaths = metadataPaths.length > 0 ? metadataPaths : pathsFromDiffReview(rows);
+    }
+    if (!changedPaths.every(publishablePath)) changedPaths = [];
 
     const summary =
       nonEmptyString(task.result_summary) ??
