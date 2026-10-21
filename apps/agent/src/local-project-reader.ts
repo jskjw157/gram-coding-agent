@@ -16,6 +16,16 @@ const FORBIDDEN_PART = /^(?:\.|node_modules$|dist$|build$|coverage$|vendor$|\.pn
 const SENSITIVE_NAME = /(?:secret|credential|private[-_]?key|api[-_]?key|token|password|passwd|id_rsa|id_ed25519|\.pem$|\.p12$|\.pfx$|\.key$|\.env|\.npmrc|\.yarnrc)/iu;
 const SECRET_CONTENT = /(?:-----BEGIN [\w ]*PRIVATE KEY-----|\b(?:password|private_key|api_key|access_token)\s*[:=]\s*['"][^'"]{8,}['"]|\bAKIA[0-9A-Z]{16}\b|\bgithub_pat_[a-z0-9_]{10,}|\bgh[opusr]_[a-z0-9]{10,}|\bsk-[a-z0-9_-]{10,})/iu;
 
+function hasInvalidControl(value: string, allowWhitespace: boolean): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code === 127 || (code < 32 && (!allowWhitespace || (code !== 9 && code !== 10 && code !== 13)))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function rejected(): Error {
   return new Error('Local project read rejected: path, file type or contents are not permitted');
 }
@@ -23,7 +33,7 @@ function rejected(): Error {
 function partsOf(path: string, directory: boolean): string[] {
   if (path === '.' && directory) return [];
   if (!path || path.length > 2048 || path.startsWith('/') || path.includes('\\') ||
-    path.includes(':') || /[\u0000-\u001f\u007f]/u.test(path)) throw rejected();
+    path.includes(':') || hasInvalidControl(path, false)) throw rejected();
   const parts = path.split('/');
   if (parts.length > 40 || parts.some(part =>
     !part || part === '.' || part === '..' || part.startsWith('.') ||
@@ -135,7 +145,7 @@ export class ReadOnlyLocalProject implements LocalProjectToolsPort {
         before.ino !== after.ino || before.dev !== after.dev ||
         before.nlink !== after.nlink) throw rejected();
       const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
-      if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(content) ||
+      if (hasInvalidControl(content, true) ||
         SECRET_CONTENT.test(content) || this.redactor.redact(content) !== content) throw rejected();
       const lines = content.split(/\r?\n/u);
       if (lines.at(-1) === '') lines.pop();
