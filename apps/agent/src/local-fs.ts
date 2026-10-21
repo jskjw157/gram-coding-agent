@@ -405,17 +405,30 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   trash(input: Inputs['trash']) {
     const root = this.findRoot(input.root, true);
     const source = this.parent(root, input.path, true);
+    let trashFd: number | undefined;
     try {
       const bytes = this.existing(root, input.path).buffer;
       if (hash(bytes) !== input.expectedSha256) throw denied();
       const folder = '/proc/self/fd/' + source.fd + '/.gram-local-trash';
-      if (!existsSync(folder)) mkdirSync(folder, { mode: 0o700 });
+      try { mkdirSync(folder, { mode: 0o700 }); }
+      catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw denied();
+      }
+      trashFd = openSync(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      const parentCanonical = realpathSync('/proc/self/fd/' + source.fd);
+      const trashCanonical = realpathSync('/proc/self/fd/' + trashFd);
+      const st = fstatSync(trashFd, { bigint: true });
+      if (trashCanonical !== parentCanonical + '/.gram-local-trash' ||
+          !within(root.path, trashCanonical) || (st.mode & 0o022n) !== 0n) throw denied();
+      if (hash(this.existing(root, input.path).buffer) !== input.expectedSha256) throw denied();
       const dstName = randomUUID() + '-' + basename(input.path);
-      const dst = folder + '/' + dstName;
-      renameSync(source.path, dst);
+      renameSync(source.path, '/proc/self/fd/' + trashFd + '/' + dstName);
       return { root: root.id, source: input.path,
         recoveryPath: (dirname(input.path) === '.' ? '' : dirname(input.path) + '/') +
           '.gram-local-trash/' + dstName, originalSha256: input.expectedSha256 };
-    } finally { closeSync(source.fd); }
+    } finally {
+      if (trashFd !== undefined) closeSync(trashFd);
+      closeSync(source.fd);
+    }
   }
 }
