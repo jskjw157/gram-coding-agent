@@ -77,6 +77,8 @@ export class ReadOnlyLocalProject implements LocalProjectToolsPort {
       }
       fd = openSync(this.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       if (identity(fstatSync(fd, { bigint: true })) !== this.rootIdentity) throw rejected();
+      // Also reject mount/junction aliases whose resolved descriptor leaves the allowed tree.
+      if (realpathSync('/proc/self/fd/' + fd) !== this.root) throw rejected();
       for (let i = 0; i < parts.length; i++) {
         const item = parts[i];
         if (item === undefined) throw rejected();
@@ -86,6 +88,8 @@ export class ReadOnlyLocalProject implements LocalProjectToolsPort {
           (directoryPart ? constants.O_DIRECTORY : 0));
         closeSync(fd);
         fd = next;
+        const canonical = realpathSync('/proc/self/fd/' + fd);
+        if (!canonical.startsWith(this.root + '/')) throw rejected();
       }
       const stat = fstatSync(fd, { bigint: true });
       if (directory ? !stat.isDirectory() : (!stat.isFile() || stat.nlink !== 1n ||
