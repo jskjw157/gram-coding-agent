@@ -214,15 +214,23 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
 
   stat(input: Inputs['stat']) {
     const root = this.findRoot(input.root);
-    const segments = parts(input.path, true);
-    const fd = this.open(root, segments, true);
-    // Directory stat is tried first, file open fallback when not a directory.
+    if (input.path === '.') {
+      const fd = this.open(root, [], true);
+      try {
+        return { root: root.id, path: '.', kind: 'directory', bytes: Number(fstatSync(fd, { bigint: true }).size) };
+      } finally { closeSync(fd); }
+    }
+    const ref = this.parent(root, input.path, false);
     try {
-      const st = fstatSync(fd, { bigint: true });
-      return { root: root.id, path: input.path, kind: 'directory', bytes: Number(st.size) };
-    } catch {
-      throw denied();
-    } finally { closeSync(fd); }
+      const st = lstatSync(ref.path, { bigint: true });
+      const kind = st.isDirectory() ? 'directory' :
+        st.isSymbolicLink() ? 'symlink' : st.isFile() ? 'file' : 'other';
+      let sha256: string | null = null;
+      if (kind === 'file' && st.size <= BigInt(READ_LIMIT)) {
+        sha256 = hash(this.existing(root, input.path).buffer);
+      }
+      return { root: root.id, path: input.path, kind, bytes: Number(st.size), sha256 };
+    } catch { throw denied(); } finally { closeSync(ref.fd); }
   }
 
   list(input: Inputs['list']) {
