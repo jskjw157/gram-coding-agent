@@ -1,0 +1,20 @@
+{
+    "observedAtUtc":  "2026-10-21T01:21:38.7113034Z",
+    "commentId":  6304834289,
+    "url":  "https://github.com/jskjw157/gram-coding-agent/issues/77#issuecomment-6304834289",
+    "author":  "jskjw157",
+    "authorAssociation":  "OWNER",
+    "createdAtUtc":  "2026-10-21T00:21:34Z",
+    "updatedAtUtc":  "2026-10-21T00:21:34Z",
+    "bodySha256":  "988f3875fdd960db41dce3757f36cb8e31966afb377424c7dea7f0fe64053570",
+    "decision":  "Option A approved",
+    "scope":  "One-time Public fixture exception for M2 #77 TASK-000009 only",
+    "testedSourceSha":  "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "taskId":  "01a1588d-56a7-7665-815c-223a7383aead",
+    "privateRunPerformed":  false,
+    "testsOrSecurityWaived":  false,
+    "fullM5OrISO01Accepted":  false,
+    "mainMergeAuthorized":  false,
+    "releaseOrDeploymentAuthorized":  false,
+    "automaticIssueClosureAuthorized":  false
+}
