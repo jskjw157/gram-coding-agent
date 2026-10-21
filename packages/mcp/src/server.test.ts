@@ -339,3 +339,35 @@ describe('optional read-only local source inspection tools', () => {
     expect(withPort).toContain('local_project_read');
   });
 });
+
+
+describe('owner-approved multi-root filesystem MCP catalog', () => {
+  it('advertises full directory, search and mutation tools only with the dedicated port', async () => {
+    const without = await advertisedNames(fullOptions('local-fs-absent-secret'));
+    expect(without).not.toContain('local_fs_roots');
+    expect(without).not.toContain('local_fs_write');
+    const names = await advertisedNames({
+      ...fullOptions('local-fs-present-secret'),
+      localFs: {
+        roots: async () => [],
+        list: async () => ({ entries: [] }),
+        stat: async () => ({ kind: 'file' }),
+        read: async () => ({ content: 'safe' }),
+        search: async () => ({ results: [] }),
+        write: async () => ({ sha256: 'a'.repeat(64) }),
+        patch: async () => ({ sha256: 'b'.repeat(64) }),
+        mkdir: async () => ({ created: true }),
+        move: async () => ({ moved: true }),
+        copy: async () => ({ copied: true }),
+        trash: async () => ({ recoveryPath: 'restore-id' }),
+      },
+    });
+    for (const method of [
+      'local_fs_roots', 'local_fs_list', 'local_fs_stat', 'local_fs_read',
+      'local_fs_search', 'local_fs_write', 'local_fs_patch', 'local_fs_mkdir',
+      'local_fs_move', 'local_fs_copy', 'local_fs_trash',
+    ]) {
+      expect(names).toContain(method);
+    }
+  });
+});
