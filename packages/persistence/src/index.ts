@@ -1,4 +1,17 @@
 export * from './database.js';
 export * from './migrator.js';
 export * from './repositories/audit-repository.js';
+export * from './repositories/repository-repository.js';
 export * from './repositories/task-repository.js';
+export * from './repositories/lock-repository.js';
+export * from './repositories/workspace-repository.js';
+export * from './repositories/command-run-repository.js';
+export * from './repositories/verification-repository.js';
+export * from './repositories/git-commit-repository.js';
+export * from './repositories/pull-request-repository.js';
+export * from './repositories/pull-request-evidence-repository.js';
+export * from './repositories/ci-run-repository.js';
+export * from './repositories/coding-step-repository.js';
+
+export * from './repositories/verification-review-repository.js';
+export * from './repositories/approval-repository.js';
