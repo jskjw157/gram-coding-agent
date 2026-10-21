@@ -8,6 +8,8 @@ import { SecretRedactor } from '@gram/secrets';
 import type { CommandRequest } from '@gram/shell';
 import { createVerificationReviewCommandRunner } from './verification-review-command.js';
 
+import { BoundedReviewSpawner } from './verification-review-command.test-support.js';
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture(script: string, options: { timeoutMs?: number; maxOutputBytes?: number; redactor?: SecretRedactor; policy?: PolicyEngine } = {}) {
@@ -19,8 +21,7 @@ function fixture(script: string, options: { timeoutMs?: number; maxOutputBytes?:
   const runner = createVerificationReviewCommandRunner({
     policy: options.policy ?? new PolicyEngine(), approvals, commandRuns, homeDir: root,
     environment: { PATH: bin }, redactor: options.redactor ?? new SecretRedactor(),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),
+    spawner: new BoundedReviewSpawner(options),
   });
   const request: CommandRequest = { taskId: 'task-review', cwd: root, category: 'GIT', executable: 'git', args: ['show', 'a'.repeat(40)] };
   return { root, runner, commandRuns, approvals, request };
@@ -88,4 +89,29 @@ it('honors existing policy approval denial before spawning or recording a comman
   await expect(f.runner.run(f.request)).rejects.toThrow('Approval unavailable');
   expect(f.approvals.consume).toHaveBeenCalledWith('task-review', 'fixture-operation');
   expect(f.commandRuns.start).not.toHaveBeenCalled();
+});
+
+
+it('requires an explicitly supplied trusted process port at construction', () => {
+  expect(() => createVerificationReviewCommandRunner({
+    policy: new PolicyEngine(), approvals: { consume: async () => false },
+    commandRuns: { start: () => 1, finish: () => undefined },
+    homeDir: tmpdir(), redactor: new SecretRedactor(),
+  } as unknown as Parameters<typeof createVerificationReviewCommandRunner>[0])).toThrow(/spawner|process port/i);
+});
+
+
+it('delegates fixed reads exclusively to the supplied process port', async () => {
+  const f = fixture('throw new Error("raw fallback executed");');
+  const spawn = vi.fn(async () => ({ exitCode: 0, stdout: 'guarded source', stderr: '' }));
+  const runner = createVerificationReviewCommandRunner({
+    spawner: { spawn }, policy: new PolicyEngine(), approvals: f.approvals,
+    commandRuns: f.commandRuns, homeDir: f.root, redactor: new SecretRedactor(),
+  });
+  expect((await runner.run(f.request)).stdout).toBe('guarded source');
+  expect(spawn).toHaveBeenCalledWith(expect.objectContaining({
+    taskId: f.request.taskId, cwd: f.root, executable: 'git', args: ['show', 'a'.repeat(40)],
+  }));
+  await expect(runner.run({ ...f.request, args: ['show', 'HEAD'] })).rejects.toThrow(/fixed/);
+  expect(spawn).toHaveBeenCalledTimes(1);
 });

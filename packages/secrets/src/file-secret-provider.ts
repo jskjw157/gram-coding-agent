@@ -1,4 +1,5 @@
-import { lstat, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import path from 'node:path';
 import type { CredentialName, SecretLease, SecretProvider } from './secret-provider.js';
 
@@ -39,17 +40,30 @@ export class FileSecretProvider implements SecretProvider {
       throw new Error(`Invalid credential name: ${name}`);
     }
 
-    const stat = await lstat(secretPath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`Secret must be a regular file: ${name}`);
-    }
+    // Validate and read the same inode. O_NONBLOCK also prevents a substituted
+    // FIFO from hanging before its file type can be rejected.
+    const file = await open(secretPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile()) {
+        throw new Error(`Secret must be a regular file: ${name}`);
+      }
+      if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) {
+        throw new Error(`Secret file must be owned by the current user: ${name}`);
+      }
+      if (stat.nlink !== 1) {
+        throw new Error(`Secret file must not have additional hard links: ${name}`);
+      }
 
-    const permissions = stat.mode & 0o777;
-    if ((permissions & ~0o600) !== 0) {
-      throw new Error(`Secret file permissions must be 0600 or stricter: ${name}`);
-    }
+      const permissions = stat.mode & 0o777;
+      if ((permissions & ~0o600) !== 0) {
+        throw new Error(`Secret file permissions must be 0600 or stricter: ${name}`);
+      }
 
-    const bytes = await readFile(secretPath);
-    return new BufferSecretLease(bytes);
+      const bytes = await file.readFile();
+      return new BufferSecretLease(bytes);
+    } finally {
+      await file.close();
+    }
   }
 }
