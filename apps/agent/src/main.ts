@@ -46,6 +46,7 @@ import { VerificationReviewSource } from './verification-review-source.js';
 import { createVerificationReviewCommandRunner } from './verification-review-command.js';
 import { ordinaryExecutionAuthorization, ownedExecutionLease } from './ordinary-execution-authorization.js';
 import { TrustedGitSpawner } from './trusted-git-spawner.js';
+import { ReadOnlyLocalProject } from './local-project-reader.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -375,6 +376,10 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         codingCapability,
         verificationReviews,
         approvals: approvalTools,
+        // Disabled unless trusted service configuration opts in to one specific root.
+        localProject: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT === undefined
+          ? undefined
+          : new ReadOnlyLocalProject({ root: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT, redactor }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
