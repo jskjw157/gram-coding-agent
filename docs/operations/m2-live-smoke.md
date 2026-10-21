@@ -234,6 +234,7 @@ Also verify that no `repo_locks` row exists for the smoke repository before PR c
 
 From `pull_requests`, record:
 
+- internal row `id` (for correlation with observation evidence);
 - PR number;
 - URL;
 - exact head branch;
@@ -244,11 +245,15 @@ The PR must target the disposable repository's default branch and must use the t
 
 ### CI observation
 
-Record the **first local observation time** at which the CI observer calls the provider for required checks.
+Record the **first local observation attempt time** for the accepted task, PR row, and remotely confirmed HEAD.
 
 Do not substitute GitHub's provider-side `started_at` value for this timestamp.
 
-The current `ci_runs.updated_at` field can be overwritten by later polling of the same provider check, so a completed database row by itself is not sufficient to prove the first observation time. #73/#77 acceptance instrumentation must preserve or externally record the first local observation timestamp.
+The production composition appends `CI_OBSERVATION_STARTED` to `audit_events` immediately before each required-check provider call. Its payload contains only `pullRequestId` (the internal row ID) and `headSha`; the audit row carries the Task UUID and local UTC `created_at`. Normal execution and repair observation use this same boundary. Audit persistence failure stops the call before provider I/O.
+
+Select the first matching event by audit `id`, not by the minimum timestamp. Each poll adds a new row, including empty/PENDING results and provider failures, so later polls and process restart do not overwrite the original event. A new HEAD has its own observation history. `ci_runs.updated_at` remains the latest update time and must not be used as the first observation time.
+
+The event proves a local attempt began, not that GitHub returned or CI passed. Match it with the required-check results and final task state. It also does not prove lock absence: retain independent evidence that the smoke repository has no active lock during every provider call. Do not introduce a global lock-presence gate into CI observation; in normal operation another task may legitimately acquire the repository lock after the earlier task publishes.
 
 Also record:
 
@@ -277,11 +282,11 @@ repo_locks row absent before PR creation
 repo_locks row absent during every CI observation
 ```
 
-Do not infer this ordering from code structure alone. Use persisted timestamps plus the explicit first-observation evidence from the live run.
+Do not infer this ordering from code structure alone. Use the persisted timestamps and first matching `CI_OBSERVATION_STARTED` event from the live run.
 
 ## Suggested read-only SQLite evidence queries
 
-Use the runtime database in read-only fashion. Replace `<TASK_UUID>` and `<REPO_ID>` with values from the smoke task.
+Use the runtime database in read-only fashion. Replace `<TASK_UUID>` and `<REPO_ID>` with values from the smoke task. For the observation query, also use the internal `<PR_ROW_ID>` and exact remotely confirmed `<PUSHED_SHA>`.
 
 ```sql
 SELECT id, seq, repo_id, status, created_at, updated_at
@@ -314,10 +319,19 @@ WHERE task_id = '<TASK_UUID>'
   AND event_type IN ('REMOTE_PUSH_CONFIRMED', 'REPO_LOCK_RELEASED')
 ORDER BY id;
 
-SELECT number, url, head_branch, base_branch, state, created_at, updated_at
+SELECT id, number, url, head_branch, base_branch, state, created_at, updated_at
 FROM pull_requests
 WHERE task_id = '<TASK_UUID>'
 ORDER BY id;
+
+SELECT id, created_at AS ci_observed_at, payload_json
+FROM audit_events
+WHERE task_id = '<TASK_UUID>'
+  AND event_type = 'CI_OBSERVATION_STARTED'
+  AND json_extract(payload_json, '$.pullRequestId') = <PR_ROW_ID>
+  AND json_extract(payload_json, '$.headSha') = '<PUSHED_SHA>'
+ORDER BY id
+LIMIT 1;
 
 SELECT provider_run_id, provider_check_id, workflow_name, check_name,
        status, conclusion, url, started_at, finished_at, updated_at
@@ -364,7 +378,9 @@ commit SHA:
 remote_push_confirmed_at:
 repo_lock_released_at:
 PR number:
+PR internal row ID:
 pr_created_at:
+first CI observation audit ID:
 ci_observed_at:
 CI conclusion:
 final task state:
