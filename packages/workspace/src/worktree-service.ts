@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { TaskId } from '@gram/domain';
@@ -29,7 +30,19 @@ export function createTaskBranchName(input: CreateTaskBranchNameInput): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'task';
   const display = String(input.displaySequence).padStart(6, '0');
-  return `${prefix[input.taskType]}/task-${display}-${slug}`;
+  const identity = `task-${display}-`;
+  // A ref component also needs room for Git's .lock suffix on 255-byte filesystems.
+  // All output is ASCII, so this character budget is also the byte budget.
+  const componentLimit = 200;
+  if (identity.length + slug.length <= componentLimit) {
+    return `${prefix[input.taskType]}/${identity}${slug}`;
+  }
+  const suffix = createHash('sha256')
+    .update(JSON.stringify([input.taskType, input.displaySequence, input.goal]))
+    .digest('hex')
+    .slice(0, 32);
+  const readable = slug.slice(0, componentLimit - identity.length - suffix.length - 1).replace(/-+$/, '');
+  return `${prefix[input.taskType]}/${identity}${readable}-${suffix}`;
 }
 
 export interface GitWorktreePort {
