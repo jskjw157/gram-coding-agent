@@ -12,3 +12,4 @@ export * from './tools/coding-capability-tools.js';
 export * from './tools/verification-review-tools.js';
 export * from './tools/approval-tools.js';
 export * from './tools/local-project-tools.js';
+export * from './tools/local-fs-tools.js';
