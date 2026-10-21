@@ -426,6 +426,9 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
       return { root: root.id, source: input.path,
         recoveryPath: (dirname(input.path) === '.' ? '' : dirname(input.path) + '/') +
           '.gram-local-trash/' + dstName, originalSha256: input.expectedSha256 };
+    } catch {
+      // Native errors may include absolute controller paths; return a generic denial.
+      throw denied();
     } finally {
       if (trashFd !== undefined) closeSync(trashFd);
       closeSync(source.fd);
