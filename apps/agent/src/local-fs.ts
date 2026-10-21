@@ -1,12 +1,13 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import {
   closeSync, constants, existsSync, fchmodSync, fstatSync, fsyncSync,
   lstatSync, mkdirSync, openSync, readSync, readdirSync, realpathSync,
-  renameSync, unlinkSync, writeFileSync, writeSync, type BigIntStats,
+  renameSync, unlinkSync, writeSync, type BigIntStats,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import type { LocalFsToolsPort } from '@gram/mcp';
 import type { SecretRedactor } from '@gram/secrets';
+import { screenLocalText } from './local-content-screen.js';
 
 const READ_LIMIT = 1024 * 1024;
 const TEXT_LIMIT = 32000;
@@ -58,7 +59,7 @@ function isProtected(path: string, protectedRoots: readonly string[]): boolean {
 }
 function readFd(fd: number): Buffer {
   const before = fstatSync(fd, { bigint: true });
-  if (!before.isFile() || before.size > BigInt(READ_LIMIT)) throw denied();
+  if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(READ_LIMIT)) throw denied();
   const bytes = Buffer.alloc(READ_LIMIT + 1);
   let size = 0;
   while (size < bytes.length) {
@@ -69,7 +70,7 @@ function readFd(fd: number): Buffer {
   const after = fstatSync(fd, { bigint: true });
   if (size > READ_LIMIT || before.ino !== after.ino || before.dev !== after.dev ||
       before.size !== after.size || before.mtimeNs !== after.mtimeNs ||
-      before.ctimeNs !== after.ctimeNs) throw denied();
+      before.ctimeNs !== after.ctimeNs || after.nlink !== 1n) throw denied();
   return bytes.subarray(0, size);
 }
 function asText(bytes: Buffer): string {
@@ -78,16 +79,7 @@ function asText(bytes: Buffer): string {
   return text;
 }
 function secretSafe(text: string, redactor: SecretRedactor): { content: string; masked: boolean } {
-  let value = redactor.redact(text);
-  value = value.replace(
-    /(^[ \t]*[A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*[ \t]*=[ \t]*)[^\r\n]+/gimu,
-    '$1***REDACTED***',
-  );
-  value = value.replace(
-    /("[^"]*(?:token|key|secret|password|credential)[^"]*"[ \t]*:[ \t]*")[^"]*(")/giu,
-    '$1***REDACTED***$2',
-  );
-  return { content: value, masked: value !== text };
+  return screenLocalText(text, redactor);
 }
 function writeComplete(fd: number, bytes: Buffer): void {
   let offset = 0;
@@ -104,6 +96,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   private readonly protectedRoots: string[];
   private readonly backups: string;
   private readonly redactor: SecretRedactor;
+  private readonly versionKey = randomBytes(32);
 
   constructor(options: {
     roots: Record<string, ConfigEntry>;
@@ -181,7 +174,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
         if (!within(root.path, actual) || isProtected(actual, this.protectedRoots)) throw denied();
       }
       const st = fstatSync(fd, { bigint: true });
-      if (directory ? !st.isDirectory() : (!st.isFile() || st.size > BigInt(READ_LIMIT))) throw denied();
+      if (directory ? !st.isDirectory() : (!st.isFile() || st.nlink !== 1n || st.size > BigInt(READ_LIMIT))) throw denied();
       const result = fd;
       fd = undefined;
       return result;
@@ -209,6 +202,15 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
     } finally { closeSync(fd); }
   }
 
+  private version(root: Root, path: string, bytes: Buffer): string {
+    let sensitive: boolean;
+    try { sensitive = secretSafe(asText(bytes), this.redactor).masked; }
+    catch { sensitive = this.redactor.redact(bytes.toString('latin1')) !== bytes.toString('latin1'); }
+    return sensitive
+      ? createHmac('sha256', this.versionKey).update(root.id + '\0' + path + '\0').update(bytes).digest('hex')
+      : hash(bytes);
+  }
+
   stat(input: Inputs['stat']) {
     const root = this.findRoot(input.root);
     if (input.path === '.') {
@@ -224,7 +226,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
         st.isSymbolicLink() ? 'symlink' : st.isFile() ? 'file' : 'other';
       let sha256: string | null = null;
       if (kind === 'file' && st.size <= BigInt(READ_LIMIT)) {
-        sha256 = hash(this.existing(root, input.path).buffer);
+        sha256 = this.version(root, input.path, this.existing(root, input.path).buffer);
       }
       return { root: root.id, path: input.path, kind, bytes: Number(st.size), sha256 };
     } catch { throw denied(); } finally { closeSync(ref.fd); }
@@ -266,7 +268,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
       root: root.id, path: input.path, startLine: input.startLine,
       endLine: Math.min(lines.length, input.startLine + input.maxLines - 1),
       totalLines: lines.length, content, masked: screened.masked,
-      sha256: hash(buffer),
+      sha256: this.version(root, input.path, buffer),
     };
   }
 
@@ -309,15 +311,38 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   // Store the exact old file in controller-private 0700 recovery storage before
   // mutation; never persist content or credentials in MCP results/audit logs.
   private backup(root: Root, path: string, bytes: Buffer) {
-    mkdirSync(this.backups, { recursive: true, mode: 0o700 });
-    const name = randomUUID() + '.backup';
-    const file = join(this.backups, name);
-    writeFileSync(file, bytes, { flag: 'wx', mode: 0o600, flush: true });
-    return { backupId: name, originalSha256: hash(bytes), root: root.id, path };
+    let parentFd: number | undefined;
+    let recoveryFd: number | undefined;
+    let outputFd: number | undefined;
+    try {
+      parentFd = openSync(dirname(this.backups), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      if (realpathSync('/proc/self/fd/' + parentFd) !== dirname(this.backups)) throw denied();
+      const folder = '/proc/self/fd/' + parentFd + '/' + basename(this.backups);
+      try { mkdirSync(folder, { mode: 0o700 }); }
+      catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw denied();
+      }
+      recoveryFd = openSync(folder, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      const st = fstatSync(recoveryFd, { bigint: true });
+      if (realpathSync('/proc/self/fd/' + recoveryFd) !== this.backups || (st.mode & 0o077n) !== 0n ||
+          st.uid !== BigInt(process.getuid?.() ?? -1)) throw denied();
+      const name = randomUUID() + '.backup';
+      outputFd = openSync('/proc/self/fd/' + recoveryFd + '/' + name,
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+      writeComplete(outputFd, bytes);
+      fsyncSync(recoveryFd);
+      return { backupId: name, originalSha256: this.version(root, path, bytes), root: root.id, path };
+    } catch { throw denied(); }
+    finally {
+      if (outputFd !== undefined) closeSync(outputFd);
+      if (recoveryFd !== undefined) closeSync(recoveryFd);
+      if (parentFd !== undefined) closeSync(parentFd);
+    }
   }
 
   private put(root: Root, path: string, expectedSha256: string | null, bytes: Buffer) {
     if (!root.writable || bytes.length > READ_LIMIT) throw denied();
+    if (secretSafe(asText(bytes), this.redactor).masked) throw denied();
     const ref = this.parent(root, path, true);
     try {
       const existingPath = ref.path;
@@ -325,7 +350,8 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
       let mode = 0o600;
       if (expectedSha256 !== null) {
         original = this.existing(root, path).buffer;
-        if (hash(original) !== expectedSha256) throw denied();
+        if (this.version(root, path, original) !== expectedSha256) throw denied();
+        if (secretSafe(asText(original), this.redactor).masked) throw denied();
         const st = lstatSync(existingPath, { bigint: true });
         if (!st.isFile() || st.nlink !== 1n) throw denied();
         mode = Number(st.mode & 0o777n);
@@ -345,14 +371,14 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
         try {
           writeComplete(fd, bytes);
           fchmodSync(fd, mode);
-          if (hash(this.existing(root, path).buffer) !== expectedSha256) throw denied();
+          if (this.version(root, path, this.existing(root, path).buffer) !== expectedSha256) throw denied();
           renameSync(tempPath, existingPath);
         } finally {
           closeSync(fd);
           try { unlinkSync(tempPath); } catch { /* Renamed or inaccessible. */ }
         }
       }
-      return { root: root.id, path, sha256: hash(bytes), previousSha256: expectedSha256, backup };
+      return { root: root.id, path, sha256: this.version(root, path, bytes), previousSha256: expectedSha256, backup };
     } finally { closeSync(ref.fd); }
   }
 
@@ -364,7 +390,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   patch(input: Inputs['patch']) {
     const root = this.findRoot(input.root, true);
     const original = this.existing(root, input.path).buffer;
-    if (hash(original) !== input.expectedSha256) throw denied();
+    if (this.version(root, input.path, original) !== input.expectedSha256) throw denied();
     const content = asText(original);
     const position = content.indexOf(input.find);
     if (position < 0 || content.indexOf(input.find, position + input.find.length) !== -1) throw denied();
@@ -387,7 +413,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
     const dest = this.parent(root, input.destination, true);
     try {
       const data = this.existing(root, input.path).buffer;
-      if (hash(data) !== input.expectedSha256 || existsSync(dest.path)) throw denied();
+      if (this.version(root, input.path, data) !== input.expectedSha256 || existsSync(dest.path)) throw denied();
       renameSync(source.path, dest.path);
       return { root: root.id, source: input.path, destination: input.destination,
         sha256: input.expectedSha256, moved: true };
@@ -397,7 +423,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   copy(input: Inputs['copy']) {
     const root = this.findRoot(input.root, true);
     const bytes = this.existing(root, input.path).buffer;
-    if (hash(bytes) !== input.expectedSha256) throw denied();
+    if (this.version(root, input.path, bytes) !== input.expectedSha256) throw denied();
     const result = this.put(root, input.destination, null, bytes);
     return { ...result, copiedFrom: input.path };
   }
@@ -408,7 +434,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
     let trashFd: number | undefined;
     try {
       const bytes = this.existing(root, input.path).buffer;
-      if (hash(bytes) !== input.expectedSha256) throw denied();
+      if (this.version(root, input.path, bytes) !== input.expectedSha256) throw denied();
       const folder = '/proc/self/fd/' + source.fd + '/.gram-local-trash';
       try { mkdirSync(folder, { mode: 0o700 }); }
       catch (error) {
@@ -420,7 +446,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
       const st = fstatSync(trashFd, { bigint: true });
       if (trashCanonical !== parentCanonical + '/.gram-local-trash' ||
           !within(root.path, trashCanonical) || (st.mode & 0o022n) !== 0n) throw denied();
-      if (hash(this.existing(root, input.path).buffer) !== input.expectedSha256) throw denied();
+      if (this.version(root, input.path, this.existing(root, input.path).buffer) !== input.expectedSha256) throw denied();
       const dstName = randomUUID() + '-' + basename(input.path);
       renameSync(source.path, '/proc/self/fd/' + trashFd + '/' + dstName);
       return { root: root.id, source: input.path,
