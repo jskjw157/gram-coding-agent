@@ -28,7 +28,7 @@ import { PolicyEngine } from '@gram/policy';
 import { PublishingService } from '@gram/publishing';
 import { RepoLockService, type RepoLockLease } from '@gram/repo-lock';
 import { FileSecretProvider, SecretRedactor } from '@gram/secrets';
-import { CommandRunner, NodeProcessSpawner, OutputCapture, type ApprovalConsumptionPort } from '@gram/shell';
+import { CommandRunner, LinuxIsolatedProcessSpawner, NodeProcessSpawner, OutputCapture, type ApprovalConsumptionPort, type ProcessSpawner } from '@gram/shell';
 import { TaskService } from '@gram/task-engine';
 import { PathMapper, WorktreeService } from '@gram/workspace';
 import { PolicyGitAdapter, PolicyWorktreeAdapter, PolicyWslPathRunner } from './command-adapters.js';
@@ -44,6 +44,8 @@ import { VerificationCoordinator } from './verification-coordinator.js';
 import { ExternalVerificationReview } from './external-verification-review.js';
 import { VerificationReviewSource } from './verification-review-source.js';
 import { createVerificationReviewCommandRunner } from './verification-review-command.js';
+import { ordinaryExecutionAuthorization, ownedExecutionLease } from './ordinary-execution-authorization.js';
+import { TrustedGitSpawner } from './trusted-git-spawner.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -202,10 +204,55 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
     const composed = await secretLease.withValue(async (internalSecret) => {
       const redactor = new SecretRedactor([internalSecret]);
       const logger = new StructuredLogger({ redactor });
+      const gitContext = (taskId: string) => {
+        const task = taskRepository.get(taskId);
+        if (task?.repoId == null || !['PREPARING', 'RUNNING', 'VERIFYING', 'PUBLISHING'].includes(task.status)) {
+          throw new Error('Application Git requires an active registered task');
+        }
+        const lease = ownedExecutionLease({ locks: lockRepository, held: heldLeases,
+          lockDirectory: join(options.stateDirectory, 'locks') }, taskId, task.repoId);
+        const repo = repositoryRepository.getById(task.repoId);
+        if (lease === undefined || repo === undefined) throw new Error('Application Git requires its current repository lease');
+        const expected = join(homedir(), '.gram-agent', 'worktrees', String(task.repoId), taskId);
+        const workspace = workspaceRepository.getByTaskId(taskId);
+        if (workspace !== undefined && (workspace.repoId !== task.repoId || workspace.linuxPath !== expected ||
+            workspace.recoveryState !== null)) throw new Error('Application Git workspace binding is inconsistent');
+        return { basePath: repo.localBasePath, worktreePath: expected, owner: repo.owner,
+          name: repo.name, defaultBranch: repo.defaultBranch };
+      };
+      const trustedGit = new TrustedGitSpawner({ contextForTask: gitContext, secrets: secretProvider });
       const commandRunner = new CommandRunner({
         policy: policyEngine,
         approvals: approvalConsume,
-        spawner: new NodeProcessSpawner(),
+        spawner: trustedGit,
+        commandRuns: commandRunRepository,
+        outputCapture: new OutputCapture({ homeDir: homedir(), redactor }),
+        homeDir: homedir(),
+      });
+      const pathConversion: ProcessSpawner = { spawn: (request) => {
+        const context = gitContext(request.taskId);
+        if ('shellText' in request || request.executable !== 'wslpath' || request.args.length !== 2 ||
+            request.args[0] !== '-w' || request.args[1] !== context.worktreePath) {
+          throw new Error('Only the registered task path can be converted');
+        }
+        return new NodeProcessSpawner().spawn({ ...request, executable: '/usr/bin/wslpath',
+          env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' } });
+      } };
+      const pathCommands = new CommandRunner({ policy: policyEngine, approvals: approvalConsume,
+        spawner: pathConversion, commandRuns: commandRunRepository,
+        outputCapture: new OutputCapture({ homeDir: homedir(), redactor }), homeDir: homedir() });
+      // This instance is only passed to ordinary verification. Its spawner never
+      // dispatches on request.category, including a forged GIT category. The
+      // existing application Git/worktree ports stay structurally separate.
+      const ordinaryCommands = new CommandRunner({
+        policy: policyEngine,
+        approvals: approvalConsume,
+        spawner: new LinuxIsolatedProcessSpawner({
+          workspaceForTask: ordinaryExecutionAuthorization({
+            tasks: taskRepository, workspaces: workspaceRepository, locks: lockRepository,
+            held: heldLeases, lockDirectory: join(options.stateDirectory, 'locks'),
+          }),
+        }),
         commandRuns: commandRunRepository,
         outputCapture: new OutputCapture({ homeDir: homedir(), redactor }),
         homeDir: homedir(),
@@ -214,7 +261,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         homeDir: homedir(),
         git: new PolicyWorktreeAdapter({ runner: commandRunner }),
         workspaces: workspaceRepository,
-        pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: commandRunner })),
+        pathMapper: new PathMapper(new PolicyWslPathRunner({ runner: pathCommands })),
       });
       const snapshots = new TaskVerificationSnapshots({ runner: commandRunner, workspaces: workspaceRepository });
       const verificationReviews = new ExternalVerificationReview({
@@ -227,6 +274,8 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         snapshots,
         source: new VerificationReviewSource({
           runner: createVerificationReviewCommandRunner({
+            spawner: new TrustedGitSpawner({ contextForTask: gitContext, secrets: secretProvider,
+              execution: { strictUtf8: true, timeoutMs: 10_000, maxOutputBytes: 256 * 1024 } }),
             policy: policyEngine,
             approvals: approvalConsume,
             commandRuns: commandRunRepository,
@@ -242,7 +291,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         repositories: repositoryRepository,
         verification: verificationRepository,
         snapshots,
-        commands: commandRunner,
+        commands: ordinaryCommands,
         reviews: verificationReviews,
       });
       const codingCapability = new ExternalCodingCapability({

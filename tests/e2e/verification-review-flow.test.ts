@@ -1,3 +1,4 @@
+import { BoundedReviewSpawner } from '../../apps/agent/src/verification-review-command.test-support.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -297,7 +298,7 @@ describe('production verification with an authenticated fixture reviewer', () =>
         ownsLease: (taskId, leaseToken) => ownedLeases.get(taskId) === leaseToken,
         snapshots,
         source: new VerificationReviewSource({
-          runner: createVerificationReviewCommandRunner({
+          runner: createVerificationReviewCommandRunner({ spawner: new BoundedReviewSpawner({}),
             policy: new PolicyEngine(),
             approvals: { consume: async () => false },
             commandRuns,

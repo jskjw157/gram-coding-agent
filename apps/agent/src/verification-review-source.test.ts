@@ -1,3 +1,4 @@
+import { BoundedReviewSpawner } from './verification-review-command.test-support.js';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -30,7 +31,7 @@ function fixture(before: string | Buffer = 'old\n', path = 'src/app.ts') {
   workspaces.create({ taskId: task.id, repoId: 159, linuxPath: cwd, branch: 'fix/review' });
   const redactor = new SecretRedactor(['fixture-private-secret']);
   let id = 0;
-  const runner = createVerificationReviewCommandRunner({ policy: new PolicyEngine(), approvals: { consume: async () => false },
+  const runner = createVerificationReviewCommandRunner({ spawner: new BoundedReviewSpawner({}), policy: new PolicyEngine(), approvals: { consume: async () => false },
     commandRuns: { start: () => ++id, finish: () => undefined }, homeDir: root, redactor });
   const source = new VerificationReviewSource({ runner, workspaces, redactor });
   const headSha = git(cwd, 'rev-parse', 'HEAD');
