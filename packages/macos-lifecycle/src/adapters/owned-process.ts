@@ -144,10 +144,18 @@ export function createNativePeerProof(helper: string): NativePeerProofPort {
   return Object.freeze(port);
 }
 
-function copyProcessChild(value: OwnedChild): OwnedChild {
-  if (value.role !== 'core' && value.role !== 'tunnel') throw new Error('HEALTH_UNKNOWN');
-  const normalized = copyCoreChild({ ...value, role: 'core' });
-  return Object.freeze({ ...normalized, role: value.role });
+/** Detached validation only. Preserve descriptors/prototype for the strict
+ * Core validator; never evaluate a caller's identity getters while copying. */
+export function copyProcessChild(value: OwnedChild): OwnedChild {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const role = descriptors.role;
+  if (!role || !('value' in role) || (role.value !== 'core' && role.value !== 'tunnel')) {
+    throw new Error('HEALTH_UNKNOWN');
+  }
+  const normalized = copyCoreChild(Object.create(Object.getPrototypeOf(value), {
+    ...descriptors, role: { ...role, value: 'core' },
+  }) as OwnedChild);
+  return Object.freeze({ ...normalized, role: role.value as 'core' | 'tunnel' });
 }
 
 export async function sealMacOwnedProcess(handle: LiveProcessHandle, input: ProcessSealInput, proof: NativePeerProofPort,
@@ -175,12 +183,13 @@ export async function sealMacOwnedChild(handle: LiveProcessHandle, input: SealIn
 }
 
 export function createMacConnectedPeerVerifier(seal: MacProcessSeal, proof: NativePeerProofPort): ConnectedPeerVerifier {
-  const expected = copyCoreChild(seal.child);
+  const copy = seal.child.role === 'core' ? copyCoreChild : copyProcessChild;
+  const expected = copy(seal.child);
   const identity = Object.freeze({ ...seal.identity,
     executable: Object.freeze({ dev: seal.identity.executable.dev, ino: seal.identity.executable.ino }) });
   const handle = seal.handle;
   const matches = (child: OwnedChild) => {
-    try { return sameChild(copyCoreChild(child), expected) && live(handle) && handle.pid === expected.pid; }
+    try { return sameChild(copy(child), expected) && live(handle) && handle.pid === expected.pid; }
     catch { return false; }
   };
   const currentProof = async (child: OwnedChild, signal?: AbortSignal): Promise<PeerVerdict> => {
@@ -195,14 +204,25 @@ export function createMacConnectedPeerVerifier(seal: MacProcessSeal, proof: Nati
     async current(child: OwnedChild) { return await currentProof(child) === 'OWNED'; },
     async verify(socket: Socket, child: OwnedChild, signal: AbortSignal) {
       const ports = tuple(socket);
-      if (ports === null || !matches(child) || signal.aborted) return 'UNKNOWN';
+      // Tunnel health has one reviewed source-only endpoint. This does not
+      // admit a runtime config or grant authority over arbitrary local ports.
+      const sameTuple = () => {
+        const now = tuple(socket);
+        return now !== null && now.serverPort === ports?.serverPort && now.clientPort === ports?.clientPort
+          && socket.destroyed !== true && socket.connecting !== true;
+      };
+      if (ports === null || !matches(child) || signal.aborted
+        || (expected.role === 'tunnel' && (ports.serverPort !== 8080 || !sameTuple()))) return 'UNKNOWN';
       const before = await currentProof(child, signal);
       if (before !== 'OWNED') return before;
+      if (expected.role === 'tunnel' && !sameTuple()) return 'UNKNOWN';
       try {
         const result = await bounded(signal, s => proof.peer(Object.freeze({ ...identity, ...ports }), s));
         if (result !== 'OWNED') return result === 'FOREIGN' ? 'FOREIGN' : 'UNKNOWN';
         if (!matches(child) || signal.aborted) return 'UNKNOWN';
-        return await currentProof(child, signal) === 'OWNED' ? 'OWNED' : 'UNKNOWN';
+        const current = await currentProof(child, signal);
+        return current === 'OWNED'
+          && (expected.role !== 'tunnel' || (!signal.aborted && matches(child) && sameTuple())) ? 'OWNED' : 'UNKNOWN';
       } catch { return 'UNKNOWN'; }
     },
   });

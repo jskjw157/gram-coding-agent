@@ -4,6 +4,7 @@ import type { ExecutionLeaseStore } from './execution-lease.js';
 import { copyCoreChild } from './health-probe.js';
 import type { ManagedChild } from './supervisor.js';
 import type { TunnelCustodyPort } from './adapters/native-tunnel.js';
+import { copyProcessChild } from './adapters/owned-process.js';
 
 function fail(start: boolean): never {
   throw new Error(start ? 'TUNNEL_START_FAILED' : 'TUNNEL_STOP_UNKNOWN');
@@ -116,6 +117,18 @@ export function withExclusiveTunnelCustody(
         return owned === true && !record.ended && !signal.aborted
           && same(child, record.outward.child) && same(record.raw.child, record.outward.child);
       } catch { return false; }
+    },
+
+    async verifyHealthPeer(child, socket, signal) {
+      try {
+        const owned = copyProcessChild(child);
+        const record = active;
+        const current = () => record !== null && !record.ended && !signal.aborted
+          && same(owned, record.outward.child) && same(record.raw.child, record.outward.child);
+        if (!record || !current() || !custody.verifyHealthPeer) return 'UNKNOWN';
+        const result = await wait(custody.verifyHealthPeer(record.raw.child, socket, signal), signal);
+        return current() && (result === 'OWNED' || result === 'FOREIGN') ? result : 'UNKNOWN';
+      } catch { return 'UNKNOWN'; }
     },
 
     async stop(managed, deadlineMs, signal) {

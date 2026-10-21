@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import {
   createMacConnectedPeerVerifier,
   sealMacOwnedChild,
+  sealMacOwnedProcess,
   type LiveProcessHandle,
   type MacProcessSeal,
   type NativePeerProofPort,
@@ -59,7 +60,7 @@ describe('kernel-bound live child seal', () => {
       { pid: 4242, exitCode: 1, signalCode: null, killed: false },
       { pid: 4242, exitCode: null, signalCode: 'SIGTERM' as NodeJS.Signals, killed: false },
       { pid: 4242, exitCode: null, signalCode: null, killed: true },
-      { pid: undefined, exitCode: null, signalCode: null, killed: false },
+      { exitCode: null, signalCode: null, killed: false },
     ]) expect(await sealMacOwnedChild(h, {
       role: 'core', uid: 501, generation: 'gen-1', releaseDigest: digest,
       executable: { dev: 11n, ino: 22n },
@@ -70,7 +71,95 @@ describe('kernel-bound live child seal', () => {
   });
 });
 
+describe('tunnel connected peer uses sealed identity and the fixed health tuple', () => {
+  async function tunnel(p = proof(), h = handle()) {
+    const s = await sealMacOwnedProcess(h, { role: 'tunnel', uid: 501, generation: 'tg1',
+      releaseDigest: digest, executable: { dev: 11n, ino: 22n } }, p, new AbortController().signal);
+    if (!s) throw new Error('seal expected');
+    return { s, verifier: createMacConnectedPeerVerifier(s, p) };
+  }
+
+  it('attributes the fixed health tuple to the sealed tunnel executable', async () => {
+    const p = proof();
+    p.peer = async request => request.pid === 4242 && request.uid === 501
+      && request.startSec === '1700000000' && request.startUsec === '123456'
+      && request.executable.dev === 11n && request.executable.ino === 22n
+      && request.serverPort === 8080 && request.clientPort === 51000 ? 'OWNED' : 'FOREIGN';
+    const { s, verifier } = await tunnel(p);
+    expect(await verifier.verify(socket(51000, 8080), s.child, new AbortController().signal)).toBe('OWNED');
+  });
+
+  it('rejects foreign role, PID, UID, start, generation and release identities', async () => {
+    const { s, verifier } = await tunnel();
+    for (const patch of [{ role: 'core' as const }, { pid: 4243 }, { uid: 502 },
+      { startIdentity: '1700000000.1' }, { generation: 'tg2' }, { releaseDigest: 'b'.repeat(64) }]) {
+      expect(await verifier.verify(socket(51000, 8080), { ...s.child, ...patch },
+        new AbortController().signal)).toBe('UNKNOWN');
+    }
+  });
+
+  it('refuses any other port or nonloopback tuple', async () => {
+    const { s, verifier } = await tunnel();
+    for (const peer of [socket(51000, 3847), socket(51000, 8081),
+      { ...socket(51000, 8080), remoteAddress: '::1' } as Socket]) {
+      expect(await verifier.verify(peer, s.child, new AbortController().signal)).toBe('UNKNOWN');
+    }
+  });
+
+  it('rejects a changed tuple during either native proof bracket', async () => {
+    for (const stage of ['peer', 'current'] as const) {
+      const p = proof(); const peer = socket(51000, 8080); let calls = 0;
+      if (stage === 'peer') p.peer = async () => { Object.assign(peer, { localPort: 51001 }); return 'OWNED'; };
+      else p.current = async () => { if (++calls === 2) Object.assign(peer, { remotePort: 8081 }); return 'OWNED'; };
+      const { s, verifier } = await tunnel(p);
+      expect(await verifier.verify(peer, s.child, new AbortController().signal)).toBe('UNKNOWN');
+    }
+  });
+
+  it('fails closed on process reuse, executable mismatch, exit or cancellation', async () => {
+    for (const stage of ['current', 'peer', 'exit', 'abort'] as const) {
+      const p = proof(); const h = handle(); const abort = new AbortController();
+      if (stage === 'current') p.current = async () => 'FOREIGN';
+      if (stage === 'peer') p.peer = async () => 'FOREIGN';
+      if (stage === 'exit') p.peer = async () => { h.exitCode = 0; return 'OWNED'; };
+      if (stage === 'abort') p.peer = async () => { abort.abort(); return 'OWNED'; };
+      const { s, verifier } = await tunnel(p, h);
+      expect(await verifier.verify(socket(51000, 8080), s.child, abort.signal)).toBe(
+        stage === 'current' || stage === 'peer' ? 'FOREIGN' : 'UNKNOWN');
+    }
+  });
+
+  it('refuses late cancellation during the final identity recheck', async () => {
+    const p = proof(); const abort = new AbortController(); let calls = 0;
+    p.current = async () => { if (++calls === 2) abort.abort(); return 'OWNED'; };
+    const { s, verifier } = await tunnel(p);
+    expect(await verifier.verify(socket(51000, 8080), s.child, abort.signal)).toBe('UNKNOWN');
+  });
+
+  it('rejects non-plain and accessor tunnel identities before evaluating getters', async () => {
+    const { s, verifier } = await tunnel(); let reads = 0;
+    const inherited = Object.assign(Object.create({ inherited: true }), s.child) as typeof s.child;
+    expect(await verifier.current(inherited)).toBe(false);
+    for (const key of ['role', 'pid'] as const) {
+      const accessor = { ...s.child };
+      Object.defineProperty(accessor, key, { enumerable: true, get() { reads++; return s.child[key]; } });
+      expect(await verifier.verify(socket(51000, 8080), accessor, new AbortController().signal)).toBe('UNKNOWN');
+    }
+    expect(reads).toBe(0);
+  });
+});
+
 describe('live verifier rechecks handle, process and accepted socket', () => {
+  it('preserves Core rejection of non-plain identity records without reading accessors', async () => {
+    const s = await sealed(); const verifier = createMacConnectedPeerVerifier(s, proof());
+    const inherited = Object.assign(Object.create({ inherited: true }), s.child) as typeof s.child;
+    expect(await verifier.current(inherited)).toBe(false);
+    const accessor = { ...s.child }; let read = false;
+    Object.defineProperty(accessor, 'role', { enumerable: true, get() { read = true; return 'core'; } });
+    expect(await verifier.current(accessor)).toBe(false);
+    expect(read).toBe(false);
+  });
+
   it('rejects any child identity mismatch before native proof', async () => {
     const trace: string[] = []; const p = proof(trace); const s = await sealed(p);
     trace.length = 0;
