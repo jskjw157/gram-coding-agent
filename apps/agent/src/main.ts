@@ -47,6 +47,7 @@ import { createVerificationReviewCommandRunner } from './verification-review-com
 import { ordinaryExecutionAuthorization, ownedExecutionLease } from './ordinary-execution-authorization.js';
 import { TrustedGitSpawner } from './trusted-git-spawner.js';
 import { ReadOnlyLocalProject } from './local-project-reader.js';
+import { MultiRootLocalFs } from './local-fs.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -380,6 +381,13 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         ...(process.env.GRAM_AGENT_READONLY_PROJECT_ROOT === undefined
           ? {}
           : { localProject: new ReadOnlyLocalProject({ root: process.env.GRAM_AGENT_READONLY_PROJECT_ROOT, redactor }) }),
+        // Full owner-selected drives/directories; the remote MCP caller cannot
+        // change this root map or access private controller credentials.
+        ...(process.env.GRAM_AGENT_LOCAL_FS_ROOTS_JSON === undefined
+          ? {}
+          : { localFs: MultiRootLocalFs.fromConfig(process.env.GRAM_AGENT_LOCAL_FS_ROOTS_JSON, {
+              stateDirectory: options.stateDirectory, secretDirectory: options.secretDirectory, redactor,
+            }) }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
