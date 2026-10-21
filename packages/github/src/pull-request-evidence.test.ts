@@ -35,7 +35,7 @@ describe('PullRequestEvidenceRepository', () => {
       metadata: {
         summary: 'Fix profile cache invalidation',
         rootCause: 'Previous cache key survived mutation.',
-        changedPaths: ['src/cache.ts', 'src/profile.ts'],
+        changedPaths: ['unapproved.ts'],
       },
     });
 
@@ -78,6 +78,16 @@ describe('PullRequestEvidenceRepository', () => {
       status: 'FAIL',
       evidenceRef: 'test:failed',
     });
+    const diffReview = verification.createCheck({
+      planId: plan,
+      taskId: task.id,
+      name: 'diff-review',
+      required: true,
+    });
+    verification.finishCheck(diffReview, {
+      status: 'PASS',
+      evidenceRef: 'diff-review:src/cache.ts,src/profile.ts',
+    });
 
     const evidence = new PullRequestEvidenceRepository(db).readForTask(task.id);
 
@@ -89,6 +99,7 @@ describe('PullRequestEvidenceRepository', () => {
       verification: [
         { name: 'lint', required: true, status: 'PASS', hasEvidence: true },
         { name: 'test', required: true, status: 'FAIL', hasEvidence: true },
+        { name: 'diff-review', required: true, status: 'PASS', hasEvidence: true },
       ],
     });
     expect(evidence.verification.some((check) => check.name === 'old-check')).toBe(false);
