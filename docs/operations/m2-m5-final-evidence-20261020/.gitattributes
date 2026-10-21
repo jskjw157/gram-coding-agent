@@ -1,0 +1,2 @@
+# Preserve receipt bytes so published SHA256 values match local evidence.
+*.json -text whitespace=cr-at-eol

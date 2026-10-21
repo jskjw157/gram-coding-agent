@@ -1,0 +1,156 @@
+{
+  "status": "FORMAL_GATE_BLOCKED",
+  "observedAtUtc": "2026-10-20T09:12:37.299880+00:00",
+  "task": {
+    "id": "01a1588d-56a7-7665-815c-223a7383aead",
+    "seq": 9,
+    "status": "COMPLETED",
+    "repo_id": 1426717645,
+    "updated_at": "2026-10-20T09:05:53.432Z"
+  },
+  "candidateHead": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+  "agentPIDAtCollection": 76149,
+  "commitSha": "637a4884b90f24af9aa74e58bf03799d82ae23d3",
+  "remoteSha": "637a4884b90f24af9aa74e58bf03799d82ae23d3",
+  "pr": {
+    "internalId": 3,
+    "number": 1,
+    "url": "https://github.com/jskjw157/gram-m2-smoke-20261020-remote-confirm/pull/1",
+    "createdAt": "2026-10-20T09:05:39.148Z"
+  },
+  "codingPhases": [
+    {
+      "phase": "INSTRUCTIONS",
+      "status": "SUCCEEDED"
+    },
+    {
+      "phase": "ANALYZE",
+      "status": "SUCCEEDED"
+    },
+    {
+      "phase": "MODIFY",
+      "status": "SUCCEEDED"
+    }
+  ],
+  "checks": [
+    {
+      "id": 26,
+      "name": "lint",
+      "status": "PASS",
+      "required": true,
+      "commandRunId": 574
+    },
+    {
+      "id": 27,
+      "name": "test",
+      "status": "PASS",
+      "required": true,
+      "commandRunId": 585
+    },
+    {
+      "id": 28,
+      "name": "build",
+      "status": "PASS",
+      "required": true,
+      "commandRunId": 596
+    },
+    {
+      "id": 29,
+      "name": "secret-scan",
+      "status": "PASS",
+      "required": true,
+      "commandRunId": null
+    },
+    {
+      "id": 30,
+      "name": "diff-review",
+      "status": "PASS",
+      "required": true,
+      "commandRunId": null
+    }
+  ],
+  "verificationPlanId": 6,
+  "acceptance": {
+    "fiveRequiredChecks": true,
+    "acceptedReviewBindings": true,
+    "sealedBlobOid": "58c39fee8f03faa47c9ad78fba967a9a244befae",
+    "actualTestCount": 1,
+    "changedPaths": [
+      "src/counter.ts"
+    ],
+    "oneLineDiff": true,
+    "providerCiBound": true
+  },
+  "timeline": {
+    "remoteConfirmAuditId": 34,
+    "remoteConfirmedAt": "2026-10-20T09:05:37.298Z",
+    "lockReleasedAt": "2026-10-20T09:05:37.299Z",
+    "lockReleaseAuditId": 35,
+    "githubPrCreatedAt": "2026-10-20T09:05:38Z",
+    "prInternalCreatedAt": "2026-10-20T09:05:39.148Z",
+    "prInternalId": 3,
+    "firstCiObservedAt": "2026-10-20T09:05:39.156Z",
+    "firstCiAuditId": 36,
+    "invariant": "remote_confirm <= lock_release < pr_create <= ci_observe",
+    "pass": true
+  },
+  "independentLockObservations": {
+    "requestCount": 14,
+    "boundarySamples": 28,
+    "prBindings": 1,
+    "allPairsComplete": true,
+    "allDbAndFileSamplesAbsent": true,
+    "endpoints": [
+      "CHECK_RUNS",
+      "PROTECTION",
+      "PR_CREATE",
+      "PR_FIND",
+      "RULES",
+      "STATUSES"
+    ],
+    "independence": "Separate read-only SQLite connection and direct lstat, in candidate process; boundary instants only."
+  },
+  "repoLockCount": 0,
+  "fileLockCount": 0,
+  "oldTaskCount": 8,
+  "oldWorktreeCount": 6,
+  "historicalTaskAndEvidenceRowsPreserved": true,
+  "priorJournalObservationCount": 29,
+  "databaseBackups": {
+    "agent.sqlite": {
+      "sha256": "c9f8d91fc81b17dd071a6a314c148f18f027c1144b211ea632ea230fb98a7e8f",
+      "integrity": "ok",
+      "restorationFingerprintsMatch": true
+    },
+    "smoke-lock-evidence.sqlite": {
+      "sha256": "7b4fdd24968d832b16e966ed1764a3914a285914681f5db081ef9880085cb9e5",
+      "integrity": "ok",
+      "restorationFingerprintsMatch": true
+    }
+  },
+  "sourceManifestSha256": "b96dfcbc04b877df0b7f8e40133edd23f64434984aca66dd0d49b235ec1936d3",
+  "distManifestSha256": "511e97bbad99ed87ac0630862b16cb2ab66a2d0329f27034db21cfd4c0ea7ca9",
+  "privateEvidenceSha256": "20ca59b22acdd6a5b160da6b7858e04f9d69eb923f20d765c93e6954ed038a8f",
+  "requiredCheck": {
+    "context": "verify",
+    "appId": 15368,
+    "strict": true,
+    "adminsEnforced": true,
+    "rulesetCount": 0,
+    "observedAtUtc": "2026-10-20T09:10:04.1062328Z",
+    "receiptSha256": "ac2e9f38ddc7d42053bd9305ed963796294d8bd87263d1070d7fafdcaf0826d5"
+  },
+  "githubCi": [
+    {
+      "id": 118545924597,
+      "headSha": "637a4884b90f24af9aa74e58bf03799d82ae23d3",
+      "status": "completed",
+      "conclusion": "success",
+      "startedAt": "2026-10-20T09:05:42Z",
+      "completedAt": "2026-10-20T09:05:48Z",
+      "url": "https://github.com/jskjw157/gram-m2-smoke-20261020-remote-confirm/actions/runs/39398155785/job/118545924597"
+    }
+  ],
+  "privateConditionDeviation": "Public disposable repository functional pass; original #77 Private acceptance condition remains unmet. No waiver, merge, release or deployment authorization inferred.",
+  "functionalStatus": "PUBLIC_FUNCTIONAL_PASS"
+}

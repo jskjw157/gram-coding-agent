@@ -1,0 +1,11 @@
+{
+  "observedAtUtc": "2026-10-20T07:26:44.097692+00:00",
+  "repository": "jskjw157/gram-m2-private-gate-20261020",
+  "repoId": 1426564190,
+  "exitCode": 1,
+  "httpStatus": "403",
+  "message": "Upgrade to GitHub Pro or make this repository public to enable this feature.",
+  "documentationUrl": "https://docs.github.com/rest/branches/branch-protection#get-branch-protection",
+  "billingChanged": false,
+  "protectionBypass": false
+}

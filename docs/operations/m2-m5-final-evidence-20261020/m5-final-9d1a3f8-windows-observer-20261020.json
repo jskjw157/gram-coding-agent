@@ -1,0 +1,9 @@
+﻿{
+    "headSha":  "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "observedAtUtc":  "2026-10-20T08:33:51.1229097Z",
+    "observer":  "Windows PowerShell outside WSL",
+    "directory":  "C:\\source\\gram-agent-diagnostics\\m5-wsl-canary-luRtt7",
+    "outsideWindowsPositive":  true,
+    "insideWindowsFileAbsent":  true,
+    "linuxReceiptSha256":  "0276023547130400a37e8d7f7c071a191f189b47032f288834e8eb1e7c903f9f"
+}

@@ -1,0 +1,66 @@
+[
+  {
+    "gate": "install",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:30:08.042301+00:00",
+    "completedAtUtc": "2026-10-20T08:30:10.115080+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-install-20261020.log"
+  },
+  {
+    "gate": "lint",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:30:10.135575+00:00",
+    "completedAtUtc": "2026-10-20T08:30:29.657062+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-lint-20261020.log"
+  },
+  {
+    "gate": "typecheck",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:30:29.681551+00:00",
+    "completedAtUtc": "2026-10-20T08:30:58.024088+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-typecheck-20261020.log"
+  },
+  {
+    "gate": "unit",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:30:58.046975+00:00",
+    "completedAtUtc": "2026-10-20T08:31:17.159938+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-unit-20261020.log"
+  },
+  {
+    "gate": "e2e",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:31:17.186473+00:00",
+    "completedAtUtc": "2026-10-20T08:31:22.406715+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-e2e-20261020.log"
+  },
+  {
+    "gate": "security",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:31:22.418650+00:00",
+    "completedAtUtc": "2026-10-20T08:31:47.280730+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-security-20261020.log"
+  },
+  {
+    "gate": "build",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:31:47.296378+00:00",
+    "completedAtUtc": "2026-10-20T08:32:21.331840+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-build-20261020.log"
+  },
+  {
+    "gate": "wsl",
+    "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+    "startedAtUtc": "2026-10-20T08:32:21.348740+00:00",
+    "completedAtUtc": "2026-10-20T08:32:25.250849+00:00",
+    "exitCode": 0,
+    "log": "/mnt/c/source/gram-agent-diagnostics/m5-final-9d1a3f8-wsl-20261020.log"
+  }
+]
