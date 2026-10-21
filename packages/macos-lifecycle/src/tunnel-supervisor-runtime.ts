@@ -1,15 +1,18 @@
 import type { ChildProcess } from 'node:child_process';
+import type { Socket } from 'node:net';
 import { configDigest, parseConfig } from './config.js';
 import type { OwnedChild } from './contracts.js';
-import type { CoreEvidence } from './health-probe.js';
+import { abortable, type CoreEvidence } from './health-probe.js';
 import type { ManagedChild, SupervisorDeps, TunnelObservation } from './supervisor.js';
 import { createReviewedTunnelCustody, type ReviewedTunnelCustodyRuntime } from './tunnel-runtime.js';
 import type { TunnelLaunchPlan } from './adapters/native-tunnel.js';
+import { copyProcessChild } from './adapters/owned-process.js';
 
 export interface ReviewedTunnelProvider {
   credentialAvailable(ref: 'test-tunnel-key'): Promise<boolean>;
   launch(plan: Readonly<TunnelLaunchPlan>): ChildProcess;
-  probe(child: Readonly<OwnedChild>, core: Readonly<CoreEvidence>, signal: AbortSignal): Promise<TunnelObservation>;
+  probe(child: Readonly<OwnedChild>, core: Readonly<CoreEvidence>, signal: AbortSignal,
+    verifyHealthPeer: (socket: Socket) => Promise<'OWNED' | 'FOREIGN' | 'UNKNOWN'>): Promise<TunnelObservation>;
 }
 
 function same(a: OwnedChild, b: OwnedChild): boolean {
@@ -82,17 +85,32 @@ export function createReviewedTunnelSupervisor(
 
       async probe(child, core, signal) {
         const managed = active;
-        if (!managed || signal.aborted || !same(child, managed.child)) return 'UNKNOWN';
+        if (!managed || signal.aborted) return 'UNKNOWN';
+        const lifetime = new AbortController();
+        const proofSignal = AbortSignal.any([signal, lifetime.signal]);
         try {
-          if (await custody.current(child, signal) !== true) return 'UNKNOWN';
+          const owned = copyProcessChild(child);
+          if (!same(owned, managed.child) || await custody.current(owned, signal) !== true) return 'UNKNOWN';
+          // This capability is child-bound and revoked on probe completion.
+          // Its verdict is local peer attribution, never provider READY proof.
+          const verifyHealthPeer = async (socket: Socket): Promise<'OWNED' | 'FOREIGN' | 'UNKNOWN'> => {
+            if (proofSignal.aborted || active !== managed || !custody.verifyHealthPeer) return 'UNKNOWN';
+            try {
+              const result = await abortable(custody.verifyHealthPeer(owned, socket, proofSignal), proofSignal);
+              return !proofSignal.aborted && active === managed ? result : 'UNKNOWN';
+            } catch { return 'UNKNOWN'; }
+          };
           const observed = observation(await providerProbe(
-            Object.freeze({ ...child }),
+            owned,
             Object.freeze({ ...core }),
             signal,
+            verifyHealthPeer,
           ));
-          if (signal.aborted || await custody.current(child, signal) !== true) return 'UNKNOWN';
+          lifetime.abort();
+          if (signal.aborted || await custody.current(owned, signal) !== true) return 'UNKNOWN';
           return observed;
         } catch { return 'UNKNOWN'; }
+        finally { lifetime.abort(); }
       },
 
       async stop(managed, deadlineMs, signal) {

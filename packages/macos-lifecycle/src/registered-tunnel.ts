@@ -6,6 +6,7 @@ import {
 } from './tunnel-registration.js';
 import type { ManagedChild } from './supervisor.js';
 import type { TunnelCustodyPort } from './adapters/native-tunnel.js';
+import { copyProcessChild } from './adapters/owned-process.js';
 
 function failed(): never { throw new Error('TUNNEL_START_FAILED'); }
 function stopUnknown(): never { throw new Error('TUNNEL_STOP_UNKNOWN'); }
@@ -90,6 +91,17 @@ export function withRegisteredTunnel(tunnel: TunnelCustodyPort,
         return owned === true && !ended && !uncertain && !signal.aborted
           && same(child, identity) && same(managed.child, identity);
       } catch { return false; }
+    },
+
+    async verifyHealthPeer(child, socket, signal) {
+      try {
+        const owned = copyProcessChild(child);
+        const current = () => ready && identity !== null && managed !== null && !ended && !uncertain
+          && !signal.aborted && same(owned, identity) && same(managed.child, identity);
+        if (!current() || !tunnel.verifyHealthPeer) return 'UNKNOWN';
+        const result = await abortable(tunnel.verifyHealthPeer(owned, socket, signal), signal);
+        return current() && (result === 'OWNED' || result === 'FOREIGN') ? result : 'UNKNOWN';
+      } catch { return 'UNKNOWN'; }
     },
 
     async stop(child, ms, signal) {

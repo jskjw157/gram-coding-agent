@@ -1,4 +1,5 @@
 import { ChildProcess } from 'node:child_process';
+import type { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import { configDigest, parseConfig } from '../config.js';
 import { root, type AccountIdentity, type OwnedChild, type ServiceConfig } from '../contracts.js';
@@ -7,7 +8,7 @@ import { ExecutionLeaseStore } from '../execution-lease.js';
 import { withExclusiveTunnelCustody } from '../exclusive-tunnel.js';
 import type { CoreEvidence } from '../health-probe.js';
 import type { ManagedChild, TunnelCompatibility } from '../supervisor.js';
-import { sealMacOwnedProcess, type ExecutableIdentity, type MacProcessSeal,
+import { copyProcessChild, createMacConnectedPeerVerifier, sealMacOwnedProcess, type ExecutableIdentity, type MacProcessSeal,
   type NativePeerProofPort } from './owned-process.js';
 
 export interface TunnelLaunchPlan {
@@ -52,6 +53,9 @@ export interface TunnelCustodyPort {
   spawn(config: ServiceConfig, compatibility: TunnelCompatibility, core: CoreEvidence,
     generation: string, signal: AbortSignal): Promise<ManagedChild>;
   current(child: OwnedChild, signal: AbortSignal): Promise<boolean>;
+  /** Optional for existing custody-only fixtures; absence is UNKNOWN. Fixed
+   * tunnel health peer proof only, never endpoint/config admission or readiness. */
+  verifyHealthPeer?(child: OwnedChild, socket: Socket, signal: AbortSignal): Promise<'OWNED' | 'FOREIGN' | 'UNKNOWN'>;
   stop(child: ManagedChild, deadlineMs: number, signal: AbortSignal): Promise<void>;
 }
 
@@ -244,6 +248,18 @@ export function createNativeTunnelCustody(options: TunnelCustodyOptions = {}): T
         return verdict === 'OWNED' && !custody.didExit && !signal.aborted
           && sameTunnelChild(child, custody.seal.child);
       } catch { return false; }
+    },
+    async verifyHealthPeer(child, socket, signal) {
+      try {
+        const owned = copyProcessChild(child);
+        const custody = active;
+        if (!custody?.seal || !custody.managed || custody.didExit || signal.aborted
+          || !sameTunnelChild(owned, custody.seal.child)) return 'UNKNOWN';
+        const verifier = createMacConnectedPeerVerifier(custody.seal, custody.proof);
+        const result = await wait(verifier.verify(socket, owned, signal), signal);
+        return active === custody && !custody.didExit && !signal.aborted
+          && sameTunnelChild(owned, custody.seal.child) ? result : 'UNKNOWN';
+      } catch { return 'UNKNOWN'; }
     },
     async stop(managed: ManagedChild, deadlineMs: number, signal: AbortSignal) {
       const custody = records.get(managed);
