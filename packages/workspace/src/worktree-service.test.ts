@@ -119,6 +119,57 @@ afterEach(() => {
 });
 
 describe('WorktreeService', () => {
+  it('creates a real Git worktree for a 650-character goal', async () => {
+    const root = tempRoot();
+    const { localBasePath } = createCanonicalRepository(root);
+    const { task, workspaces } = setupPersistence(root, localBasePath);
+    const goal = 'Repair increment and verify the isolated coding workflow with real lint test build evidence '.repeat(8).slice(0, 650);
+    expect(goal).toHaveLength(650);
+    const branch = createTaskBranchName({ taskType: 'FIX', displaySequence: 7, goal });
+    git(['check-ref-format', '--branch', branch]);
+    const service = new WorktreeService({
+      homeDir: join(root, 'home'), git: new GitCliTestPort(), workspaces,
+      pathMapper: { toWindows: async () => 'C:\\mapped' },
+    });
+    const workspace = await service.create({
+      taskId: task.id, repo: { githubRepositoryId: 84722133, localBasePath },
+      baseRef: 'origin/main', branch,
+    });
+    expect(git(['symbolic-ref', '--short', 'HEAD'], workspace.linuxPath)).toBe(branch);
+    expect(workspaces.getByTaskId(task.id)?.branch).toBe(branch);
+    expect(branch.split('/')[1]?.length).toBeLessThanOrEqual(200);
+  });
+
+  it('bounds long branches deterministically while distinguishing shared-prefix goals and task sequences', () => {
+    const input = { taskType: 'FEATURE' as const, displaySequence: Number.MAX_SAFE_INTEGER, goal: 'same prefix '.repeat(100) + 'first' };
+    const first = createTaskBranchName(input);
+    expect(first).toBe(createTaskBranchName(input));
+    expect(first).toMatch(/^feat\/task-9007199254740991-[a-z0-9-]+-[a-f0-9]{32}$/);
+    expect(first.split('/')[1]?.length).toBeLessThanOrEqual(200);
+    expect(first).not.toBe(createTaskBranchName({ ...input, goal: 'same prefix '.repeat(100) + 'second' }));
+    expect(first).not.toBe(createTaskBranchName({ ...input, displaySequence: 8 }));
+    git(['check-ref-format', '--branch', first]);
+  });
+
+  it('preserves the exact safe boundary and hashes raw goals beyond it', () => {
+    const input = { taskType: 'FIX' as const, displaySequence: 1, goal: 'a'.repeat(188) };
+    expect(createTaskBranchName(input)).toBe(`fix/task-000001-${input.goal}`);
+    const first = createTaskBranchName({ ...input, goal: 'a'.repeat(500) + '!' });
+    const second = createTaskBranchName({ ...input, goal: 'a'.repeat(500) + '?' });
+    expect(first).not.toBe(second);
+    expect(first.length).toBeLessThanOrEqual(206);
+    expect(first.split('/')[1]?.length).toBe(200);
+  });
+
+  it('preserves short Unicode and symbol fallback branch names', () => {
+    expect(createTaskBranchName({ taskType: 'CHORE', displaySequence: 3, goal: '\uD55C\uAE00 !!!' })).toBe('chore/task-000003-task');
+    expect(createTaskBranchName({ taskType: 'FIX', displaySequence: 4, goal: 'Caf\u00e9 repair' })).toBe('fix/task-000004-cafe-repair');
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])('rejects invalid display sequence %s', (displaySequence) => {
+    expect(() => createTaskBranchName({ taskType: 'FIX', displaySequence, goal: 'fix' })).toThrow(/positive safe integer/);
+  });
+
   it('creates an isolated task worktree outside the canonical checkout and persists only after Git confirms it', async () => {
     const root = tempRoot();
     const homeDir = join(root, 'home');
