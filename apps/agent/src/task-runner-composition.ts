@@ -155,6 +155,7 @@ export interface CompositionPullRequests {
     name: string;
     headBranch: string;
     baseBranch: string;
+    headSha?: string;
   }): Promise<{ number: number; url: string }>;
 }
 
@@ -530,6 +531,7 @@ export function createTaskRunner(options: TaskRunnerCompositionOptions): TaskRun
         name: profile.name,
         headBranch: published.branch,
         baseBranch: profile.defaultBranch,
+        headSha: published.sha,
       });
       return { number: view.number, url: view.url };
     },
