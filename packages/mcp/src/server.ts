@@ -1,4 +1,5 @@
 import { registerVerificationReviewTools, type VerificationReviewPort } from './tools/verification-review-tools.js';
+import { registerLocalProjectTools, type LocalProjectToolsPort } from './tools/local-project-tools.js';
 import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -41,6 +42,7 @@ export interface CreateMcpHttpServerOptions {
   githubRead?: GitHubReadToolsPort;
   agentTools?: AgentToolsPort;
   approvals?: ApprovalToolsPort;
+  localProject?: LocalProjectToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -102,6 +104,7 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
     if (options.approvals !== undefined) {
       registerApprovalTools(server, options.approvals);
     }
+    if (options.localProject !== undefined) registerLocalProjectTools(server, options.localProject);
 
     return server;
   });
