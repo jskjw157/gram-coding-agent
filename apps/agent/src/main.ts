@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TaskId } from '@gram/domain';
 import { CommitService, RemoteService } from '@gram/git';
-import { createMcpHttpServer, type ApprovalToolsPort } from '@gram/mcp';
+import { createMcpHttpServer, type ApprovalToolsPort, type TaskReadPort } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
 import {
   AuditRepository,
@@ -146,6 +146,37 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   const gitCommitRepository = new GitCommitRepository(database);
   const pullRequestRepository = new PullRequestRepository(database);
   const taskService = new TaskService(taskRepository, auditRepository);
+  const taskRead: TaskReadPort = {
+    get: (taskId) => {
+      const task = taskRepository.get(taskId);
+      if (task === null) throw new Error('Task not found');
+      return { ...task, workspace: workspaceRepository.getByTaskId(taskId) ?? null };
+    },
+    list: ({ limit }) => database.prepare(`
+      SELECT id, seq, repo_id AS repoId, repo_selector AS repoSelector, status,
+             created_at AS createdAt, updated_at AS updatedAt
+      FROM tasks ORDER BY seq DESC LIMIT ?
+    `).all(limit),
+    logs: (taskId) => {
+      if (taskRepository.get(taskId) === null) throw new Error('Task not found');
+      // Never return arbitrary persisted JSON payloads or command stdout,
+      // which might contain untrusted or sensitive data.
+      return database.prepare(`
+        SELECT id, event_type AS eventType, created_at AS createdAt
+        FROM audit_events WHERE task_id = ? ORDER BY id DESC LIMIT 100
+      `).all(taskId);
+    },
+    result: (taskId) => {
+      const task = taskRepository.get(taskId);
+      if (task === null) throw new Error('Task not found');
+      const commit = gitCommitRepository.getLatestForTask(taskId) ?? null;
+      const pullRequest = pullRequestRepository.getLatestForTask(taskId) ?? null;
+      return {
+        id: task.id, seq: task.seq, status: task.status, repoId: task.repoId,
+        updatedAt: task.updatedAt, commit, pullRequest,
+      };
+    },
+  };
   const policyEngine = new PolicyEngine();
   // Durable approvals backing the consume port below and the MCP
   // list/approve/deny surface. Built on the shared Database instance:
@@ -374,6 +405,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         internalSecret,
         health: () => healthService.status(),
         taskCreate: taskService,
+        taskRead,
         codingCapability,
         verificationReviews,
         approvals: approvalTools,
