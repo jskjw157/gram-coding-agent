@@ -318,3 +318,24 @@ describe('T5 approval tool wiring', () => {
     expect(JSON.stringify(port)).not.toContain('s5-secret');
   });
 });
+
+
+describe('optional read-only local source inspection tools', () => {
+  it('does not expose local browsing until the trusted Agent provides a scoped port', async () => {
+    const without = await advertisedNames(fullOptions('local-disabled-secret'));
+    expect(without).not.toContain('local_project_list');
+    expect(without).not.toContain('local_project_read');
+
+    const withPort = await advertisedNames({
+      ...fullOptions('local-enabled-secret'),
+      localProject: {
+        list: async (path) => ({ path, entries: [{ name: 'src', type: 'directory' }], truncated: false }),
+        read: async (path, startLine) => ({
+          path, startLine, endLine: startLine, totalLines: 1, content: 'safe', truncated: false,
+        }),
+      },
+    });
+    expect(withPort).toContain('local_project_list');
+    expect(withPort).toContain('local_project_read');
+  });
+});
