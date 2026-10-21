@@ -1,0 +1,915 @@
+{
+  "observedAtUtc": "2026-10-21T01:15:50.503149+00:00",
+  "completedAtUtc": "2026-10-21T01:18:39.743613+00:00",
+  "mainSha": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+  "pullRequests": [
+    {
+      "number": 135,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/135",
+      "state": "open",
+      "draft": true,
+      "headSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headRef": "feat/m2-vertical-slice",
+      "baseSha": "fdf5dda2211e011e473f1c89095b78d7cb565c2f",
+      "baseRef": "main",
+      "mergeable": true,
+      "stats": {
+        "commits": 300,
+        "additions": 28874,
+        "deletions": 177,
+        "changed_files": 224
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "checks": [
+        {
+          "id": 112571904700,
+          "name": "verify",
+          "headSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37552771185/job/112571904700"
+        }
+      ],
+      "runs": [
+        {
+          "id": 37552771185,
+          "head_sha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37552771185",
+          "event": "pull_request",
+          "created_at": "2026-10-07T00:35:32Z",
+          "updated_at": "2026-10-07T00:36:35Z"
+        }
+      ]
+    },
+    {
+      "number": 196,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/196",
+      "state": "open",
+      "draft": false,
+      "headSha": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+      "headRef": "fix/77-ci-observation-evidence",
+      "baseSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "baseRef": "feat/m2-vertical-slice",
+      "mergeable": true,
+      "stats": {
+        "commits": 2,
+        "additions": 284,
+        "deletions": 13,
+        "changed_files": 4
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "checks": [
+        {
+          "id": 112586565705,
+          "name": "verify",
+          "headSha": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37557359874/job/112586565705"
+        }
+      ],
+      "runs": [
+        {
+          "id": 37557359874,
+          "head_sha": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37557359874",
+          "event": "pull_request",
+          "created_at": "2026-10-07T01:29:32Z",
+          "updated_at": "2026-10-07T01:30:46Z"
+        }
+      ]
+    },
+    {
+      "number": 213,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/213",
+      "state": "open",
+      "draft": true,
+      "headSha": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+      "headRef": "fix/77-external-review-paths-20261016",
+      "baseSha": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+      "baseRef": "fix/77-ci-observation-evidence",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 291,
+        "deletions": 2,
+        "changed_files": 3
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "db44c08881ce07d5b2c05000f3d93b36999a32ae",
+      "checks": [
+        {
+          "id": 116755235449,
+          "name": "verify",
+          "headSha": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38832838110/job/116755235449"
+        }
+      ],
+      "runs": [
+        {
+          "id": 38832838110,
+          "head_sha": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38832838110",
+          "event": "pull_request",
+          "created_at": "2026-10-16T01:01:37Z",
+          "updated_at": "2026-10-16T01:03:04Z"
+        }
+      ]
+    },
+    {
+      "number": 214,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/214",
+      "state": "open",
+      "draft": true,
+      "headSha": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+      "headRef": "fix/77-independent-lock-observations-20261016",
+      "baseSha": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+      "baseRef": "fix/77-external-review-paths-20261016",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 1120,
+        "deletions": 28,
+        "changed_files": 15
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "0a51b69149abefd696a59a4054bb7e8ff7af9659",
+      "checks": [
+        {
+          "id": 116765124814,
+          "name": "verify",
+          "headSha": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38835990155/job/116765124814"
+        }
+      ],
+      "runs": [
+        {
+          "id": 38835990155,
+          "head_sha": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38835990155",
+          "event": "pull_request",
+          "created_at": "2026-10-16T01:36:01Z",
+          "updated_at": "2026-10-16T01:37:29Z"
+        }
+      ]
+    },
+    {
+      "number": 216,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/216",
+      "state": "open",
+      "draft": true,
+      "headSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "headRef": "fix/77-approved-legacy-paths-20261016",
+      "baseSha": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+      "baseRef": "fix/77-independent-lock-observations-20261016",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 74,
+        "deletions": 24,
+        "changed_files": 4
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "f4c747128098fcb807d9455b0fe0c99dc39d3db8",
+      "checks": [
+        {
+          "id": 116770305187,
+          "name": "verify",
+          "headSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837666171/job/116770305187"
+        }
+      ],
+      "runs": [
+        {
+          "id": 38837666171,
+          "head_sha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837666171",
+          "event": "pull_request",
+          "created_at": "2026-10-16T01:54:53Z",
+          "updated_at": "2026-10-16T01:56:16Z"
+        }
+      ]
+    },
+    {
+      "number": 221,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/221",
+      "state": "open",
+      "draft": true,
+      "headSha": "432b443b14045f13c6e85e87e256e640c05ad028",
+      "headRef": "security/119-command-isolation-20261020",
+      "baseSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "baseRef": "fix/77-approved-legacy-paths-20261016",
+      "mergeable": true,
+      "stats": {
+        "commits": 19,
+        "additions": 6544,
+        "deletions": 84,
+        "changed_files": 49
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "checks": [
+        {
+          "id": 118502081553,
+          "name": "verify",
+          "headSha": "432b443b14045f13c6e85e87e256e640c05ad028",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39384833259/job/118502081553"
+        }
+      ],
+      "runs": [
+        {
+          "id": 39384833259,
+          "head_sha": "432b443b14045f13c6e85e87e256e640c05ad028",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39384833259",
+          "event": "pull_request",
+          "created_at": "2026-10-20T07:10:45Z",
+          "updated_at": "2026-10-20T07:12:41Z"
+        }
+      ]
+    },
+    {
+      "number": 222,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/222",
+      "state": "open",
+      "draft": true,
+      "headSha": "96d12b85c845188a123b3848152a122b6f3da10f",
+      "headRef": "fix/77-bounded-task-branches-20261020",
+      "baseSha": "432b443b14045f13c6e85e87e256e640c05ad028",
+      "baseRef": "security/119-command-isolation-20261020",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 65,
+        "deletions": 1,
+        "changed_files": 2
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "432b443b14045f13c6e85e87e256e640c05ad028",
+      "checks": [
+        {
+          "id": 118513358218,
+          "name": "verify",
+          "headSha": "96d12b85c845188a123b3848152a122b6f3da10f",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39388282807/job/118513358218"
+        }
+      ],
+      "runs": [
+        {
+          "id": 39388282807,
+          "head_sha": "96d12b85c845188a123b3848152a122b6f3da10f",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39388282807",
+          "event": "pull_request",
+          "created_at": "2026-10-20T07:42:24Z",
+          "updated_at": "2026-10-20T07:44:41Z"
+        }
+      ]
+    },
+    {
+      "number": 223,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/223",
+      "state": "open",
+      "draft": true,
+      "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+      "headRef": "fix/77-origin-remote-confirmation-20261020",
+      "baseSha": "96d12b85c845188a123b3848152a122b6f3da10f",
+      "baseRef": "fix/77-bounded-task-branches-20261020",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 82,
+        "deletions": 3,
+        "changed_files": 2
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "96d12b85c845188a123b3848152a122b6f3da10f",
+      "checks": [
+        {
+          "id": 118531796824,
+          "name": "verify",
+          "headSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39393910054/job/118531796824"
+        }
+      ],
+      "runs": [
+        {
+          "id": 39393910054,
+          "head_sha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39393910054",
+          "event": "pull_request",
+          "created_at": "2026-10-20T08:30:36Z",
+          "updated_at": "2026-10-20T08:32:35Z"
+        }
+      ]
+    },
+    {
+      "number": 225,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/225",
+      "state": "open",
+      "draft": true,
+      "headSha": "ab80b7cd5f549f73e463483467773a191ce1dd83",
+      "headRef": "docs/77-m5-final-acceptance-20261020",
+      "baseSha": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+      "baseRef": "fix/77-origin-remote-confirmation-20261020",
+      "mergeable": true,
+      "stats": {
+        "commits": 4,
+        "additions": 3125,
+        "deletions": 0,
+        "changed_files": 21
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "9d1a3f81ac1d29a9bb716ffa798d06b19796fd16",
+      "checks": [
+        {
+          "id": 118552023259,
+          "name": "verify",
+          "headSha": "ab80b7cd5f549f73e463483467773a191ce1dd83",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39399993798/job/118552023259"
+        }
+      ],
+      "runs": [
+        {
+          "id": 39399993798,
+          "head_sha": "ab80b7cd5f549f73e463483467773a191ce1dd83",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39399993798",
+          "event": "pull_request",
+          "created_at": "2026-10-20T09:20:48Z",
+          "updated_at": "2026-10-20T09:22:54Z"
+        }
+      ]
+    },
+    {
+      "number": 215,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/215",
+      "state": "open",
+      "draft": true,
+      "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+      "headRef": "validation/77-m2-integration-20261016",
+      "baseSha": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "baseRef": "main",
+      "mergeable": true,
+      "stats": {
+        "commits": 307,
+        "additions": 30578,
+        "deletions": 179,
+        "changed_files": 231
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "checks": [
+        {
+          "id": 116770296231,
+          "name": "verify",
+          "headSha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837663393/job/116770296231"
+        }
+      ],
+      "runs": [
+        {
+          "id": 38837663393,
+          "head_sha": "173a3d0d3d1ddd983eb3d6de86ed2d27e19c82d9",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38837663393",
+          "event": "pull_request",
+          "created_at": "2026-10-16T01:54:51Z",
+          "updated_at": "2026-10-16T01:56:11Z"
+        }
+      ]
+    },
+    {
+      "number": 217,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/217",
+      "state": "open",
+      "draft": true,
+      "headSha": "786e7de141c7f82500d4b5122238fa5991fabb0b",
+      "headRef": "docs/77-m2-completion-evidence-20261016",
+      "baseSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "baseRef": "fix/77-approved-legacy-paths-20261016",
+      "mergeable": true,
+      "stats": {
+        "commits": 2,
+        "additions": 2128,
+        "deletions": 0,
+        "changed_files": 8
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "checks": [
+        {
+          "id": 118420942839,
+          "name": "verify",
+          "headSha": "786e7de141c7f82500d4b5122238fa5991fabb0b",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39359149456/job/118420942839"
+        }
+      ],
+      "runs": [
+        {
+          "id": 39359149456,
+          "head_sha": "786e7de141c7f82500d4b5122238fa5991fabb0b",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/39359149456",
+          "event": "pull_request",
+          "created_at": "2026-10-20T02:29:02Z",
+          "updated_at": "2026-10-20T02:30:03Z"
+        }
+      ]
+    },
+    {
+      "number": 206,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/206",
+      "state": "open",
+      "draft": true,
+      "headSha": "35f199d6b6960303f5909f19d65d3422ac2d8f3c",
+      "headRef": "docs/m5-threat-model-prep",
+      "baseSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "baseRef": "feat/m2-vertical-slice",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 1400,
+        "deletions": 0,
+        "changed_files": 2
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "checks": [
+        {
+          "id": 113122232041,
+          "name": "verify",
+          "headSha": "35f199d6b6960303f5909f19d65d3422ac2d8f3c",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37719058701/job/113122232041"
+        }
+      ],
+      "runs": [
+        {
+          "id": 37719058701,
+          "head_sha": "35f199d6b6960303f5909f19d65d3422ac2d8f3c",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37719058701",
+          "event": "pull_request",
+          "created_at": "2026-10-08T02:40:55Z",
+          "updated_at": "2026-10-08T02:42:23Z"
+        }
+      ]
+    },
+    {
+      "number": 208,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/208",
+      "state": "open",
+      "draft": true,
+      "headSha": "70aeb057ac5a2c37a206e2d8152c7124b7d5b48d",
+      "headRef": "test/m5-secret-boundary-prep",
+      "baseSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "baseRef": "feat/m2-vertical-slice",
+      "mergeable": true,
+      "stats": {
+        "commits": 2,
+        "additions": 624,
+        "deletions": 0,
+        "changed_files": 6
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "checks": [
+        {
+          "id": 113168847682,
+          "name": "verify",
+          "headSha": "70aeb057ac5a2c37a206e2d8152c7124b7d5b48d",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37733851471/job/113168847682"
+        }
+      ],
+      "runs": [
+        {
+          "id": 37733851471,
+          "head_sha": "70aeb057ac5a2c37a206e2d8152c7124b7d5b48d",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/37733851471",
+          "event": "pull_request",
+          "created_at": "2026-10-08T05:43:58Z",
+          "updated_at": "2026-10-08T05:45:10Z"
+        }
+      ]
+    },
+    {
+      "number": 211,
+      "url": "https://github.com/jskjw157/gram-coding-agent/pull/211",
+      "state": "open",
+      "draft": true,
+      "headSha": "3e6edd49f3654b7c9161d7c1b64212d216fc5cb0",
+      "headRef": "docs/m5-command-isolation-prep",
+      "baseSha": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "baseRef": "feat/m2-vertical-slice",
+      "mergeable": true,
+      "stats": {
+        "commits": 1,
+        "additions": 559,
+        "deletions": 0,
+        "changed_files": 1
+      },
+      "combinedCommitStatus": "pending",
+      "fetchedBaseRefTip": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "checks": [
+        {
+          "id": 114670180977,
+          "name": "verify",
+          "headSha": "3e6edd49f3654b7c9161d7c1b64212d216fc5cb0",
+          "status": "completed",
+          "conclusion": "success",
+          "appId": 15368,
+          "url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38206220872/job/114670180977"
+        }
+      ],
+      "runs": [
+        {
+          "id": 38206220872,
+          "head_sha": "3e6edd49f3654b7c9161d7c1b64212d216fc5cb0",
+          "status": "completed",
+          "conclusion": "success",
+          "html_url": "https://github.com/jskjw157/gram-coding-agent/actions/runs/38206220872",
+          "event": "pull_request",
+          "created_at": "2026-10-12T05:02:09Z",
+          "updated_at": "2026-10-12T05:03:22Z"
+        }
+      ]
+    }
+  ],
+  "rawCaptureSha256": "06472693c2c7c296be23c295f816d7c1c4704e7013fca55a8551135f99695c90",
+  "mainAbsorption": {
+    "216": {
+      "baseSha": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headSha": "13b3ab4ef278418927e9dd34fa11cba3e94ec8f3",
+      "status": "diverged",
+      "aheadBy": 305,
+      "behindBy": 10,
+      "mergeBase": "fdf5dda2211e011e473f1c89095b78d7cb565c2f"
+    },
+    "221": {
+      "baseSha": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headSha": "432b443b14045f13c6e85e87e256e640c05ad028",
+      "status": "ahead",
+      "aheadBy": 314,
+      "behindBy": 0,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe"
+    }
+  },
+  "parallelHeadAncestry": [
+    {
+      "number": 224,
+      "headSha": "c5368788b7d6da515611c66cd7ff8b74cbc09a79",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 345,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 220,
+      "headSha": "f49fcb726438c1811a5eeb6d9a355106a7d17f1c",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 342,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 219,
+      "headSha": "b5888764ded98824082a110ae53b5b4ef3dea476",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 339,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 218,
+      "headSha": "eabbf7a5531f4a22c5930aa85caf6eafadd6a257",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 337,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 212,
+      "headSha": "4410d135f5cea0a0f014b0ece4d09252f8c1413d",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 29,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 210,
+      "headSha": "441efb0fdd81799d119667b8025ec18d315e5b47",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 1,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 209,
+      "headSha": "9c9803160b650fbfe963cd4327d6e78706b12a6e",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 25,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 207,
+      "headSha": "41dbe1938fe6164840c81bc565e7830b4f57e1e9",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 16,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 205,
+      "headSha": "4419dc8a6222d2b62a3c1cb68c01c6c545e83026",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 7,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 204,
+      "headSha": "1de1450a773d4be60cb0df8f229f2d427b14bf23",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 1,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 203,
+      "headSha": "268601c9e83b8cd1ae33c9330d264ea8c012ef2d",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 317,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 202,
+      "headSha": "190a1379043b078ebb5adc29d7c27f54ba7b9d17",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 313,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 201,
+      "headSha": "c638e09707800ac0fac8eac0e778518bc88c8d36",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 310,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 200,
+      "headSha": "c3c80c3bc60b9e4e65bbab3ad7a5b7f4fb2c73d3",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 307,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 199,
+      "headSha": "d2f5129df6eea18746f686813b0128379c715986",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 304,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 198,
+      "headSha": "96fe6dac1656fa16dbec3785be3dd35bd4623cfa",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 302,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 197,
+      "headSha": "6ff2e24051f6fd08ae63d09a5bb6e36e0c567008",
+      "status": "diverged",
+      "aheadBy": 30,
+      "behindBy": 1,
+      "mergeBase": "d886ce3b98520e4c594e8da73b14e0bed7dbac3e",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 183,
+      "headSha": "7871c382a1c634a64dab786d2cb5f483d1605ae5",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 2,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 182,
+      "headSha": "1a3c8b2c2f7a377a334a443a00950fc1f841bc50",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 4,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 180,
+      "headSha": "b2618a7e2139932d0661dabc8dc061558e8fd8b5",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 82,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 179,
+      "headSha": "04d51ffd5dd71d9c2a20638b989dbeec6eb844b2",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 2,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 178,
+      "headSha": "f868a604b6d567efafd8df1e7e1a9afca445aa0a",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 5,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 177,
+      "headSha": "e3c4bf51d1784463c317407eee88fdb74ddf4fca",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 6,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 176,
+      "headSha": "695fb958790042762ebdf4838dac9a3224c184ac",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 3,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 175,
+      "headSha": "021f014f3aece56b24738af8b36a206936c080ad",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 5,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 174,
+      "headSha": "5b0834c75e279ec505d07391f6b9bae38abff3e8",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 8,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 173,
+      "headSha": "bac54a1c97e892810d61cfc403b6b55eee469fc8",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 4,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 172,
+      "headSha": "e4152b0a3929444a9bb8767d1ed5b844ea62c0ac",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 6,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 171,
+      "headSha": "de59f5f796fb720b6ed96745e5d3b35fb2de0e84",
+      "status": "diverged",
+      "aheadBy": 325,
+      "behindBy": 3,
+      "mergeBase": "b17f2baa0e02bd9b2882d6cb6033f10a911c7b7d",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 145,
+      "headSha": "f22f3ab4393dfc81651aa28c5341b844b6db74b4",
+      "status": "diverged",
+      "aheadBy": 330,
+      "behindBy": 87,
+      "mergeBase": "fdf5dda2211e011e473f1c89095b78d7cb565c2f",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 138,
+      "headSha": "e73e5dd04acea611ba6cf9ae5670fa313af06ade",
+      "status": "diverged",
+      "aheadBy": 320,
+      "behindBy": 299,
+      "mergeBase": "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 137,
+      "headSha": "a98c8ff45497f8524bc2ffa9bda19ad60898faf1",
+      "status": "diverged",
+      "aheadBy": 330,
+      "behindBy": 12,
+      "mergeBase": "fdf5dda2211e011e473f1c89095b78d7cb565c2f",
+      "headIsAncestorOf225": false
+    },
+    {
+      "number": 136,
+      "headSha": "31e66aa21b705b1793f11122c1b12d5ebf41715c",
+      "status": "diverged",
+      "aheadBy": 330,
+      "behindBy": 6,
+      "mergeBase": "fdf5dda2211e011e473f1c89095b78d7cb565c2f",
+      "headIsAncestorOf225": false
+    }
+  ],
+  "claimMarkers": [],
+  "scope": "Before additive Oct21 update; final225 HEAD/new CI separately verified at publication. baseSha is provider PR snapshot, fetchedBaseRefTip is actual fetched branch tip."
+}

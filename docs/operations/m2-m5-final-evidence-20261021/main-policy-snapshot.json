@@ -1,0 +1,13 @@
+{
+    "observedAtUtc":  "2026-10-21T01:25:34.0928721Z",
+    "repository":  "jskjw157/gram-coding-agent",
+    "branch":  "main",
+    "headSha":  "ba9fc6814711e983a11e58a09ed04e8337a4effe",
+    "protected":  false,
+    "classicProtectionHttpStatus":  404,
+    "rulesetCount":  0,
+    "projectVerifyWorkflowRequiredForAcceptance":  true,
+    "githubBranchPolicyEnforcesVerify":  false,
+    "protectionChanged":  false,
+    "scope":  "Project acceptance requires green verify; GitHub-enforced required verify was separately proven on disposable smoke repository1426717645."
+}
