@@ -7,6 +7,14 @@ Run the self-check without elevation:
 powershell -NoProfile -File scripts/test-windows-owner-workspace-install.ps1
 ```
 
+Windows CI invokes `test-windows-owner-workspace-install-ci.ps1`. On an elevated
+runner it launches only the same fixed self-check with a restricted version of
+its own token (`DISABLE_MAX_PRIVILEGE | LUA_TOKEN`), then checks the real child's
+exit code. The child refuses an administrator token; no elevation check is
+mocked or skipped. `SANDBOX_INERT` is never used and application policy stays
+enabled. This launcher is a test artifact, not an agent command-execution API.
+See Microsoft's [restricted token contract](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken).
+
 The installer requires an explicit `-Profile core` or `-Profile viewer`, with
 explicit absolute artifact paths, lowercase SHA256 pins, and a reviewed
 40-character source commit SHA. `core` requires exactly the filesystem and

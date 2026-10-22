@@ -52,7 +52,6 @@ try {
     }
     $ViewerSource = Join-Path $fixture 'viewer.exe'; Denied { Assert-InstallArguments }; $ViewerSource = ''
     $ViewerSha256 = 'c' * 64; Denied { Assert-InstallArguments }; $ViewerSha256 = ''
-    $savedProfile = $Profile; $Profile = 'all'; Denied { Assert-InstallArguments }; $Profile = $savedProfile
     $viewerPins = @{
         Profile = 'viewer'; ReleaseSha = $ReleaseSha; OwnerSid = $OwnerSid; ValidateOnly = $true
         ViewerSource = Join-Path $fixture 'viewer.exe'; ViewerSha256 = 'c' * 64

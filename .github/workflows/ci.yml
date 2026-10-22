@@ -56,4 +56,4 @@ jobs:
         run: apps\windows-protected-local-viewer\test-protocol.ps1 -HelperPath "$env:RUNNER_TEMP\gram-local-viewer.exe"
       - name: Check protected helper installation guards without elevation or installation
         shell: powershell
-        run: scripts\test-windows-owner-workspace-install.ps1
+        run: scripts\test-windows-owner-workspace-install-ci.ps1
