@@ -9,6 +9,7 @@ import type { NativeWorkspaceRequest, NativeWorkspaceTransport } from './windows
 // Synthetic installed provenance and native replies test composition only. These
 // mocks provide no evidence of native containment or actual root provisioning.
 const fixture = vi.hoisted(() => ({ trustedConfig: '', configFds: new Set<number>(), calls: [] as string[],
+  windowsRoot: '',
   read: undefined as (() => Promise<void>) | undefined, mutation: undefined as (() => Promise<void>) | undefined,
   afterMutation: undefined as (() => void) | undefined, nativeMutationPaths: [] as string[],
   rootIdentity: '7:1', omitted: false as boolean | undefined, protectedPaths: [] as string[], protectedMutationPaths: [] as string[] }));
@@ -16,7 +17,12 @@ vi.mock('node:fs', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs')>();
   return { ...fs,
     openSync(...args: Parameters<typeof fs.openSync>) {
+      if (fixture.windowsRoot && args[0] === '/mnt/c') args[0] = fixture.windowsRoot;
       const fd = fs.openSync(...args);if (args[0] === fixture.trustedConfig) fixture.configFds.add(fd);return fd;
+    },
+    realpathSync(path: string) {
+      const result = fs.realpathSync(fixture.windowsRoot && path === '/mnt/c' ? fixture.windowsRoot : path);
+      return fixture.windowsRoot && result === fixture.windowsRoot ? '/mnt/c' : result;
     },
     closeSync(fd: number) {fixture.configFds.delete(fd);return fs.closeSync(fd);},
     fstatSync(fd: number, options?: { bigint?: boolean }) {
@@ -24,7 +30,9 @@ vi.mock('node:fs', async importOriginal => {
       return fixture.configFds.has(fd) ? Object.assign(st, { uid: typeof st.uid === 'bigint' ? 0n : 0 }) : st;
     },
     lstatSync(path: string, options?: { bigint?: boolean }) {
-      const st = fs.lstatSync(path, options as { bigint: true });
+      const mapped = fixture.windowsRoot && path === '/mnt/c' ? fixture.windowsRoot :
+        fixture.windowsRoot && path === '/mnt' ? join(fixture.windowsRoot, '..') : path;
+      const st = fs.lstatSync(mapped, options as { bigint: true });
       if (fixture.trustedConfig.startsWith(path === '/' ? '/' : path + '/')) {
         Object.assign(st, { uid: typeof st.uid === 'bigint' ? 0n : 0, mode: Number(st.mode) & ~0o022 });
       }
@@ -106,7 +114,7 @@ describe('trusted owner workspace config', () => {
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-  fixture.trustedConfig = '';fixture.calls.length = 0;fixture.read = undefined;fixture.mutation = undefined;fixture.afterMutation = undefined;fixture.rootIdentity = '7:1';
+  fixture.trustedConfig = '';fixture.windowsRoot = '';fixture.calls.length = 0;fixture.read = undefined;fixture.mutation = undefined;fixture.afterMutation = undefined;fixture.rootIdentity = '7:1';
 });
 async function runtimeFixture(before?: (base: string) => void) {
   const base = mkdtempSync(join(homedir(), '.owner-runtime-'));chmodSync(base, 0o700);
@@ -168,7 +176,8 @@ describe('owner runtime composition with synthetic installed/native ports', () =
     expect(fixture.nativeMutationPaths).toContain('other');expect(fixture.nativeMutationPaths).not.toContain('project');
   });
   it('forwards Windows scopes to native identity enforcement even when caller spelling differs', async () => {
-    const { runtime, setActive } = await runtimeFixture(() => {
+    const { runtime, setActive } = await runtimeFixture(base => {
+      fixture.windowsRoot = join(base, 'synthetic-drive');mkdirSync(fixture.windowsRoot, { mode: 0o700 });
       const native = { ...pin, path: '/usr/local/libexec/helper.exe', expectedOwnerSid: 'S-1-5-21-1' };
       writeFileSync(fixture.trustedConfig, JSON.stringify({ version: 1,
         roots: { home: { label: 'C', kind: 'windows-drive', wslPath: '/mnt/c', windowsPath: 'C:\\', writable: true } },
