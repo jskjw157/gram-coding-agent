@@ -50,6 +50,49 @@ afterEach(async () => {
 });
 
 describe('trusted application Git boundary', () => {
+  it.each(['false', 'true'])('admits the Windows core.symlinks=%s boolean for captured and application Git', async value => {
+    // Git for Windows init defaults, retained in the captured repository config.
+    git(['config', 'core.filemode', 'false']);
+    git(['config', 'core.ignorecase', 'true']);
+    git(['config', 'core.symlinks', value]);
+    await writeFile(path.join(base, 'counter.ts'), 'export const n = 2;');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 2;');
+    expect((await spawner.spawn(request(['status', '--porcelain=v1', '-z']))).stdout).toContain(' M counter.ts\0');
+    expect((await spawner.spawn(request(['diff', '--']))).stdout).toContain('+export const n = 2;');
+    expect(git(['config', '--local', '--get', 'core.symlinks']).trim()).toBe(value);
+  });
+  it('preserves Windows symlink-as-file semantics inside the captured read namespace', async () => {
+    await writeFile(path.join(base, 'link.txt'), 'counter.ts');
+    const oid = git(['hash-object', '-w', 'link.txt']).trim();
+    git(['update-index', '--add', '--cacheinfo', '120000', oid, 'link.txt']);
+    git(['commit', '-m', 'symlink index fixture']);
+    git(['config', 'core.symlinks', 'false']);
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toBe('');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toBe('');
+  });
+  it.each(['yes', '1', '', 'FALSE', 'invalid', 'false\ninclude.path=/tmp/hostile'])('rejects noncanonical core.symlinks value %j in both Git paths', async value => {
+    // Git for Windows init defaults, retained in the captured repository config.
+    git(['config', 'core.filemode', 'false']);
+    git(['config', 'core.ignorecase', 'true']);
+    git(['config', 'core.symlinks', value]);
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    await expect(spawner.spawn(request(['status', '--porcelain=v1', '-z']))).rejects.toThrow();
+  });
+  it.each(['include.path', 'filter.evil.clean', 'core.hooksPath'])('still rejects %s alongside Windows core.symlinks=false', async key => {
+    git(['config', 'core.symlinks', 'false']);
+    git(['config', key, '/nonexistent/hostile']);
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    await expect(spawner.spawn(request(['status', '--porcelain=v1', '-z']))).rejects.toThrow();
+  });
+  it.each(['false', 'true'])('still rejects an outside symlink when core.symlinks=%s', async value => {
+    git(['config', 'core.symlinks', value]);
+    const outside = path.join(root, 'outside-private');
+    await writeFile(outside, 'private-sentinel');
+    symlinkSync(outside, path.join(base, 'escape'));
+    await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();
+    expect(await readFile(outside, 'utf8')).toBe('private-sentinel');
+  });
   it('checks executable provenance before even the identity parser can spawn Git', async () => {
     const original = filePromises.realpath;
     const inspect = vi.spyOn(filePromises, 'realpath').mockImplementation(async (file, options) => {
