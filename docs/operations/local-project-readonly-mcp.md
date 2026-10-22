@@ -1,5 +1,11 @@
 # Opt-in local source inspection through Gram MCP
 
+**Historical prototype, superseded by Issue 228.** The current agent rejects
+`GRAM_AGENT_READONLY_PROJECT_ROOT`; do not enable the legacy drop-in below.
+Use the [current multi-root native runtime guide](local-filesystem-mcp.md) and
+[activation gates](issue-228-activation-gates-20261022.md). The following preserves
+the earlier prototype contract, not the current deployment procedure.
+
 This feature registers exactly two read-only tools only when a trusted Agent service
 configuration explicitly sets an existing, canonical, one-project directory.
 
