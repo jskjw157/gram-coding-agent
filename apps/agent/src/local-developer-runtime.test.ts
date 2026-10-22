@@ -1,8 +1,10 @@
 import { writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { assertTrustedRuntime, RUNTIME_ROOT } from '@gram/shell';
 import { localDeveloperFixture, cleanupLocalDeveloperFixtures } from './local-developer-runtime.test-support.js';
 afterEach(cleanupLocalDeveloperFixtures);
+beforeAll(() => assertTrustedRuntime(RUNTIME_ROOT), 30_000);
 describe('local developer runtime with real temporary Git and SQLite', () => {
   it('reads Git and registers inspected GitHub identity plus declared profile', async () => {
     const f = localDeveloperFixture();expect(await f.runtime.status({ root: 'fixture', path: '.' })).toEqual({ entries: [], truncated: false });

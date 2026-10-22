@@ -5,7 +5,11 @@ import { isAbsolute } from 'node:path';
 import type { NativeWorkspaceRequest, NativeWorkspaceTransport } from './windows-workspace-client.js';
 import { NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError } from './windows-workspace-client.js';
 
-const deny = () => new NativeWorkspaceDeniedError();
+const deny = () => {
+  const error = new NativeWorkspaceDeniedError();
+  error.message = 'Native workspace transport denied or failed';
+  return error;
+};
 const INPUT_LIMIT = 3 * 1024 * 1024;
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 

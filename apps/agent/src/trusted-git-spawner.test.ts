@@ -5,17 +5,20 @@ import { RemoteService } from '@gram/git';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import filePromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { FileSecretProvider } from '@gram/secrets';
 import type { SpawnRequest } from '@gram/shell';
+import { assertTrustedRuntime, RUNTIME_ROOT } from '@gram/shell';
 import { TrustedGitSpawner, superviseTrustedGit, superviseAuthenticatedGit, readTrustedLocalGit as isolatedLocalGit } from './trusted-git-spawner.js';
 import { localGitFixtureSource } from './local-git-read-snapshot.test-support.js';
 
 let root: string;
 let base: string;
 let spawner: TrustedGitSpawner;
+// Full installed-runtime integrity is fixture preparation, not the operation's deadline.
+beforeAll(() => assertTrustedRuntime(RUNTIME_ROOT), 30_000);
 const readTrustedLocalGit = (basePath: string, request: Parameters<typeof isolatedLocalGit>[1]) =>
   isolatedLocalGit(basePath, request, { snapshotDirectory: path.join(root, 'snapshots'), source: localGitFixtureSource(basePath) });
 const git = (args: string[]) =>
@@ -47,6 +50,18 @@ afterEach(async () => {
 });
 
 describe('trusted application Git boundary', () => {
+  it('checks executable provenance before even the identity parser can spawn Git', async () => {
+    const original = filePromises.realpath;
+    const inspect = vi.spyOn(filePromises, 'realpath').mockImplementation(async (file, options) => {
+      if (file === '/usr/bin/git') return '/untrusted/git';
+      return original(file, options);
+    });
+    const launches = vi.spyOn(childProcess, 'spawn');syncBuiltinESMExports();
+    try {
+      await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+      expect(launches).not.toHaveBeenCalled();
+    } finally {inspect.mockRestore();launches.mockRestore();syncBuiltinESMExports();}
+  });
   it('does not import arbitrary host data from system trees into the read namespace', async () => {
     const outside = '/usr/share/common-licenses/GPL-3';
     const sentinel = 'GNU GENERAL PUBLIC LICENSE';expect(await readFile(outside, 'utf8')).toContain(sentinel);

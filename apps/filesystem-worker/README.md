@@ -74,6 +74,6 @@ Run the actual native suite as an unprivileged Linux owner on ext4:
 python3 tests/security/filesystem-worker-native.test.py /var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified
 ```
 
-The suite compiles both entry profiles with warnings as errors and verifies that
-the ordinary M5 entry's SHA-256 remains
-`7b577272194b3333ff8f87ba4959c0e19312308720592966412b1bcc28f547d2`.
+The suite compiles both profiles with warnings as errors and compares the ordinary
+binary against the pinned historical M5 source compiled with identical tools.
+The separate installed-host digest is recorded in the historical fixture provenance.

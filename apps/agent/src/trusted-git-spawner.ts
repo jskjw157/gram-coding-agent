@@ -506,6 +506,7 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
     const execution = { strictUtf8: true, maxOutputBytes: 1024 * 1024, timeoutMs: 10_000 };
     // Parsing a private regular config with --no-includes does not execute it.
     // It is replaced by synthesized configuration before any repository read.
+    await trustedReadExecutable('/usr/bin/git');
     const configPath = path.join(snapshot.workspace, '.git/config');
     const config = await superviseTrustedGit(snapshot.workspace, ['config', '--no-includes', '--file', configPath, '--null', '--list'], env, execution);
     if (config.exitCode !== 0) reject();

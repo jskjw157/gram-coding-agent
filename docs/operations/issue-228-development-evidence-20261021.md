@@ -43,6 +43,8 @@ Git captures are bounded to 256 MiB, 20,000 entries, 32 levels, 30 seconds, two 
 
 ## Open acceptance gates
 
+Checkpoint `021bfed16dddf0cccdfd70e43b25c3ce390be3e0` passed lint, typecheck, E2E, the mandatory M5 security suite and build locally. Its full unit run had 1,111 passes and three failures (two cold-runtime fixture timeouts and a transport error-message regression). GitHub run `39699098824` failed unit verification and two Windows recovery positives. Repairs preserve the prior error message, prepare the real pinned runtime before timed test operations, validate Git before the identity parser can spawn it, and provision an exact private fixture DACL instead of accumulating grants. These repairs require a new committed candidate and fresh full CI; prior checkpoint failures remain historical evidence.
+
 Fresh integrated checks, independent review and exact-head GitHub CI remain required after the working tree settles. Historical CI4316 is not evidence for this dirty candidate. Do not combine historical/scoped counts into a current completion result.
 
 Actual Windows Hello approval/denial/cancellation, local-viewer rendering/capture acceptance, external ChatGPT discovery/calls, restore-checked online backups, guarded deployment and deployed production composition have not been accepted for this candidate. Code, mocked approval, availability checks, server-local tools/list and fixture-only M5 success do not close those gates. Preserve live state and evidence until the authorized operational procedure is ready and verified.

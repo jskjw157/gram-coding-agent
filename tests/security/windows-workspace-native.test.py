@@ -5,6 +5,7 @@ state. The helper is not deployed by this test.
 """
 import base64
 import ctypes
+from ctypes import wintypes
 import json
 import pathlib
 import subprocess
@@ -13,6 +14,60 @@ import tempfile
 import unittest
 
 HELPER = pathlib.Path(sys.argv.pop(1)).resolve() if len(sys.argv) > 1 else None
+
+
+def vault_security(path, user=None):
+    """Install an exact fixture DACL, or inspect safe native ACL metadata."""
+    advapi = ctypes.WinDLL('advapi32', use_last_error=True)
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    pointer = ctypes.c_void_p
+    advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD)]
+    advapi.GetSecurityDescriptorDacl.argtypes = [pointer, ctypes.POINTER(wintypes.BOOL),
+                                               ctypes.POINTER(pointer), ctypes.POINTER(wintypes.BOOL)]
+    advapi.SetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+                                           pointer, pointer, pointer, pointer]
+    advapi.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, ctypes.c_int, wintypes.DWORD,
+                                           pointer, pointer, ctypes.POINTER(pointer), pointer, ctypes.POINTER(pointer)]
+    advapi.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi.GetSecurityDescriptorControl.argtypes = [pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)]
+    advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
+        pointer, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD)]
+    kernel.LocalFree.argtypes = [pointer]
+    kernel.LocalFree.restype = pointer
+    descriptor, acl, text = pointer(), pointer(), pointer()
+    try:
+        if user is not None:
+            sddl = f'D:P(A;OICI;FA;;;{user})'
+            if not advapi.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None):
+                raise ctypes.WinError(ctypes.get_last_error())
+            present, defaulted = wintypes.BOOL(), wintypes.BOOL()
+            if not advapi.GetSecurityDescriptorDacl(descriptor, ctypes.byref(present), ctypes.byref(acl), ctypes.byref(defaulted)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if not present.value or not acl.value:
+                raise AssertionError('fixture DACL missing')
+            error = advapi.SetNamedSecurityInfoW(str(path), 1, 0x80000004, None, None, acl, None)
+            if error:
+                raise ctypes.WinError(error)
+            kernel.LocalFree(descriptor)
+            descriptor = pointer()
+        error = advapi.GetNamedSecurityInfoW(str(path), 1, 4, None, None, ctypes.byref(acl), None, ctypes.byref(descriptor))
+        if error:
+            raise ctypes.WinError(error)
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        if not advapi.GetSecurityDescriptorControl(descriptor, ctypes.byref(control), ctypes.byref(revision)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, 4, ctypes.byref(text), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        st = path.stat()
+        return {'sddl': ctypes.wstring_at(text), 'protected': bool(control.value & 0x1000),
+                'attributes': st.st_file_attributes, 'volume': st.st_dev, 'identity': st.st_ino}
+    finally:
+        if text.value:
+            kernel.LocalFree(text)
+        if descriptor.value:
+            kernel.LocalFree(descriptor)
 
 
 class WindowsWorkspace(unittest.TestCase):
@@ -28,9 +83,12 @@ class WindowsWorkspace(unittest.TestCase):
         self.assertTrue(kernel.SetFileAttributesW(str(self.recovery), 2))
         user = subprocess.run(['whoami.exe', '/user', '/fo', 'csv', '/nh'],
                               capture_output=True, text=True, check=True).stdout.strip().split(',')[-1].strip('"')
-        secured = subprocess.run(['icacls.exe', str(self.recovery), '/inheritance:r', '/grant:r',
-                                  '*' + user + ':(OI)(CI)F'], capture_output=True, check=False)
-        self.assertEqual(secured.returncode, 0)
+        self.user_sid = user
+        # Replacing the DACL also clears explicit OWNER RIGHTS or other ACEs;
+        # icacls /inheritance:r /grant:r only removes inherited and matching ACEs.
+        security = vault_security(self.recovery, user)
+        self.assertTrue(security['protected'], security)
+        self.assertEqual(security['sddl'][security['sddl'].index('('):], f'(A;OICI;FA;;;{user})', security)
 
     def tearDown(self):
         self.fixture.cleanup()
@@ -45,7 +103,11 @@ class WindowsWorkspace(unittest.TestCase):
         result = subprocess.run([str(HELPER)], input=json.dumps(request), text=True,
                                 capture_output=True, timeout=10, check=False)
         self.assertLess(len(result.stdout), 1500000)
-        return json.loads(result.stdout)
+        reply = json.loads(result.stdout)
+        if operation in ('trash', 'restore') and not reply['ok']:
+            reply['fixtureSecurity'] = dict(vault_security(self.recovery), currentSid=self.user_sid,
+                                            rootVolume=self.root.stat().st_dev)
+        return reply
 
     def test_real_hidden_binary_read_and_list(self):
         (self.root / ".env").write_bytes(b"SAFE=enabled\n")
@@ -232,7 +294,15 @@ class WindowsWorkspace(unittest.TestCase):
                       expectedRootIdentity=self.call('stat', path='.')['identity'],
                       recoveryRoot=str(self.recovery), recoveryId='file-recovery',
                       expectedRecoveryRootIdentity=self.call('stat', root=str(self.recovery), protectedPaths=[], path='.')['identity'])
-        self.assertTrue(self.call('trash', path='file', **fields)['ok'])
+        # A retained explicit OWNER RIGHTS ACE is outside the helper allowlist.
+        grant = subprocess.run(['icacls.exe', str(self.recovery), '/grant', '*S-1-3-4:(OI)(CI)F'], capture_output=True)
+        self.assertEqual(grant.returncode, 0)
+        self.assertFalse(self.call('trash', path='file', **fields)['ok'])
+        security = vault_security(self.recovery, self.user_sid)
+        self.assertTrue(security['protected'], security)
+        self.assertEqual(security['sddl'][security['sddl'].index('('):], f'(A;OICI;FA;;;{self.user_sid})', security)
+        trashed = self.call('trash', path='file', **fields)
+        self.assertTrue(trashed['ok'], trashed)
         self.assertFalse(target.exists())
         self.assertFalse(self.call('read', root=str(self.recovery), path='file-recovery')['ok'])
         target.write_bytes(b'new-writer')
