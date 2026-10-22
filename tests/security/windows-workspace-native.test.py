@@ -34,6 +34,8 @@ def vault_security(path, user=None):
     advapi.GetSecurityDescriptorControl.argtypes = [pointer, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.DWORD)]
     advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
         pointer, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(pointer), ctypes.POINTER(wintypes.DWORD)]
+    advapi.GetAce.argtypes = [pointer, wintypes.DWORD, ctypes.POINTER(pointer)]
+    advapi.ConvertSidToStringSidW.argtypes = [pointer, ctypes.POINTER(pointer)]
     kernel.LocalFree.argtypes = [pointer]
     kernel.LocalFree.restype = pointer
     descriptor, acl, text = pointer(), pointer(), pointer()
@@ -60,9 +62,25 @@ def vault_security(path, user=None):
             raise ctypes.WinError(ctypes.get_last_error())
         if not advapi.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, 4, ctypes.byref(text), None):
             raise ctypes.WinError(ctypes.get_last_error())
+        aces = []
+        count = int.from_bytes(ctypes.string_at(acl, 8)[4:6], 'little')
+        for index in range(count):
+            ace, sid_text = pointer(), pointer()
+            if not advapi.GetAce(acl, index, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            header = ctypes.string_at(ace, 8)
+            if header[0] != 0:  # The fixture requires only ordinary allow ACEs.
+                raise AssertionError('unexpected fixture ACE type')
+            if not advapi.ConvertSidToStringSidW(ace.value + 8, ctypes.byref(sid_text)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                aces.append({'type': header[0], 'flags': header[1],
+                             'mask': int.from_bytes(header[4:8], 'little'), 'sid': ctypes.wstring_at(sid_text)})
+            finally:
+                kernel.LocalFree(sid_text)
         st = path.stat()
         return {'sddl': ctypes.wstring_at(text), 'protected': bool(control.value & 0x1000),
-                'attributes': st.st_file_attributes, 'volume': st.st_dev, 'identity': st.st_ino}
+                'aces': aces, 'attributes': st.st_file_attributes, 'volume': st.st_dev, 'identity': st.st_ino}
     finally:
         if text.value:
             kernel.LocalFree(text)
@@ -88,7 +106,7 @@ class WindowsWorkspace(unittest.TestCase):
         # icacls /inheritance:r /grant:r only removes inherited and matching ACEs.
         security = vault_security(self.recovery, user)
         self.assertTrue(security['protected'], security)
-        self.assertEqual(security['sddl'][security['sddl'].index('('):], f'(A;OICI;FA;;;{user})', security)
+        self.assertEqual(security['aces'], [{'type': 0, 'flags': 3, 'mask': 0x1f01ff, 'sid': user}], security)
 
     def tearDown(self):
         self.fixture.cleanup()
@@ -300,7 +318,7 @@ class WindowsWorkspace(unittest.TestCase):
         self.assertFalse(self.call('trash', path='file', **fields)['ok'])
         security = vault_security(self.recovery, self.user_sid)
         self.assertTrue(security['protected'], security)
-        self.assertEqual(security['sddl'][security['sddl'].index('('):], f'(A;OICI;FA;;;{self.user_sid})', security)
+        self.assertEqual(security['aces'], [{'type': 0, 'flags': 3, 'mask': 0x1f01ff, 'sid': self.user_sid}], security)
         trashed = self.call('trash', path='file', **fields)
         self.assertTrue(trashed['ok'], trashed)
         self.assertFalse(target.exists())

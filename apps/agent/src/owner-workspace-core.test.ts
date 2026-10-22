@@ -36,6 +36,7 @@ class StateMachineBackend {
   readonly vault = new Map<string, { files: [string, { identity: string; bytes: Buffer }][]; directories: string[] }>();
   effects = 0;
   reads = 0;
+  lists = 0;
   outcome: 'normal' | 'unknown' | 'denied' | 'invalid' = 'normal';
   private serial = 100;
 
@@ -72,6 +73,7 @@ class StateMachineBackend {
         bytes: file.bytes.length, base64: file.bytes.toString('base64') };
     }
     if (op.operation === 'list') {
+      this.lists++;
       if (!this.directories.has(key)) throw new NativeWorkspaceDeniedError();
       const prefix = root + '/' + (op.path === '.' ? '' : op.path + '/');
       const entries: NonNullable<NativeWorkspaceReply['entries']> = [];
@@ -560,6 +562,7 @@ describe('OwnerWorkspaceCore state-machine-only coordination', () => {
     const query = { root: 'main', path: '.', term: 'needle', maxDepth: 0, maxResults: 73 } as const;
     const first = await f.core.search(query);
     expect(first.matches).toHaveLength(73);
+    expect(f.backend.lists).toBe(1);
     expect(first.cursor).toMatch(/^[a-f0-9-]{36}$/u);
     await expect(f.core.search({ ...query, term: 'changed', cursor: present(first.cursor) })).rejects.toThrow();
     await expect(f.core.search({ ...query, mode: 'name', cursor: present(first.cursor) })).rejects.toThrow();

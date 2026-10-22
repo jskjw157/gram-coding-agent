@@ -337,6 +337,8 @@ export class OwnerWorkspaceCore {
       const matches: SearchMatch[] = [];
       let work = 0;
       let remaining = TEXT_LIMIT;
+      const listings = new Map<string, NonNullable<NativeWorkspaceReply['entries']>>();
+      let cachedEntries = 0;
       const queueLines = (snapshot: Snapshot, child: string, start: number) => {
         if (snapshot.screened === null) { delete state.scan;return; }
         const lines = snapshot.screened.split('\n');
@@ -379,7 +381,20 @@ export class OwnerWorkspaceCore {
         const frame = state.stack.at(-1);
         if (!frame) break;
         let entries: NonNullable<NativeWorkspaceReply['entries']>;
-        try { entries = await this.entries({ root: input.root, path: frame.path }); }
+        try {
+          const cached = listings.get(frame.path);
+          if (cached !== undefined) entries = cached;
+          else {
+            entries = await this.entries({ root: input.root, path: frame.path });
+            // Reuse this request's directory observation, with a total bounded cache.
+            while (cachedEntries + entries.length > 10_000 && listings.size > 0) {
+              const oldest = listings.keys().next().value;
+              if (oldest === undefined) throw denied();
+              cachedEntries -= listings.get(oldest)?.length ?? 0;listings.delete(oldest);
+            }
+            listings.set(frame.path, entries);cachedEntries += entries.length;
+          }
+        }
         catch (error) {
           if (!(error instanceof NativeWorkspaceDeniedError)) throw error;
           state.unreadable++;state.stack.pop();work++;continue;
