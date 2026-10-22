@@ -8,11 +8,15 @@ powershell -NoProfile -File scripts/test-windows-owner-workspace-install.ps1
 ```
 
 Windows CI invokes `test-windows-owner-workspace-install-ci.ps1`. On an elevated
-runner it launches only the same fixed self-check with a restricted version of
-its own token (`DISABLE_MAX_PRIVILEGE | LUA_TOKEN`), then checks the real child's
-exit code. The child refuses an administrator token; no elevation check is
-mocked or skipped. `SANDBOX_INERT` is never used and application policy stays
-enabled. This launcher is a test artifact, not an agent command-execution API.
+runner it executes the same synchronous self-check while impersonating a
+restricted version of its own token (`DISABLE_MAX_PRIVILEGE | LUA_TOKEN`). Real
+native file-access denials against a protected SYSTEM/Admin-only canary are
+checked before and after the test, on the same thread; the original identity and
+file access must be restored afterward. The self-check refuses an administrator
+identity; no elevation check is mocked or skipped. This is restricted-thread
+file-access evidence, not non-elevated child-process isolation. `SANDBOX_INERT`
+is never used and application policy stays enabled. The harness is test-only;
+it adds no agent command-execution API.
 See Microsoft's [restricted token contract](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createrestrictedtoken).
 
 The installer requires an explicit `-Profile core` or `-Profile viewer`, with

@@ -1,4 +1,4 @@
-# Fixed test launcher only; never imported by the agent or used for installation.
+# Fixed synchronous test harness; never imported by the agent or installer.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $test = Join-Path $PSScriptRoot 'test-windows-owner-workspace-install.ps1'
@@ -8,63 +8,76 @@ if (-not ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Secur
     exit 0
 }
 
-# Hosted Windows CI starts elevated. Run the same real denial tests with a
-# restricted version of its own token, rather than mocking elevation or skipping.
+# Restrict the synchronous test thread's real file-access token. This is not
+# child-process isolation: new processes would retain the process token.
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using System.Text;
 public static class GramInstallerTestToken {
-    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Startup {
-        public int cb; public string reserved, desktop, title;
-        public uint x,y,xsize,ysize,xchars,ychars,fill,flags;
-        public ushort show,reservedSize; public IntPtr reservedBytes,input,output,error;
-    }
-    [StructLayout(LayoutKind.Sequential)] struct ProcessInfo {
-        public IntPtr process,thread; public uint pid,tid;
-    }
     [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
-    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
-    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr handle,uint timeout);
-    [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr handle,out uint code);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr existing,uint flags,
         uint disable,IntPtr sids,uint delete,IntPtr privileges,uint restrict,IntPtr restrictions,out IntPtr token);
-    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool CreateProcessAsUser(
-        IntPtr token,string app,StringBuilder command,IntPtr processSecurity,IntPtr threadSecurity,bool inherit,
-        uint flags,IntPtr environment,string cwd,ref Startup startup,out ProcessInfo process);
-    public static uint RunFixedTest(string directory,string log) {
-        if (directory.IndexOf('\'')>=0 || log.IndexOf('\'')>=0) throw new ArgumentException("Unsupported test path");
-        string app=System.IO.Path.Combine(Environment.SystemDirectory,@"WindowsPowerShell\v1.0\powershell.exe");
-        string test=System.IO.Path.Combine(directory,"test-windows-owner-workspace-install.ps1");
-        IntPtr original=IntPtr.Zero, restricted=IntPtr.Zero;
-        ProcessInfo child=new ProcessInfo();
+    public static IntPtr RestrictedOwnToken() {
+        IntPtr original=IntPtr.Zero, restricted;
         try {
-            if (!OpenProcessToken(GetCurrentProcess(),0xB,out original)) throw new Win32Exception();
+            if (!OpenProcessToken(GetCurrentProcess(),0xE,out original)) throw new Win32Exception();
             // DISABLE_MAX_PRIVILEGE | LUA_TOKEN; never SANDBOX_INERT.
             if (!CreateRestrictedToken(original,0x5,0,IntPtr.Zero,0,IntPtr.Zero,0,IntPtr.Zero,out restricted)) throw new Win32Exception();
-            var startup=new Startup(); startup.cb=Marshal.SizeOf(startup);
-            // Select the restricted logon's noninteractive desktop instead of
-            // inheriting the elevated runner desktop (DLL initialization denial).
-            startup.desktop="";
-            var command=new StringBuilder("\""+app+"\" -NoProfile -NonInteractive -Command \"& '"+test+"' *> '"+log+"'; if (-not $?) { exit 1 }\"");
-            if (!CreateProcessAsUser(restricted,app,command,IntPtr.Zero,IntPtr.Zero,false,0x08000000,IntPtr.Zero,directory,ref startup,out child)) throw new Win32Exception();
-            if (WaitForSingleObject(child.process,120000)!=0) throw new InvalidOperationException("Test did not terminate; no retry performed");
-            uint result;
-            if (!GetExitCodeProcess(child.process,out result)) throw new Win32Exception();
-            return result;
-        } finally {
-            if(child.thread!=IntPtr.Zero) CloseHandle(child.thread);
-            if(child.process!=IntPtr.Zero) CloseHandle(child.process);
-            if(restricted!=IntPtr.Zero) CloseHandle(restricted);
-            if(original!=IntPtr.Zero) CloseHandle(original);
-        }
+            return restricted;
+        } finally { if(original!=IntPtr.Zero) CloseHandle(original); }
     }
 }
 '@
-$log = Join-Path ([IO.Path]::GetTempPath()) ('gram-installer-ci-' + [guid]::NewGuid().ToString('N') + '.log')
-$code = [GramInstallerTestToken]::RunFixedTest($PSScriptRoot, $log)
-if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
-if ($code -ne 0) { throw "Restricted-token installer tests failed: $code" }
-Write-Output 'PASS: actual restricted-token installer tests; no elevation or application-policy bypass'
+$guard = Join-Path ([IO.Path]::GetTempPath()) ('gram-installer-token-' + [guid]::NewGuid().ToString('N'))
+$acl = [Security.AccessControl.DirectorySecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]::new($sid), 'FullControl',
+        'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+}
+([IO.DirectoryInfo]::new($guard)).Create($acl)
+$sections = [Security.AccessControl.AccessControlSections]'Access, Owner'
+if ((Get-Acl -LiteralPath $guard).GetSecurityDescriptorSddlForm($sections) -cne $acl.GetSecurityDescriptorSddlForm($sections)) {
+    throw 'Canary requires exact protected SYSTEM/Admin-only ACL'
+}
+[IO.File]::WriteAllText((Join-Path $guard 'before'), 'synthetic')
+$token = [GramInstallerTestToken]::RestrictedOwnToken()
+$context = $null
+$thread = [GramInstallerTestToken]::GetCurrentThreadId()
+function Assert-RestrictedFileAccess {
+    if ([GramInstallerTestToken]::GetCurrentThreadId() -ne $thread) { throw 'Test thread changed' }
+    $current = [Security.Principal.WindowsIdentity]::GetCurrent($true)
+    try {
+        if ($null -eq $current -or ([Security.Principal.WindowsPrincipal]::new($current)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Actual restricted thread identity required'
+        }
+    } finally { if ($null -ne $current) { $current.Dispose() } }
+    $denied = $false
+    try { [IO.File]::WriteAllText((Join-Path $guard 'denied'), 'must-not-write') }
+    catch [UnauthorizedAccessException] { $denied = $true }
+    if (-not $denied) { throw 'Windows did not deny restricted-thread file access' }
+}
+try {
+    $context = [Security.Principal.WindowsIdentity]::Impersonate($token)
+    Assert-RestrictedFileAccess
+    & $test
+    Assert-RestrictedFileAccess
+} finally {
+    try { if ($null -ne $context) { $context.Undo(); $context.Dispose() } }
+    finally { if (-not [GramInstallerTestToken]::CloseHandle($token)) { throw 'Token close failed' } }
+}
+$restored = [Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+    if ([GramInstallerTestToken]::GetCurrentThreadId() -ne $thread -or
+        -not ([Security.Principal.WindowsPrincipal]::new($restored)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Original thread identity was not restored'
+    }
+} finally { $restored.Dispose() }
+[IO.File]::WriteAllText((Join-Path $guard 'after'), 'synthetic')
+Write-Output 'PASS: real restricted-thread access denial before/after fixed installer checks; original identity restored'
