@@ -185,8 +185,21 @@ async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withView
 }
 
 describe('OwnerWorkspaceCore state-machine-only coordination', () => {
+  it.each(['allow', 'deny', 'absent'] as const)('requires independent consent for newly written CRLF credentials: %s', async approval => {
+    const f = await fixture(approval, false);
+    const ordinary = await f.core.write({ root: 'main', path: 'ordinary.txt', expectedVersion: null, content: 'ordinary\r\n' });
+    expect(ordinary.state).toBe('APPLIED');expect(f.challenges).toEqual([]);
+    const result = await f.core.write({ root: 'main', path: '.env', expectedVersion: null, content: 'PASSWORD=crlf-write-private-canary\r\n' });
+    expect(result.state).toBe(approval === 'allow' ? 'APPLIED' : 'DENIED');
+    expect(f.backend.files.has('main/.env')).toBe(approval === 'allow');
+    expect(f.challenges.map(c => c.target.action)).toEqual(approval === 'absent' ? [] : ['credential-write']);
+    if (approval === 'allow') {
+      const read = await f.core.read({ root: 'main', path: '.env' });
+      expect(read.masked).toBe(true);expect(JSON.stringify(read)).not.toContain('private-canary');
+    }
+  });
   it.each(['allow', 'deny', 'absent'] as const)('keeps independent consent boundaries without a viewer: %s', async approval => {
-    const f = await fixture(approval, false);f.backend.seed('.env', 'PASSWORD=viewer-absent-canary');
+    const f = await fixture(approval, false);f.backend.seed('.env', 'PASSWORD=viewer-absent-canary\r\n');
     const metadata = await f.core.stat({ root: 'main', path: '.env' });
     const input = { root: 'main', path: '.env', expectedVersion: present(metadata.version) };
     await expect(f.core.reveal(input)).rejects.toThrow();

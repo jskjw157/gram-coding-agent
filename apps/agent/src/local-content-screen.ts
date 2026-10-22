@@ -73,7 +73,7 @@ export function screenLocalText(original: string, redactor: SecretRedactor): { c
     else if (privateSection && line.trim() && !/^\s*[#;]/u.test(line)) { lines[i] = MASK; continue; }
     if (/^\s*\/\/[^\s=]+:_auth(?:Token)?\s*=/iu.test(line) ||
         /^\s*(?:machine|default)\b.*\bpassword\s+/iu.test(line)) { lines[i] = MASK; continue; }
-    const match = /^(\s*(?:-\s+)?(?:export\s+)?["']?([\w.-]+)["']?\s*[:=]\s*)(.*)$/u.exec(line);
+    const match = /^(\s*(?:-\s+)?(?:export\s+)?["']?([\w.-]+)["']?\s*[:=]\s*)([\s\S]*)$/u.exec(line);
     if (!match || !sensitiveKey.test(match[2] ?? '')) continue;
     const value = match[3] ?? '';
     lines[i] = (match[1] ?? '') + MASK;
