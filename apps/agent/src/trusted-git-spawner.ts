@@ -427,7 +427,7 @@ function validateConfig(output: string, url: string): void {
     if (key === 'remote.origin.fetch' && value === '+refs/heads/*:refs/remotes/origin/*') continue;
     if (key === 'core.repositoryformatversion' && value === '0') continue;
     if (
-      ['core.filemode', 'core.logallrefupdates', 'core.ignorecase', 'core.precomposeunicode'].includes(key) &&
+      ['core.filemode', 'core.logallrefupdates', 'core.ignorecase', 'core.precomposeunicode', 'core.symlinks'].includes(key) &&
       ['true', 'false'].includes(value)
     )
       continue;
@@ -520,7 +520,7 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
     if (args.length === 0) return { owner, name, exitCode: 0, stdout: '', stderr: '' };
     let safeConfig = '[core]\nrepositoryformatversion = 0\nbare = false\n';
     for (const field of config.stdout.split('\0')) {
-      const match = /^core\.(filemode|ignorecase|precomposeunicode)\n(true|false)$/u.exec(field);
+      const match = /^core\.(filemode|ignorecase|precomposeunicode|symlinks)\n(true|false)$/u.exec(field);
       if (match) safeConfig += `${match[1]} = ${match[2]}\n`;
     }
     await writeFile(configPath, safeConfig, { mode: 0o600 });
