@@ -1,5 +1,9 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if (([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Run this self-check without elevation; it must not install helpers'
+}
 $installer = Join-Path $PSScriptRoot 'install-windows-owner-workspace.ps1'
 $tokens = $null; $errors = $null
 $null = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors)
@@ -7,20 +11,81 @@ if ($errors.Count) { throw ($errors | Out-String) }
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('gram-installer-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $fixture
 $pins = @{
+    Profile = 'core'
     ReleaseSha = 'a' * 40; OwnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     FilesystemSource = Join-Path $fixture 'filesystem.exe'; FilesystemSha256 = 'a' * 64
     ConsentSource = Join-Path $fixture 'consent.exe'; ConsentSha256 = 'b' * 64
-    ViewerSource = Join-Path $fixture 'viewer.exe'; ViewerSha256 = 'c' * 64
     ValidateOnly = $true
 }
 $script:checks = 0
-function Denied([scriptblock]$Action) {
+function Denied([scriptblock]$Action, [string]$ExpectedMessage = '') {
     $denied = $false
-    try { & $Action | Out-Null } catch { $denied = $true }
+    try { & $Action | Out-Null } catch {
+        if ($ExpectedMessage -and $_.Exception.Message -notlike $ExpectedMessage) { throw }
+        $denied = $true
+    }
     if (-not $denied) { throw 'Expected fail-closed rejection' }
     $script:checks++
 }
 try {
+    $contract = Get-Command $installer
+    foreach ($set in $contract.ParameterSets) {
+        $required = @($set.Parameters | Where-Object IsMandatory | ForEach-Object Name | Sort-Object)
+        $expected = @('Profile', 'ReleaseSha', 'OwnerSid')
+        if ($set.Name -eq 'Core') { $expected += @('FilesystemSource', 'FilesystemSha256', 'ConsentSource', 'ConsentSha256') }
+        elseif ($set.Name -eq 'Viewer') { $expected += @('ViewerSource', 'ViewerSha256') }
+        else { throw 'Only Core and Viewer parameter sets are allowed' }
+        if (($required -join ',') -cne (($expected | Sort-Object) -join ',')) { throw 'Profile and all selected artifact arguments must be mandatory' }
+        $script:checks++
+    }
+    if ($contract.ParameterSets.Count -ne 2) { throw 'Exactly two fixed installer profiles are required' }
+    . $installer @pins
+    $core = Assert-InstallArguments
+    if ($core.directory -cne "C:\Program Files\Gram\owner-workspace\$ReleaseSha" -or
+        ($core.names -join ',') -cne 'gram-workspace.exe,gram-owner-consent.exe') { throw 'Core must contain only filesystem and consent' }
+    $script:checks++
+    foreach ($required in @('FilesystemSource', 'FilesystemSha256', 'ConsentSource', 'ConsentSha256')) {
+        $saved = Get-Variable -Name $required -ValueOnly
+        Set-Variable -Name $required -Value ''
+        Denied { Assert-InstallArguments }
+        Set-Variable -Name $required -Value $saved
+    }
+    $ViewerSource = Join-Path $fixture 'viewer.exe'; Denied { Assert-InstallArguments }; $ViewerSource = ''
+    $ViewerSha256 = 'c' * 64; Denied { Assert-InstallArguments }; $ViewerSha256 = ''
+    $viewerPins = @{
+        Profile = 'viewer'; ReleaseSha = $ReleaseSha; OwnerSid = $OwnerSid; ValidateOnly = $true
+        ViewerSource = Join-Path $fixture 'viewer.exe'; ViewerSha256 = 'c' * 64
+    }
+    Denied { & $installer @pins -ViewerSource $viewerPins.ViewerSource -ViewerSha256 $viewerPins.ViewerSha256 }
+    Denied { & $installer @pins -ViewerSource '' -ViewerSha256 '' }
+    Denied { & $installer @viewerPins -FilesystemSource $pins.FilesystemSource -FilesystemSha256 $pins.FilesystemSha256 }
+    $invalidPins = $viewerPins.Clone(); $invalidPins.Profile = 'all'
+    Denied { & $installer @invalidPins }
+    $invalidPins.Profile = 'core'; Denied { & $installer @invalidPins }
+    . $installer @viewerPins
+    $viewer = Assert-InstallArguments
+    if ($viewer.directory -cne "C:\Program Files\Gram\protected-viewer\$ReleaseSha" -or
+        ($viewer.names -join ',') -cne 'gram-protected-viewer.exe' -or $viewer.directory -ceq $core.directory) {
+        throw 'Viewer must have its own fixed immutable version destination, including at the same release SHA'
+    }
+    $script:checks++
+    foreach ($required in @('ViewerSource', 'ViewerSha256')) {
+        $saved = Get-Variable -Name $required -ValueOnly
+        Set-Variable -Name $required -Value ''
+        Denied { Assert-InstallArguments }
+        Set-Variable -Name $required -Value $saved
+    }
+    foreach ($forbidden in @('FilesystemSource', 'FilesystemSha256', 'ConsentSource', 'ConsentSha256')) {
+        Set-Variable -Name $forbidden -Value $pins[$forbidden]
+        Denied { Assert-InstallArguments }
+        Set-Variable -Name $forbidden -Value ''
+    }
+    Denied { Invoke-HelperInstall } # Viewer source absent; no core source or destination needed.
+    [IO.File]::WriteAllText($ViewerSource, 'fixture')
+    Denied { Invoke-HelperInstall } # Viewer digest mismatch, before destination access.
+    $ViewerSha256 = (Get-FileHash -LiteralPath $ViewerSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ValidateOnly = $false
+    Denied { Invoke-HelperInstall } 'Installation requires an already approved elevated owner session*'
     . $installer @pins
     # Exercise the installer's real creation expression with an unelevated test owner.
     $ast = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$errors)
@@ -44,7 +109,7 @@ try {
         }
         $script:checks++
     } finally { $output.Dispose() }
-    Assert-InstallArguments
+    $null = Assert-InstallArguments
     $script:checks++
     $original = $ReleaseSha; $ReleaseSha = '../bad'; Denied { Assert-InstallArguments }; $ReleaseSha = $original
     $original = $OwnerSid; $OwnerSid = 'S-1-5-21-1-2-3-4'; Denied { Assert-InstallArguments }; $OwnerSid = $original
@@ -55,8 +120,14 @@ try {
     }
     $FilesystemSource = $original
     Denied { Invoke-HelperInstall } # Missing source, before any destination mutation.
-    foreach ($path in @($FilesystemSource, $ConsentSource, $ViewerSource)) { [IO.File]::WriteAllText($path, 'fixture') }
+    foreach ($path in @($FilesystemSource, $ConsentSource)) { [IO.File]::WriteAllText($path, 'fixture') }
     Denied { Invoke-HelperInstall } # Wrong digest, before any destination mutation.
+    $savedFilesystemDigest = $FilesystemSha256; $savedConsentDigest = $ConsentSha256
+    $FilesystemSha256 = (Get-FileHash -LiteralPath $FilesystemSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ConsentSha256 = (Get-FileHash -LiteralPath $ConsentSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    $ValidateOnly = $false
+    Denied { Invoke-HelperInstall } 'Installation requires an already approved elevated owner session*'
+    $ValidateOnly = $true; $FilesystemSha256 = $savedFilesystemDigest; $ConsentSha256 = $savedConsentDigest
     Assert-ProtectedAcl 'C:\' $false
     Assert-ProtectedAcl 'C:\Program Files' $false
     $script:checks += 2

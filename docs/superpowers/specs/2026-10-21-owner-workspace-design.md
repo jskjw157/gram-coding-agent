@@ -42,6 +42,25 @@ M5 isolation remains mandatory: external network is blocked and foreground execu
 
 ## Remaining gates
 
+### 2026-10-22 authorized partial core profile
+
+The owner's [partial deployment amendment](https://github.com/jskjw157/gram-coding-agent/issues/228#issuecomment-6331066044)
+separates core filesystem, Git and isolated development capabilities from the
+protected viewer. `windows.helper` and `windows.ownerPresence` remain mandatory;
+only `windows.viewer` may be omitted. A supplied viewer still requires complete
+valid pins. Without it, protected reveal is denied with no alternative disclosure
+path. Credential writes, binary export and destructive operations retain their
+independent fresh Windows Hello requirements. Core and viewer installation use
+separate immutable directories, allowing later viewer installation without
+changing core artifacts.
+
+The historical viewer rejection is not waived or relabeled as success. Actual
+installed core helpers must pass current Windows application policy and protected
+ACL/provenance checks before activation. Only after fresh preservation, exact-SHA
+CI/review, operational and external ChatGPT calls pass may the partial milestone
+be `PARTIAL_CORE_DEPLOYED`. Issue 228 remains open for viewer admission, protected
+rendering and remaining full acceptance.
+
 Require fresh full lint/typecheck/unit/E2E/security/build/native checks on the exact candidate, independent review and exact-head GitHub CI after edits settle. Historical CI4316 and previous clean-checkout results do not prove the current dirty tree.
 
 Actual Windows Hello approval/cancellation, viewer rendering/capture behavior, external ChatGPT discovery/calls and deployed production composition remain unverified for this candidate. Before upgrade, verify online backups/restoration, live Tasks/locks/processes, no active work, retained worktrees and rollback evidence. Deploy exact reviewed source/dist/runtime identities through the guarded procedure, then verify health, fixture recovery and private-path denial. Do not close #228 from code or historical CI alone.

@@ -5,7 +5,24 @@ nor changes the accepted v0.1.0 release/tag. The owner authorized reviewed Issue
 228 merges and safe deployment; a new generic command API, policy bypass, trust
 key or permission grant is outside that authorization.
 
-## Current stop
+## Partial core amendment (2026-10-22)
+
+The owner [authorized core-only activation](https://github.com/jskjw157/gram-coding-agent/issues/228#issuecomment-6331066044)
+after independent validation. The stop recorded below applies to the protected
+viewer. It does not require signing unrelated helpers that actually pass current
+Windows policy. Install the two core helpers with `-Profile core` and omit
+`windows.viewer`; retain the required owner-presence helper and all consent
+boundaries. The optional viewer uses `-Profile viewer` in a separate immutable
+directory. Do not retry or rename the rejected viewer during core activation.
+
+Require actual installed-path core-helper launches, fresh native Hello approval
+and cancellation, ACL/provenance checks, full exact-head CI and independent
+security review. Fresh backup/idle/process safeguards below still apply. External
+ChatGPT discovery and calls must pass before `PARTIAL_CORE_DEPLOYED`; keep Issue
+228 open with protected reveal unavailable. Historical reports retain their
+original scope and do not assert a current deployment.
+
+## Historical viewer stop
 
 The unsigned protected viewer was rejected by Smart App Control on the target
 Windows machine. Preserve its diagnostics and obtain an equivalent artifact
@@ -27,14 +44,15 @@ already passed with a synthetic no-effect request; those do not prove the viewer
    each change. Merge the reviewed completion into the starter first, then verify
    the combined PR before main. Do not ship the earlier limited starter alone.
 2. Bind the final merged source, production imports, all dist files, native
-   sources/compiler/build outputs, final signed helpers, unchanged M5 entry and
+   sources/compiler/build outputs, final admitted helpers, unchanged M5 entry and
    verified Node/pnpm runtime. Historical candidate CI covers only its own SHA.
 3. Put production code/imports and rollback code outside the newly writable home,
    under protected root-owned directories. Do not load dependencies from a writable
    development checkout. Retain the original release and all historical evidence.
 4. Use the [fixed Windows installer](../../scripts/windows-owner-workspace-install.md)
-   for three versioned helpers. Its 27 non-elevated checks and independent review
-   passed, including creation-time protected ACL application. Actual elevated
+   for independently versioned core and optional viewer profiles. Historical
+   non-elevated checks and review covered creation-time protected ACL application;
+   the profile amendment requires fresh verification. Actual elevated
    installation and ordinary-user replacement/write/ACL denial checks are still
    required. The installer never elevates itself or changes application policy.
 

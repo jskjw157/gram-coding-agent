@@ -107,6 +107,13 @@ describe('trusted owner workspace config', () => {
     const valid = { ...input, windows: { helper: pin, ownerPresence: native, viewer: native,
       protectedPaths: ['C:\\Gram'], protectedMutationPaths: [], recoveryRoots: { drive: { windowsPath: 'C:\\GramVault', identity: '1:2' } } } };
     expect(parseOwnerWorkspaceConfig(valid).roots.drive?.windowsPath).toBe('C:\\');
+    const core: Partial<typeof valid.windows> = { ...valid.windows };delete core.viewer;
+    expect(parseOwnerWorkspaceConfig({ ...valid, windows: core }).windows?.viewer).toBeUndefined();
+    for (const viewer of [null, {}, { ...native, sha256: 'bad' }, { ...native, extra: true }]) {
+      expect(() => parseOwnerWorkspaceConfig({ ...valid, windows: { ...core, viewer } })).toThrow();
+    }
+    const withoutConsent = { ...core };delete withoutConsent.ownerPresence;
+    expect(() => parseOwnerWorkspaceConfig({ ...valid, windows: withoutConsent })).toThrow();
     expect(() => parseOwnerWorkspaceConfig({ ...valid, roots: { drive: { ...input.roots.drive, wslPath: '/mnt/d' } } })).toThrow();
   });
 });
@@ -175,13 +182,13 @@ describe('owner runtime composition with synthetic installed/native ports', () =
     await runtime.core.mkdir({ root: 'home', path: 'allowed' });
     expect(fixture.nativeMutationPaths).toContain('other');expect(fixture.nativeMutationPaths).not.toContain('project');
   });
-  it('forwards Windows scopes to native identity enforcement even when caller spelling differs', async () => {
+  it.each([true, false])('forwards Windows scopes without making viewer availability mandatory: %s', async withViewer => {
     const { runtime, setActive } = await runtimeFixture(base => {
       fixture.windowsRoot = join(base, 'synthetic-drive');mkdirSync(fixture.windowsRoot, { mode: 0o700 });
       const native = { ...pin, path: '/usr/local/libexec/helper.exe', expectedOwnerSid: 'S-1-5-21-1' };
       writeFileSync(fixture.trustedConfig, JSON.stringify({ version: 1,
         roots: { home: { label: 'C', kind: 'windows-drive', wslPath: '/mnt/c', windowsPath: 'C:\\', writable: true } },
-        windows: { helper: { path: native.path, sha256: native.sha256 }, ownerPresence: native, viewer: native,
+        windows: { helper: { path: native.path, sha256: native.sha256 }, ownerPresence: native, ...(withViewer ? { viewer: native } : {}),
           protectedPaths: [], protectedMutationPaths: [], recoveryRoots: { home: { windowsPath: 'C:\\Vault', identity: '1:2' } } } }));
     });
     setActive(['/mnt/c/Project']);

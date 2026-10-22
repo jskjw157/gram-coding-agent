@@ -149,7 +149,7 @@ class StateMachineBackend {
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
 
-async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow') {
+async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withViewer = true) {
   const directory = mkdtempSync(join(tmpdir(), 'owner-workspace-core-'));
   chmodSync(directory, 0o700);
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -179,12 +179,53 @@ async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow') {
       readonly: { label: 'Read only', kind: 'wsl-directory', wslPath: '/readonly', writable: false },
     },
     backend, recovery, journal, ...(consent === undefined ? {} : { consent }), redactor: new SecretRedactor(),
-    viewer: { show: async input => { views.push(input.content.toString());return { status: approval === 'allow' ? 'DISPLAYED' : 'DENIED' }; } },
+    ...(withViewer ? { viewer: { show: async (input: { content: Buffer }) => { views.push(input.content.toString());return { status: approval === 'allow' ? 'DISPLAYED' as const : 'DENIED' as const }; } } } : {}),
   });
   return { core, backend, journal, recovery, db, directory, challenges, views };
 }
 
 describe('OwnerWorkspaceCore state-machine-only coordination', () => {
+  it.each(['\r', '\u2028', '\u2029'])('denies unapproved credentials after an ordinary line with separator %#', async ending => {
+    const f = await fixture('absent', false);
+    const result = await f.core.write({ root: 'main', path: '.env', expectedVersion: null,
+      content: `SAFE=visible${ending}PASSWORD=line-ending-private-canary${ending}` });
+    expect(result.state).toBe('DENIED');expect(f.backend.files.has('main/.env')).toBe(false);
+  });
+  it.each(['allow', 'deny', 'absent'] as const)('requires independent consent for newly written CRLF credentials: %s', async approval => {
+    const f = await fixture(approval, false);
+    const ordinary = await f.core.write({ root: 'main', path: 'ordinary.txt', expectedVersion: null, content: 'ordinary\r\n' });
+    expect(ordinary.state).toBe('APPLIED');expect(f.challenges).toEqual([]);
+    const result = await f.core.write({ root: 'main', path: '.env', expectedVersion: null, content: 'PASSWORD=crlf-write-private-canary\r\n' });
+    expect(result.state).toBe(approval === 'allow' ? 'APPLIED' : 'DENIED');
+    expect(f.backend.files.has('main/.env')).toBe(approval === 'allow');
+    expect(f.challenges.map(c => c.target.action)).toEqual(approval === 'absent' ? [] : ['credential-write']);
+    if (approval === 'allow') {
+      const read = await f.core.read({ root: 'main', path: '.env' });
+      expect(read.masked).toBe(true);expect(JSON.stringify(read)).not.toContain('private-canary');
+    }
+  });
+  it.each(['allow', 'deny', 'absent'] as const)('keeps independent consent boundaries without a viewer: %s', async approval => {
+    const f = await fixture(approval, false);f.backend.seed('.env', 'PASSWORD=viewer-absent-canary\r\n');
+    const metadata = await f.core.stat({ root: 'main', path: '.env' });
+    const input = { root: 'main', path: '.env', expectedVersion: present(metadata.version) };
+    await expect(f.core.reveal(input)).rejects.toThrow();
+    expect(f.views).toEqual([]);expect(f.challenges).toEqual([]);
+    expect(JSON.stringify(await f.core.read({ root: 'main', path: '.env' }))).not.toContain('viewer-absent-canary');
+    const created = await f.core.write({ root: 'main', path: 'ordinary', expectedVersion: null, content: 'ordinary' });
+    expect(created.state).toBe('APPLIED');
+    if (approval === 'allow') {
+      expect((await f.core.readBinary(input)).approvedSnapshot).toBe(true);
+    } else {
+      await expect(f.core.readBinary(input)).rejects.toThrow();
+    }
+    const changed = await f.core.write({ ...input, content: 'PASSWORD=replacement-canary' });
+    expect(changed.state).toBe(approval === 'allow' ? 'APPLIED' : 'DENIED');
+    const trashed = await f.core.trash({ root: 'main', path: 'ordinary', expectedVersion: present(created.version) });
+    expect(trashed.state).toBe(approval === 'allow' ? 'APPLIED' : 'DENIED');
+    if (approval !== 'absent') {
+      expect(f.challenges.map(c => c.target.action)).toEqual(['binary-export', 'credential-write', 'destructive']);
+    }
+  });
   it('paginates many matching lines without retaining unbounded content or match queues', async () => {
     const f = await fixture();f.backend.seed('many.txt', 'needle\n'.repeat(2500));
     let cursor: string | undefined;let count = 0;

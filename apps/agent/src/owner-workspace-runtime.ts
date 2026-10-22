@@ -18,7 +18,7 @@ export interface OwnerWorkspaceConfig {
   version: 1;
   roots: Record<string, OwnerWorkspaceRoot>;
   windows?: {
-    helper: Pin; ownerPresence: OwnerPin; viewer: OwnerPin;
+    helper: Pin; ownerPresence: OwnerPin; viewer?: OwnerPin;
     protectedPaths: string[]; protectedMutationPaths: string[];
     recoveryRoots: Record<string, { windowsPath: string; identity: string }>;
   };
@@ -95,8 +95,10 @@ export function parseOwnerWorkspaceConfig(input: unknown): OwnerWorkspaceConfig 
   }
   if (input.windows !== undefined) {
     const w = input.windows;
-    shape(w, ['helper', 'ownerPresence', 'viewer', 'protectedPaths', 'protectedMutationPaths', 'recoveryRoots']);
-    pin(w.helper);pin(w.ownerPresence, true);pin(w.viewer, true);paths(w.protectedPaths, true);paths(w.protectedMutationPaths, true);record(w.recoveryRoots);
+    shape(w, ['helper', 'ownerPresence', 'protectedPaths', 'protectedMutationPaths', 'recoveryRoots'], ['viewer']);
+    pin(w.helper);pin(w.ownerPresence, true);
+    if (Object.hasOwn(w, 'viewer')) pin(w.viewer, true);
+    paths(w.protectedPaths, true);paths(w.protectedMutationPaths, true);record(w.recoveryRoots);
     for (const [id, vault] of Object.entries(w.recoveryRoots)) {
       shape(vault, ['windowsPath', 'identity']);
       if (!Object.hasOwn(input.roots, id) || (input.roots[id] as OwnerWorkspaceRoot).kind !== 'windows-drive' ||
@@ -173,7 +175,8 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
   const config = readConfig(options.configPath);
   const reads = [options.configPath, options.stateDirectory, options.secretDirectory, ...options.protectedReadPaths,
     ...Object.values(config.posix?.artifacts ?? {}).map(pin => pin.path),
-    ...(config.windows ? [config.windows.helper.path, config.windows.ownerPresence.path, config.windows.viewer.path] : []),
+    ...(config.windows ? [config.windows.helper.path, config.windows.ownerPresence.path,
+      ...(config.windows.viewer ? [config.windows.viewer.path] : [])] : []),
     ...(config.posix ? [config.posix.recoveryBase, ...Object.values(config.posix.recoveryRoots).map(v => v.path)] : []),
     ...(config.windows ? [...config.windows.protectedPaths, ...Object.values(config.windows.recoveryRoots).map(v => v.windowsPath), ...WINDOWS_PRIVATE].map(linuxWindows) : [])];
   const mutations = [...reads, ...options.protectedMutationPaths,
