@@ -45,6 +45,9 @@ public static class GramInstallerTestToken {
             // DISABLE_MAX_PRIVILEGE | LUA_TOKEN; never SANDBOX_INERT.
             if (!CreateRestrictedToken(original,0x5,0,IntPtr.Zero,0,IntPtr.Zero,0,IntPtr.Zero,out restricted)) throw new Win32Exception();
             var startup=new Startup(); startup.cb=Marshal.SizeOf(startup);
+            // Select the restricted logon's noninteractive desktop instead of
+            // inheriting the elevated runner desktop (DLL initialization denial).
+            startup.desktop="";
             var command=new StringBuilder("\""+app+"\" -NoProfile -NonInteractive -Command \"& '"+test+"' *> '"+log+"'; if (-not $?) { exit 1 }\"");
             if (!CreateProcessAsUser(restricted,app,command,IntPtr.Zero,IntPtr.Zero,false,0x08000000,IntPtr.Zero,directory,ref startup,out child)) throw new Win32Exception();
             if (WaitForSingleObject(child.process,120000)!=0) throw new InvalidOperationException("Test did not terminate; no retry performed");
