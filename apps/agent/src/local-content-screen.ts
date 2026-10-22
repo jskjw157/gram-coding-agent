@@ -64,7 +64,8 @@ export function screenLocalText(original: string, redactor: SecretRedactor): { c
       return { content: MASK, masked: true };
     }
   }
-  const lines = content.split('\n');
+  const endings = content.match(/\r\n|[\n\r\u2028\u2029]/gu) ?? [];
+  const lines = content.split(/\r\n|[\n\r\u2028\u2029]/u);
   let privateSection = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
@@ -99,7 +100,7 @@ export function screenLocalText(original: string, redactor: SecretRedactor): { c
       }
     }
   }
-  content = lines.join('\n').replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.-]+/giu, '$1 ' + MASK)
+  content = lines.map((line, i) => line + (endings[i] ?? '')).join('').replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/_=.-]+/giu, '$1 ' + MASK)
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, '$1' + MASK + '@');
   return { content, masked: content !== original };
 }

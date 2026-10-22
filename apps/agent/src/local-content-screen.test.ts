@@ -10,6 +10,9 @@ describe('native Windows credential preview screening', () => {
     'PASSWORD="crlf-private-canary\r\ncontinued-private-canary"\r\nSAFE=visible\r\n',
     'PASSWORD=crlf-private-canary\rSAFE=visible\r',
     'PASSWORD=crlf-private-canary\u2028SAFE=visible',
+    'SAFE=visible\rPASSWORD=bare-cr-private-canary\r',
+    'SAFE=visible\u2028PASSWORD=unicode-private-canary',
+    'SAFE=visible\u2029PASSWORD=unicode-private-canary',
   ])('withholds credential assignments across native line endings: %#', content => {
     const result = screenLocalText(content, new SecretRedactor());
     expect(result.masked).toBe(true);
@@ -17,8 +20,8 @@ describe('native Windows credential preview screening', () => {
     if (content.includes('\r\n')) expect(result.content).toContain('SAFE');
   });
 
-  it('preserves ordinary CRLF source bytes without classifying newline conversion as a secret', () => {
-    const content = 'import { createRoot } from "react-dom/client";\r\nconst count = 1;\r\n';
+  it.each(['\r\n', '\r', '\u2028', '\u2029'])('preserves ordinary source line-ending bytes: %#', ending => {
+    const content = `import { createRoot } from "react-dom/client";${ending}const count = 1;${ending}`;
     expect(screenLocalText(content, new SecretRedactor())).toEqual({ content, masked: false });
   });
 });

@@ -185,6 +185,12 @@ async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withView
 }
 
 describe('OwnerWorkspaceCore state-machine-only coordination', () => {
+  it.each(['\r', '\u2028', '\u2029'])('denies unapproved credentials after an ordinary line with separator %#', async ending => {
+    const f = await fixture('absent', false);
+    const result = await f.core.write({ root: 'main', path: '.env', expectedVersion: null,
+      content: `SAFE=visible${ending}PASSWORD=line-ending-private-canary${ending}` });
+    expect(result.state).toBe('DENIED');expect(f.backend.files.has('main/.env')).toBe(false);
+  });
   it.each(['allow', 'deny', 'absent'] as const)('requires independent consent for newly written CRLF credentials: %s', async approval => {
     const f = await fixture(approval, false);
     const ordinary = await f.core.write({ root: 'main', path: 'ordinary.txt', expectedVersion: null, content: 'ordinary\r\n' });
