@@ -1,4 +1,8 @@
 import { registerVerificationReviewTools, type VerificationReviewPort } from './tools/verification-review-tools.js';
+import { registerLocalProjectTools, type LocalProjectToolsPort } from './tools/local-project-tools.js';
+import { registerLocalFsTools, type LocalFsToolsPort } from './tools/local-fs-tools.js';
+import { registerOwnerWorkspaceTools, type OwnerWorkspaceToolsPort } from './tools/owner-workspace-tools.js';
+import { registerLocalDeveloperTools, type LocalDeveloperToolsPort } from './tools/local-developer-tools.js';
 import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -41,6 +45,10 @@ export interface CreateMcpHttpServerOptions {
   githubRead?: GitHubReadToolsPort;
   agentTools?: AgentToolsPort;
   approvals?: ApprovalToolsPort;
+  localProject?: LocalProjectToolsPort;
+  localFs?: LocalFsToolsPort;
+  ownerWorkspace?: OwnerWorkspaceToolsPort;
+  localDeveloper?: LocalDeveloperToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -66,6 +74,9 @@ function closeHttpServer(server: HttpServer): Promise<void> {
 }
 
 export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): Promise<RunningMcpServer> {
+  if (options.ownerWorkspace !== undefined && (options.localFs !== undefined || options.localProject !== undefined)) {
+    throw new Error('Owner workspace cannot share legacy filesystem authority');
+  }
   if (options.host !== '127.0.0.1' && options.host !== '::1') {
     throw new Error('MCP server must bind to loopback');
   }
@@ -102,6 +113,10 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
     if (options.approvals !== undefined) {
       registerApprovalTools(server, options.approvals);
     }
+    if (options.localProject !== undefined) registerLocalProjectTools(server, options.localProject);
+    if (options.localFs !== undefined) registerLocalFsTools(server, options.localFs);
+    if (options.ownerWorkspace !== undefined) registerOwnerWorkspaceTools(server, options.ownerWorkspace);
+    if (options.localDeveloper !== undefined) registerLocalDeveloperTools(server, options.localDeveloper);
 
     return server;
   });

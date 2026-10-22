@@ -1,19 +1,26 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, symlinkSync, linkSync, chmodSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import childProcess, { execFileSync } from 'node:child_process';
 import { RemoteService } from '@gram/git';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import filePromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { FileSecretProvider } from '@gram/secrets';
 import type { SpawnRequest } from '@gram/shell';
-import { TrustedGitSpawner, superviseTrustedGit, superviseAuthenticatedGit } from './trusted-git-spawner.js';
+import { assertTrustedRuntime, RUNTIME_ROOT } from '@gram/shell';
+import { TrustedGitSpawner, superviseTrustedGit, superviseAuthenticatedGit, readTrustedLocalGit as isolatedLocalGit } from './trusted-git-spawner.js';
+import { localGitFixtureSource } from './local-git-read-snapshot.test-support.js';
 
 let root: string;
 let base: string;
 let spawner: TrustedGitSpawner;
+// Full installed-runtime integrity is fixture preparation, not the operation's deadline.
+beforeAll(() => assertTrustedRuntime(RUNTIME_ROOT), 30_000);
+const readTrustedLocalGit = (basePath: string, request: Parameters<typeof isolatedLocalGit>[1]) =>
+  isolatedLocalGit(basePath, request, { snapshotDirectory: path.join(root, 'snapshots'), source: localGitFixtureSource(basePath) });
 const git = (args: string[]) =>
   execFileSync('/usr/bin/git', args, {
     cwd: base,
@@ -43,6 +50,117 @@ afterEach(async () => {
 });
 
 describe('trusted application Git boundary', () => {
+  it('checks executable provenance before even the identity parser can spawn Git', async () => {
+    const original = filePromises.realpath;
+    const inspect = vi.spyOn(filePromises, 'realpath').mockImplementation(async (file, options) => {
+      if (file === '/usr/bin/git') return '/untrusted/git';
+      return original(file, options);
+    });
+    const launches = vi.spyOn(childProcess, 'spawn');syncBuiltinESMExports();
+    try {
+      await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+      expect(launches).not.toHaveBeenCalled();
+    } finally {inspect.mockRestore();launches.mockRestore();syncBuiltinESMExports();}
+  });
+  it('does not import arbitrary host data from system trees into the read namespace', async () => {
+    const outside = '/usr/share/common-licenses/GPL-3';
+    const sentinel = 'GNU GENERAL PUBLIC LICENSE';expect(await readFile(outside, 'utf8')).toContain(sentinel);
+    const tracked = 'x'.repeat(outside.length);await writeFile(path.join(base, tracked), 'original');
+    git(['add', '--', tracked]);git(['commit', '-m', 'system-data fixture']);
+    const indexPath = path.join(base, '.git/index');const index = await readFile(indexPath);
+    const offset = index.indexOf(Buffer.from(tracked + '\0'));expect(offset).toBeGreaterThan(12);
+    Buffer.from(outside).copy(index, offset);createHash('sha1').update(index.subarray(0, -20)).digest().copy(index, index.length - 20);
+    await writeFile(indexPath, index);
+    const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false }).catch(() => null);
+    expect(result?.stdout ?? '').not.toContain(sentinel);
+  });
+  it('preserves inert repository exclusions and executable-bit observations', async () => {
+    await writeFile(path.join(base, '.git/info/exclude'), '*.log\n');await writeFile(path.join(base, 'ignored.log'), 'ordinary');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toBe('');
+    chmodSync(path.join(base, 'counter.ts'), 0o755);
+    const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false });
+    expect(result.stdout).toContain('old mode 100644');expect(result.stdout).toContain('new mode 100755');
+  });
+  it('refuses object alternates and hardlink aliases before any private Git read', async () => {
+    await mkdir(path.join(base, '.git/objects/info'), { recursive: true });
+    await writeFile(path.join(base, '.git/objects/info/alternates'), path.join(root, 'outside-objects'));
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    await rm(path.join(base, '.git/objects/info/alternates'));
+    await writeFile(path.join(root, 'private-file'), 'outside-fixture-only');
+    linkSync(path.join(root, 'private-file'), path.join(base, 'hardlink-alias'));
+    await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();
+    expect(await readFile(path.join(root, 'private-file'), 'utf8')).toBe('outside-fixture-only');
+  });
+  it('does not follow a working-tree parent replaced by an outside symlink after admission', async () => {
+    const parent = path.join(base, 'child');const outside = path.join(root, 'outside');const sentinel = 'outside-parent-sentinel';
+    await mkdir(parent);await mkdir(outside);
+    await writeFile(path.join(parent, 'file.ts'), 'original');await writeFile(path.join(outside, 'file.ts'), sentinel);
+    git(['add', '--', 'child/file.ts']);git(['commit', '-m', 'parent fixture']);
+    const originalSpawn = childProcess.spawn;
+    const hook = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+      if (Array.isArray(args) && args.includes('diff')) {renameSync(parent, path.join(root, 'saved-child'));symlinkSync(outside, parent);}
+      return originalSpawn(command, args, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false }).catch(() => null);
+      expect(result?.stdout ?? '').not.toContain(sentinel);
+    } finally {hook.mockRestore();syncBuiltinESMExports();}
+  });
+  it.each(['relative', 'absolute'])('never reads outside the selected worktree through a forged %s index path', async kind => {
+    const outside = path.join(root, 'data.ts');const sentinel = 'outside-controller-sentinel';
+    await writeFile(outside, sentinel);
+    const forged = kind === 'relative' ? '../data.ts' : outside;
+    const tracked = kind === 'relative' ? 'counter.ts' : 'x'.repeat(forged.length);
+    if (kind === 'absolute') {await writeFile(path.join(base, tracked), 'original');git(['add', '--', tracked]);git(['commit', '-m', 'index fixture']);}
+    const indexPath = path.join(base, '.git/index');const index = await readFile(indexPath);
+    const offset = index.indexOf(Buffer.from(tracked + '\0'));expect(offset).toBeGreaterThan(12);
+    Buffer.from(forged).copy(index, offset);
+    createHash('sha1').update(index.subarray(0, -20)).digest().copy(index, index.length - 20);
+    await writeFile(indexPath, index);
+    const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false }).catch(() => null);
+    expect(result?.stdout ?? '').not.toContain(sentinel);
+  });
+  it.each(['worktree', 'index', 'info'])('does not execute a concurrently installed clean filter from %s attributes', async source => {
+    const marker = path.join(root, 'filter-executed');
+    const attributes = path.join(base, '.gitattributes');
+    if (source !== 'info') {
+      await writeFile(attributes, '*.ts filter=proof\n');git(['add', '--', '.gitattributes']);git(['commit', '-m', 'attributes']);
+      if (source === 'index') await rm(attributes);
+    }
+    await writeFile(path.join(base, 'counter.ts'), 'export const n = 2;');
+    const configPath = path.join(base, '.git/config');const admitted = await readFile(configPath, 'utf8');
+    const originalSpawn = childProcess.spawn;let raced = false;
+    const hook = vi.spyOn(childProcess, 'spawn').mockImplementation((command, args, options) => {
+      if (Array.isArray(args) && args.includes('diff')) {
+        raced = true;
+        writeFileSync(configPath, admitted + `\n[filter "proof"]\n\tclean = "printf executed > '${marker}'; cat"\n`);
+        if (source === 'info') writeFileSync(path.join(base, '.git/info/attributes'), '*.ts filter=proof\n');
+      }
+      return originalSpawn(command, args, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false });
+      expect(raced).toBe(true);expect(result.stdout).toContain('+export const n = 2;');
+      await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {hook.mockRestore();syncBuiltinESMExports();}
+  });
+  it('reads typed local identity, status, diff and log with real Git and no credentials', async () => {
+    const identity = await readTrustedLocalGit(base, { operation: 'identity' });
+    expect(identity).toMatchObject({ owner: 'fixture', name: 'smoke' });
+    await writeFile(path.join(base, 'counter.ts'), 'export const n = 2;');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 2;');
+    expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\0');
+  });
+  it('rejects local metadata command hooks, origin rewrites and arbitrary path flags', async () => {
+    git(['config', 'diff.external', '/fixture/never-execute']);
+    await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();
+    git(['config', '--unset', 'diff.external']);git(['remote', 'set-url', 'origin', 'https://other.invalid/private.git']);
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false, relativePath: '--output=/private' })).rejects.toThrow();
+  });
   it('rejects invalid UTF-8 object bytes for a strict review reader', async () => {
     await writeFile(path.join(base, 'counter.ts'), Buffer.from([0xff]));
     git(['add', '--', 'counter.ts']);

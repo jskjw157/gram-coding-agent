@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import { writeSync } from 'node:fs';
-import { lstat, readFile, realpath, readdir } from 'node:fs/promises';
+import { lstat, readFile, realpath, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SecretProvider } from '@gram/secrets';
 import type { ProcessSpawner, SpawnRequest, SpawnResult } from '@gram/shell';
+import { assertTrustedRuntime, RUNTIME_ROOT } from '@gram/shell';
+import { createLocalGitSnapshot, type LocalGitSnapshotSource } from './local-git-read-snapshot.js';
 
 export interface TrustedGitContext {
   basePath: string;
@@ -35,6 +37,7 @@ const environment = (): Record<string, string> => ({
   GIT_LITERAL_PATHSPECS: '1',
   GIT_ALLOW_PROTOCOL: 'https',
   GIT_PROTOCOL_FROM_USER: '0',
+  GIT_OPTIONAL_LOCKS: '0',
 });
 const fixedConfig = [
   '-c',
@@ -313,6 +316,12 @@ export async function superviseTrustedGit(
   env: Record<string, string>,
   options: TrustedGitExecutionOptions = {},
 ): Promise<SpawnResult> {
+  return superviseFixedGit('git', cwd, args, env, options);
+}
+async function superviseFixedGit(
+  kind: 'git' | 'read-only-namespace' | 'dependencies', cwd: string, args: readonly string[], env: Record<string, string>,
+  options: TrustedGitExecutionOptions,
+): Promise<SpawnResult> {
   const limit = options.maxOutputBytes ?? 1024 * 1024;
   const timeoutMs = options.timeoutMs ?? 30_000;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1024 * 1024 ||
@@ -326,7 +335,8 @@ export async function superviseTrustedGit(
       else writeSync(2, 'Trusted Git cleanup quarantined: retaining operation and credential lease until process quiescence is proven.\n');
     } catch { /* A diagnostic failure cannot release credentials or settle the operation. */ }
   };
-  const child = spawn('/usr/bin/git', [...args], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const executable = kind === 'git' ? '/usr/bin/git' : kind === 'dependencies' ? '/usr/bin/ldd' : '/usr/bin/bwrap';
+  const child = spawn(executable, [...args], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let bytes = 0;
@@ -430,6 +440,110 @@ function validateConfig(output: string, url: string): void {
     reject();
   }
   if (originCount !== 1) reject();
+}
+
+export type TrustedLocalGitRead =
+  | { operation: 'identity' | 'status' | 'head' | 'tracked' }
+  | { operation: 'diff'; staged: boolean; relativePath?: string }
+  | { operation: 'log'; maxCount: number };
+
+export interface TrustedLocalGitReadOptions { snapshotDirectory: string; source: LocalGitSnapshotSource }
+async function trustedReadExecutable(file: string): Promise<void> {
+  if (await realpath(file) !== file) reject();
+  const st = await lstat(file);
+  if (!st.isFile() || st.uid !== 0 || st.nlink !== 1 || (st.mode & 0o6022) !== 0 || (st.mode & 0o111) === 0) reject();
+  for (let parent = path.dirname(file);; parent = path.dirname(parent)) {
+    const directory = await lstat(parent);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== 0 || (directory.mode & 0o022) !== 0) reject();
+    if (parent === '/') break;
+  }
+}
+async function readonlyGitLibraries(): Promise<string[]> {
+  await trustedReadExecutable('/usr/bin/ldd');
+  const mounts = new Map<string, string>();
+  for (const executable of ['/usr/bin/git', '/usr/local/libexec/gram-sandbox-entry']) {
+    const result = await superviseFixedGit('dependencies', '/', [executable], { PATH: '/usr/bin:/bin', LANG: 'C' },
+      { strictUtf8: true, maxOutputBytes: 65536, timeoutMs: 10000 });
+    if (result.exitCode !== 0) reject();
+    for (const line of result.stdout.split('\n').map(value => value.trim()).filter(Boolean)) {
+      if (/^linux-vdso\.so\.1 \(0x[a-f0-9]+\)$/u.test(line)) continue;
+      const match = /^(?:[^\s]+ => )?(\/(?:usr\/lib[^/]*|lib[^/]*)\/[^\s]+) \(0x[a-f0-9]+\)$/u.exec(line);
+      const target = match?.[1];if (!target || path.normalize(target) !== target) reject();
+      const source = await realpath(target);const st = await lstat(source);
+      if (!st.isFile() || st.uid !== 0 || st.nlink !== 1 || (st.mode & 0o6022) !== 0) reject();
+      for (let parent = path.dirname(source);; parent = path.dirname(parent)) {
+        const directory = await lstat(parent);
+        if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== 0 || (directory.mode & 0o022) !== 0) reject();
+        if (parent === '/') break;
+      }
+      mounts.set(target, source);if (mounts.size > 32) reject();
+    }
+  }
+  if (mounts.size === 0) reject();
+  return [...mounts].flatMap(([target, source]) => ['--ro-bind', source, target]);
+}
+/** A fixed read-only namespace over a complete private native-broker capture.
+ * Live project/config/object paths never enter Git's execution namespace. */
+export async function readTrustedLocalGit(basePath: string, request: TrustedLocalGitRead, options: TrustedLocalGitReadOptions): Promise<SpawnResult & { owner: string; name: string }> {
+  let snapshot: Awaited<ReturnType<typeof createLocalGitSnapshot>> | undefined;
+  try {
+    if (!options || !path.isAbsolute(basePath) || process.platform !== 'linux' || process.arch !== 'x64') reject();
+    let args: string[];
+    if (request.operation === 'identity') args = [];
+    else if (request.operation === 'head') args = ['rev-parse', '--verify', 'HEAD'];
+    else if (request.operation === 'tracked') args = ['ls-files', '-v', '-z'];
+    else if (request.operation === 'status') args = ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--ignore-submodules=all'];
+    else if (request.operation === 'diff') {
+      if (typeof request.staged !== 'boolean' || (request.relativePath !== undefined && !safePath(request.relativePath))) reject();
+      args = ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--ignore-submodules=all', '--no-color',
+        ...(request.staged ? ['--cached'] : []), '--', ...(request.relativePath === undefined ? [] : [request.relativePath])];
+    } else if (request.operation === 'log') {
+      if (!Number.isSafeInteger(request.maxCount) || request.maxCount < 1 || request.maxCount > 100) reject();
+      args = ['log', '--format=%H%x00%s%x00', `--max-count=${request.maxCount}`, '--no-show-signature', '--no-decorate', '--'];
+    } else reject();
+    snapshot = await createLocalGitSnapshot(options.source, options.snapshotDirectory);
+    const env = environment();
+    const execution = { strictUtf8: true, maxOutputBytes: 1024 * 1024, timeoutMs: 10_000 };
+    // Parsing a private regular config with --no-includes does not execute it.
+    // It is replaced by synthesized configuration before any repository read.
+    await trustedReadExecutable('/usr/bin/git');
+    const configPath = path.join(snapshot.workspace, '.git/config');
+    const config = await superviseTrustedGit(snapshot.workspace, ['config', '--no-includes', '--file', configPath, '--null', '--list'], env, execution);
+    if (config.exitCode !== 0) reject();
+    const origins = config.stdout.split('\0').filter(value => value.startsWith('remote.origin.url\n'));
+    if (origins.length !== 1) reject();
+    const origin = origins[0]?.slice('remote.origin.url\n'.length) ?? '';
+    const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100}?)\/?(?:\.git)?$/u.exec(origin);
+    const owner = match?.[1], name = match?.[2];
+    if (!owner || !name || name === '.' || name === '..') reject();
+    validateConfig(config.stdout, `https://github.com/${owner}/${name}.git`);
+    if (args.length === 0) return { owner, name, exitCode: 0, stdout: '', stderr: '' };
+    let safeConfig = '[core]\nrepositoryformatversion = 0\nbare = false\n';
+    for (const field of config.stdout.split('\0')) {
+      const match = /^core\.(filemode|ignorecase|precomposeunicode)\n(true|false)$/u.exec(field);
+      if (match) safeConfig += `${match[1]} = ${match[2]}\n`;
+    }
+    await writeFile(configPath, safeConfig, { mode: 0o600 });
+    const entry = '/usr/local/libexec/gram-sandbox-entry';
+    for (const executable of ['/usr/bin/git', '/usr/bin/bwrap', entry]) await trustedReadExecutable(executable);
+    assertTrustedRuntime(RUNTIME_ROOT);
+    const namespace = ['--unshare-user', '--unshare-ipc', '--unshare-pid', '--unshare-net', '--unshare-uts', '--unshare-cgroup',
+      '--disable-userns', '--uid', String(process.getuid?.()), '--gid', String(process.getgid?.()),
+      '--cap-drop', 'ALL', '--die-with-parent', '--new-session', '--clearenv',
+      '--ro-bind', '/usr/bin/git', '/usr/bin/git', ...await readonlyGitLibraries(),
+      '--ro-bind', RUNTIME_ROOT, '/runtime', '--ro-bind', entry, '/gram-sandbox-entry',
+      '--ro-bind', snapshot.workspace, '/workspace', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+      '--tmpfs', '/home/gram-sandbox', '--dir', '/run', '--chdir', '/workspace'];
+    for (const [key, value] of Object.entries({ ...env, HOME: '/home/gram-sandbox', GIT_DIR: '/workspace/.git',
+      GIT_WORK_TREE: '/workspace', GIT_ATTR_NOSYSTEM: '1', GIT_NO_LAZY_FETCH: '1', OPENSSL_CONF: '/dev/null' })) {
+      namespace.push('--setenv', key, value);
+    }
+    namespace.push('--', '/gram-sandbox-entry', '/workspace', '/runtime', '--', '/usr/bin/git', '--no-pager', ...fixedConfig, ...args);
+    const result = await superviseFixedGit('read-only-namespace', '/', namespace, {}, execution);
+    if (result.exitCode !== 0) reject();
+    return { owner, name, ...result };
+  } catch { throw new Error('Trusted local Git denied or failed'); }
+  finally {await snapshot?.close();}
 }
 /** Construct only for fixed application Git adapters. Never select this port by
  * an untrusted ordinary command's category. Metadata is controller-owned and

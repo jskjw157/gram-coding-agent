@@ -4,7 +4,8 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TaskId } from '@gram/domain';
 import { CommitService, RemoteService } from '@gram/git';
-import { createMcpHttpServer, type ApprovalToolsPort } from '@gram/mcp';
+import { GitHubClient } from '@gram/github';
+import { createMcpHttpServer, type ApprovalToolsPort, type TaskReadPort } from '@gram/mcp';
 import { HealthService, StructuredLogger, type AgentHealthStatus } from '@gram/observability';
 import {
   AuditRepository,
@@ -46,6 +47,8 @@ import { VerificationReviewSource } from './verification-review-source.js';
 import { createVerificationReviewCommandRunner } from './verification-review-command.js';
 import { ordinaryExecutionAuthorization, ownedExecutionLease } from './ordinary-execution-authorization.js';
 import { TrustedGitSpawner } from './trusted-git-spawner.js';
+import { createOwnerWorkspaceRuntime, type OwnerWorkspaceRuntime } from './owner-workspace-runtime.js';
+import { createLocalDeveloperRuntime } from './local-developer-runtime.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -108,6 +111,9 @@ export function createApprovalToolsPort(repository: ApprovalRepository): Approva
 }
 
 export async function startAgent(options: StartAgentOptions): Promise<RunningAgent> {
+  if (process.env.GRAM_AGENT_READONLY_PROJECT_ROOT !== undefined || process.env.GRAM_AGENT_LOCAL_FS_ROOTS_JSON !== undefined) {
+    throw new Error('Use the native owner workspace configuration');
+  }
   const host = options.host ?? '127.0.0.1';
   const port = options.port ?? 3847;
   mkdirSync(options.stateDirectory, { recursive: true });
@@ -129,6 +135,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
 
   let mcpReady = false;
   let closed = false;
+  let ownerWorkspace: OwnerWorkspaceRuntime | undefined;
   const healthService = new HealthService({
     databaseReady: () => database.open,
     mcpReady: () => mcpReady,
@@ -144,6 +151,37 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   const gitCommitRepository = new GitCommitRepository(database);
   const pullRequestRepository = new PullRequestRepository(database);
   const taskService = new TaskService(taskRepository, auditRepository);
+  const taskRead: TaskReadPort = {
+    get: (taskId) => {
+      const task = taskRepository.get(taskId);
+      if (task === null) throw new Error('Task not found');
+      return { ...task, workspace: workspaceRepository.getByTaskId(taskId) ?? null };
+    },
+    list: ({ limit }) => database.prepare(`
+      SELECT id, seq, repo_id AS repoId, repo_selector AS repoSelector, status,
+             created_at AS createdAt, updated_at AS updatedAt
+      FROM tasks ORDER BY seq DESC LIMIT ?
+    `).all(limit),
+    logs: (taskId) => {
+      if (taskRepository.get(taskId) === null) throw new Error('Task not found');
+      // Never return arbitrary persisted JSON payloads or command stdout,
+      // which might contain untrusted or sensitive data.
+      return database.prepare(`
+        SELECT id, event_type AS eventType, created_at AS createdAt
+        FROM audit_events WHERE task_id = ? ORDER BY id DESC LIMIT 100
+      `).all(taskId);
+    },
+    result: (taskId) => {
+      const task = taskRepository.get(taskId);
+      if (task === null) throw new Error('Task not found');
+      const commit = gitCommitRepository.getLatestForTask(taskId) ?? null;
+      const pullRequest = pullRequestRepository.getLatestForTask(taskId) ?? null;
+      return {
+        id: task.id, seq: task.seq, status: task.status, repoId: task.repoId,
+        updatedAt: task.updatedAt, commit, pullRequest,
+      };
+    },
+  };
   const policyEngine = new PolicyEngine();
   // Durable approvals backing the consume port below and the MCP
   // list/approve/deny surface. Built on the shared Database instance:
@@ -170,7 +208,9 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   const heldLeases = new Map<TaskId, RepoLockLease>();
   const trackedLocks: CompositionLocks = {
     acquire: async (repoId, taskId) => {
-      const lease = await lockService.acquire(repoId, taskId);
+      const acquire = () => lockService.acquire(repoId, taskId);
+      const lease = ownerWorkspace === undefined ? await acquire()
+        : await ownerWorkspace.withRepositoryLeaseAdmission(acquire);
       heldLeases.set(taskId, lease);
       return {
         release: async () => {
@@ -366,15 +406,63 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         audit: auditRepository,
         logger,
       });
+      const ownerConfig = process.env.GRAM_AGENT_OWNER_WORKSPACE_CONFIG;
+      if (ownerConfig !== undefined) {
+        ownerWorkspace = await createOwnerWorkspaceRuntime({ configPath: ownerConfig,
+          stateDirectory: options.stateDirectory, secretDirectory: options.secretDirectory, redactor,
+          protectedReadPaths: [join(homedir(), '.cloudflared'), join(homedir(), '.config', 'cloudflared'),
+            join(homedir(), '.codex', 'auth.json'), join(homedir(), '.config', 'gh', 'hosts.yml')],
+          protectedMutationPaths: [resolve(fileURLToPath(new URL('../../..', import.meta.url))),
+            '/usr/local/libexec', '/var/lib/gram-sandbox-runtime', '/etc/gram-coding-agent',
+            join(homedir(), '.codex'), join(homedir(), '.agents')],
+          activeMutationPaths: () => (database.prepare(`
+            SELECT r.local_base_path AS path FROM repositories r JOIN repo_locks l ON l.repo_id=r.id
+            UNION SELECT w.linux_path AS path FROM workspaces w JOIN tasks t ON t.id=w.task_id
+              WHERE t.status NOT IN ('COMPLETED','FAILED','CANCELLED')
+          `).all() as { path: string }[]).map(row => row.path),
+        });
+      }
+      const owner = ownerWorkspace;
+      const localDeveloper = owner === undefined ? undefined : createLocalDeveloperRuntime({
+        gitSnapshotDirectory: join(options.stateDirectory, 'local-git-snapshots'),
+        withProject: owner.withProject, withRegisteredProject: owner.withRegisteredProject,
+        repositories: repositoryRepository, tasks: taskRepository, workspaces: workspaceRepository,
+        commandRuns: commandRunRepository, audit: auditRepository, locks: trackedLocks,
+        ownsLease: (taskId, repoId) => ownedExecutionLease({ locks: lockRepository, held: heldLeases,
+          lockDirectory: join(options.stateDirectory, 'locks') }, taskId, repoId) !== undefined,
+        canRegister: repoId => database.prepare(`SELECT 1 FROM repo_locks WHERE repo_id=?
+          UNION SELECT 1 FROM tasks WHERE repo_id=? AND status NOT IN ('COMPLETED','FAILED','CANCELLED') LIMIT 1`)
+          .get(repoId, repoId) === undefined,
+        worktrees: worktreeService,
+        commandAuthorization: ordinaryExecutionAuthorization({ tasks: taskRepository,
+          workspaces: workspaceRepository, locks: lockRepository, held: heldLeases,
+          lockDirectory: join(options.stateDirectory, 'locks') }),
+        policy: policyEngine, approvals: approvalConsume, homeDir: homedir(),
+        outputCapture: new OutputCapture({ homeDir: homedir(), redactor }), redactor,
+        github: { getRepository: async (owner, name) => {
+          const client = new GitHubClient({ secrets: secretProvider,
+            fetch: (url, init) => fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(30_000) }) });
+          const value = await client.getJson(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+          if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid repository metadata');
+          const record = value as Record<string, unknown>;
+          const identity = record.owner;
+          if (!Number.isSafeInteger(record.id) || typeof record.name !== 'string' || typeof record.default_branch !== 'string' ||
+              identity === null || typeof identity !== 'object' || !('login' in identity) || typeof identity.login !== 'string') throw new Error('Invalid repository metadata');
+          return { id: Number(record.id), owner: identity.login, name: record.name, defaultBranch: record.default_branch };
+        } },
+      });
       const mcp = await createMcpHttpServer({
         host,
         port,
         internalSecret,
         health: () => healthService.status(),
         taskCreate: taskService,
+        taskRead,
         codingCapability,
         verificationReviews,
         approvals: approvalTools,
+        ...(owner === undefined ? {} : { ownerWorkspace: owner.core }),
+        ...(localDeveloper === undefined ? {} : { localDeveloper }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
@@ -417,6 +505,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       mcpReady = false;
       await composed.mcp.close();
       await drained;
+      await ownerWorkspace?.close();
       await quiesceHeldLeases();
       smokeObserver?.close();
       database.close();
@@ -442,6 +531,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       close,
     };
   } catch (error) {
+    await ownerWorkspace?.close();
     smokeObserver?.close();
     database.close();
     throw error;

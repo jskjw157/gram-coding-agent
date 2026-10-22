@@ -17,6 +17,7 @@ import * as runnerComposition from './task-runner-composition.js';
 import * as githubServices from './github-services.js';
 import { TaskScheduler } from './task-scheduler.js';
 import { SmokeLockObserver } from './smoke-lock-observer.js';
+import * as ownerWorkspace from './owner-workspace-runtime.js';
 
 const tempDirs: string[] = [];
 const running: RunningAgent[] = [];
@@ -31,6 +32,26 @@ afterEach(async () => {
 });
 
 describe('opt-in smoke observer startup', () => {
+  it('composes and drains the complete owner runtime only from trusted native configuration', async () => {
+    vi.stubEnv('GRAM_AGENT_OWNER_WORKSPACE_CONFIG', '/etc/gram-coding-agent/owner-workspace.json');
+    const core = Object.fromEntries(['roots', 'list', 'stat', 'read', 'search', 'write', 'patch', 'mkdir', 'move', 'copy',
+      'trash', 'restore', 'readBinary', 'writeBinary', 'reveal', 'convertPath'].map(name => [name, async () => ({ fixture: true })]));
+    const close = vi.fn(async () => {});
+    const factory = vi.spyOn(ownerWorkspace, 'createOwnerWorkspaceRuntime').mockResolvedValue({ core, close,
+      withProject: async () => { throw new Error('fixture intentionally not callable'); },
+      withRegisteredProject: async () => { throw new Error('fixture intentionally not callable'); },
+    } as unknown as ownerWorkspace.OwnerWorkspaceRuntime);
+    const paths = fixture();
+    const app = await startAgent({ ...paths, port: 0, installSignalHandlers: false });running.push(app);
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({ configPath: '/etc/gram-coding-agent/owner-workspace.json',
+      stateDirectory: paths.stateDirectory, secretDirectory: paths.secretDirectory }));
+    await app.close();expect(close).toHaveBeenCalledTimes(1);
+  });
+  it.each(['GRAM_AGENT_READONLY_PROJECT_ROOT', 'GRAM_AGENT_LOCAL_FS_ROOTS_JSON'])('rejects legacy unconfined filesystem configuration %s', async name => {
+    vi.stubEnv(name, 'legacy');
+    const paths = fixture();
+    await expect(startAgent({ ...paths, port: 0, installSignalHandlers: false })).rejects.toThrow('Use the native owner workspace configuration');
+  });
   it('wires the real observer, preserves private evidence across shutdown/restart and remains healthy', async () => {
     vi.stubEnv('GRAM_AGENT_SMOKE_REPOSITORY_ID', '159');
     const paths = fixture();

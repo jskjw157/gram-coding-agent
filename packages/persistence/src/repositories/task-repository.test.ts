@@ -6,6 +6,8 @@ import { openDatabase } from '../database.js';
 import { runMigrations } from '../migrator.js';
 import { ConcurrentTaskTransitionError, TaskRepository, TaskRepositoryBindingConflictError } from './task-repository.js';
 import { RepositoryRepository } from './repository-repository.js';
+import { CommandRunRepository } from './command-run-repository.js';
+import { WorkspaceRepository } from './workspace-repository.js';
 
 const tempDirs: string[] = [];
 const openDbs: Array<{ close(): void }> = [];
@@ -32,6 +34,48 @@ afterEach(() => {
 });
 
 describe('SQLite persistence foundation', () => {
+  it('excludes explicitly dispatched LOCAL_COMMAND tasks from the coding scheduler', () => {
+    const db = openMigrated(tempDatabasePath());const tasks = new TaskRepository(db);
+    const coding = tasks.create({ goal: 'fixture', taskType: 'CODING', publishMode: 'PULL_REQUEST' });
+    const local = tasks.create({ goal: 'fixture', taskType: 'LOCAL_COMMAND', publishMode: 'PULL_REQUEST' });
+    expect(tasks.listRunnable(32).map(task => task.id)).toEqual([coding.id]);
+    tasks.transition(local.id, 'QUEUED', 'WAITING_REPO_LOCK');
+    expect(tasks.listRunnable(32).map(task => task.id)).toEqual([coding.id]);
+  });
+  it('completes only the exact successful persisted local command and preserves the coding graph', () => {
+    const db = openMigrated(tempDatabasePath());const tasks = new TaskRepository(db);
+    new RepositoryRepository(db).upsert({ githubRepositoryId: 100, owner: 'fixture', name: 'repo', defaultBranch: 'main', localBasePath: '/fixture' });
+    const local = tasks.create({ goal: 'fixture', repoId: 100, taskType: 'LOCAL_COMMAND', publishMode: 'PULL_REQUEST', metadata: { localCommand: 'test', packageManager: 'npm' } });
+    tasks.transition(local.id, 'QUEUED', 'RUNNING');
+    new WorkspaceRepository(db).create({ taskId: local.id, repoId: 100, linuxPath: '/fixture/task', branch: 'chore/fixture' });
+    const runs = new CommandRunRepository(db);
+    const id = runs.start({ taskId: local.id, category: 'DEVELOPMENT', cwd: '/fixture/task', executable: 'npm', args: ['run', 'test'] });
+    expect(() => tasks.completeLocalCommand(local.id, id)).toThrow();
+    runs.finish(id, { status: 'SUCCEEDED', exitCode: 0 });
+    tasks.completeLocalCommand(local.id, id);expect(tasks.get(local.id)?.status).toBe('COMPLETED');
+    const coding = tasks.create({ goal: 'fixture', repoId: 100, taskType: 'CODING', publishMode: 'PULL_REQUEST' });
+    tasks.transition(coding.id, 'QUEUED', 'RUNNING');
+    expect(() => tasks.completeLocalCommand(coding.id, id)).toThrow();expect(tasks.get(coding.id)?.status).toBe('RUNNING');
+  });
+  it.each(['command', 'cwd', 'exit', 'task', 'recovery', 'metadata'])('denies local command completion with mismatched %s evidence', field => {
+    const db = openMigrated(tempDatabasePath()), tasks = new TaskRepository(db);
+    new RepositoryRepository(db).upsert({ githubRepositoryId: 100, owner: 'fixture', name: 'repo', defaultBranch: 'main', localBasePath: '/fixture' });
+    const task = tasks.create({ goal: 'fixture', repoId: 100, taskType: 'LOCAL_COMMAND', publishMode: 'PULL_REQUEST', metadata: { localCommand: 'test', packageManager: 'npm' } });
+    tasks.transition(task.id, 'QUEUED', 'RUNNING');
+    new WorkspaceRepository(db).create({ taskId: task.id, repoId: 100, linuxPath: '/fixture/task', branch: 'chore/fixture' });
+    const runs = new CommandRunRepository(db), id = runs.start({ taskId: task.id, category: 'DEVELOPMENT', cwd: '/fixture/task', executable: 'npm', args: ['run', 'test'] });
+    runs.finish(id, { status: 'SUCCEEDED', exitCode: 0 });
+    if (field === 'command') db.prepare('UPDATE command_runs SET args_json = ? WHERE id = ?').run('["run","build"]', id);
+    if (field === 'cwd') db.prepare('UPDATE command_runs SET cwd = ? WHERE id = ?').run('/different/task', id);
+    if (field === 'exit') db.prepare('UPDATE command_runs SET exit_code = 7 WHERE id = ?').run(id);
+    if (field === 'task') {
+      const other = tasks.create({ goal: 'fixture', repoId: 100, taskType: 'LOCAL_COMMAND', publishMode: 'PULL_REQUEST' });
+      db.prepare('UPDATE command_runs SET task_id = ? WHERE id = ?').run(other.id, id);
+    }
+    if (field === 'recovery') db.prepare('UPDATE workspaces SET recovery_state = ? WHERE task_id = ?').run('NEEDS_RECOVERY', task.id);
+    if (field === 'metadata') db.prepare('UPDATE tasks SET metadata_json = ? WHERE id = ?').run('{"localCommand":"build","packageManager":"npm"}', task.id);
+    expect(() => tasks.completeLocalCommand(task.id, id)).toThrow();expect(tasks.get(task.id)?.status).toBe('RUNNING');
+  });
   it('opens SQLite in WAL mode with foreign keys enabled', () => {
     const db = openMigrated(tempDatabasePath());
     expect(db.pragma('journal_mode', { simple: true })).toBe('wal');

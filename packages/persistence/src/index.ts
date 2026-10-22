@@ -15,3 +15,4 @@ export * from './repositories/coding-step-repository.js';
 
 export * from './repositories/verification-review-repository.js';
 export * from './repositories/approval-repository.js';
+export * from './repositories/local-operation-repository.js';

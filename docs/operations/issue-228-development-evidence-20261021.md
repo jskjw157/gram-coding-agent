@@ -1,0 +1,134 @@
+# Issue 228 development evidence — in progress
+
+PR #227 is the multi-root starter; PR #229 contains completion work. This is implementation and scoped development evidence, not release readiness, deployment or acceptance. Later uncommitted changes exist in the current working tree. No fresh exact-tree all-gates pass is asserted.
+
+## Historical checkpoints, not current-candidate proof
+
+The recorded production baseline is v0.1.0 at `85c7c6c6f7ff00868160ef195180b98405159b8c`. A historical external health call returned healthy/ok/ready during development. Neither verifies the current candidate's deployment or current external tools. This documentation update inspected source and did not inspect or alter live services, Tasks, locks, databases or production worktrees.
+
+At `5aed21cb84fa25d3c4dc6c4e533b024fe0e76ce5`, a recorded clean Linux checkout passed 934 unit tests, E2E, mandatory security, build and WSL isolation; typecheck passed. Lint found non-null assertions in consent tests, later replaced with an explicit fixture assertion. GitHub run `39554461963` failed that lint gate. Historical CI4316 is also evidence only for its own candidate. None covers the current dirty tree or replaces fresh exact-head CI after all fixes.
+
+Historical REDs included hardlinked reads, YAML/multiline/PEM leakage, symlinked recovery storage, credential writes without native consent and malformed JSON credentials. Earlier targeted groups passed 43 tests and then 28 native-client/integrity/consent tests. Seven earlier real Windows fixture tests covered hidden/binary reads, guarded write/conflict, hardlink/traversal/device-name denial, destination-preserving move, junction/controller-path denial, mkdir/move and unknown fields. A transient systemd process invoked the fixed Windows helper as the agent user on a non-sensitive fixture. These results do not establish current full native acceptance.
+
+## Current implementation inspected
+
+| Area | Implemented behavior | Evidence boundary |
+| --- | --- | --- |
+| Normal read/search | Complete bounded content is screened; sensitive versions are opaque. | Preview screening cannot identify every unknown secret. Agent-private paths remain denied. |
+| Local reveal | Exact bounded UTF-8 snapshot, fresh Windows Hello, fixed native viewer; MCP returns status and `localOnly: true`. Exact `0x11` capture-exclusion affinity required and queried before/after Hello; no monitor-only fallback. | No clipboard/raw MCP body. Actual human verification, rendering and capture acceptance remain open. |
+| Binary export | Separate `binary-export` challenge, one-use operation/content binding and live identity/byte recheck before complete base64 goes to remote ChatGPT. | Native warning explicitly says the snapshot may contain credentials/private content. This is intentional raw disclosure, not normal read or local reveal. Agent-private data remains ineligible. |
+| Runtime/journal | Strict local configuration, root/artifact pins, private recovery and separate owner-only `owner-workspace.sqlite`; metadata-only journal and unresolved quarantine. | Composition code does not prove production configuration or installation ACLs. No main-database migration is used for this journal. |
+| Task/filesystem admission | One process-wide reservation orders filesystem effects and repository leases. Current Task/RepoLock scopes are forwarded on every native mutation for fresh path/identity/alias enforcement. | Synthetic runtime tests prove ordering/forwarding, not actual Windows alias behavior or coordination of arbitrary external writers. |
+| POSIX backend | Actual ancestor-chain Landlock, pinned root-owned artifacts, mountinfo alias/nested-mount denial and original displaced-inode capture into a private original-path vault. | ext4 only; DrvFs rejected. Open writable FDs retain authority. Capture-and-validate is not universal CAS. |
+| Directory/recovery | Bounded tree versions, no-overwrite move/trash/restore and durable recovery association. Controller recovery envelopes are authenticated/encrypted; native original inodes/trees use private same-volume vaults. | Captured tree snapshots are not globally frozen directory state. External writers can race; no cross-filesystem atomicity or ciphertext-native-vault claim. |
+| Local developer | Fixed Git reads, origin/API-validated registration with current Task/lock guard, persisted `LOCAL_COMMAND`, real isolated worktree and command evidence. | Clean committed HEAD only. Dirty/untracked bases, hidden index flags and submodules rejected. npm/pnpm named scripts; network blocked; dependencies not copied/installed; foreground `dev` bounded. No invented verification/publication/CI pass. |
+
+Disclosure contracts: [core](../../apps/agent/src/owner-workspace-core.ts), [consent](../../apps/agent/src/local-owner-consent.ts), [Windows Hello helper](../../apps/windows-owner-consent-helper/main.cpp), [viewer](../../apps/windows-protected-local-viewer/README.md). Admission/private-path composition: [owner runtime](../../apps/agent/src/owner-workspace-runtime.ts) and [main](../../apps/agent/src/main.ts). POSIX confinement/recovery: [transport](../../apps/agent/src/posix-workspace-transport.ts) and [worker contract](../../apps/filesystem-worker/README.md). Commands: [developer runtime](../../apps/agent/src/local-developer-runtime.ts), [dispatcher](../../packages/task-engine/src/local-command.ts) and [scoped completion SQL](../../packages/persistence/src/repositories/task-repository.ts).
+
+## Scoped development runs
+
+- A 77-test selection covering the developer boundary, trusted Git, dispatcher, execution authorization and task persistence passed during implementation. After registration-admission was added, the final developer runtime selection passed 5/5, including preserving an existing profile on denied registration. These preceded later parallel edits; they are not a fresh whole-candidate result.
+- Two actual temporary-fixture M5 tests passed through Vitest's Node API with the native file and agent aliases: real named npm execution with real SQLite Task/lease/worktree/command records, and credential-shaped stdout screened before response and actual logfile persistence. GitHub metadata and Windows path mapping were test substitutes; no production repository was registered. Dispatcher unit tests explicitly fake the execution port and are not isolation proof.
+- Those cases now live in [the mandatory native file](../../tests/security/local-developer-runtime.native.ts), alongside [POSIX transport cases](../../tests/security/posix-workspace-transport.native.ts) in `pnpm test:owner-native`. Actual trusted artifact preparation is required. Test source and CI wiring are not themselves a new passing run.
+- The native-owner transport selection passed 16 mocked protocol tests. The local viewer compiled with MSVC `/W4 /WX`; seven real malformed/digest/action native denials passed without reaching Windows Hello. Neither establishes actual owner approval or successful viewer rendering.
+- Focused strict TypeScript, scoped ESLint and task-engine build passed for the command slice. A broader selected-package build and later full agent typecheck encountered concurrent journal/factory RED/implementation edits. Those intermediate results are not final success or failure of the later candidate; fresh integrated checks remain required.
+
+Historical independent probes showed Windows handle ancestor-move prevention and destination-preserving no-replace rename. POSIX probes found moved-parent reopen/create denial with the original Landlock chain, but retained write authority through an open FD. Current native test sources also cover real whole-filesystem, selected-directory and nested-file bind aliases. Their presence is not a rerun of the final candidate's native suite.
+
+JavaScript/YAML-anchor screening progressed from five RED cases to a 30-test GREEN selection. The subsequent two YAML flow-map RED cases were repaired; local-file and core suites passed 60 tests. Independent scoped security review approved those repairs, without asserting whole-candidate or operational acceptance.
+
+On 2026-10-22, independent architecture review reproduced unsafe live Git reads: three clean-filter races and two forged-index outside reads. The replacement captures native-broker-checked bytes into private state, synthesizes Git configuration, and runs fixed Git through the unchanged M5 entry in an empty-root read-only namespace. It imports individual root-owned Git/ELF artifacts rather than host system trees, plus the pinned official runtime. A focused run passed 88 tests including ordinary Git reads, the five prior failures, outside system-data exclusion, executable-mode fidelity, recovery bounds and runtime composition. Native listing completeness and final exact-checkpoint reviews still require integrated verification.
+
+Git captures are bounded to 256 MiB, 20,000 entries, 32 levels, 30 seconds, two concurrent observations and the native broker's 1 MiB per-file limit. Oversized packs/trees and unsupported links or metadata fail the whole request. Workingtree files have no omit patterns; administrative hooks/attributes are never active and inert `info/exclude` is retained. These are captured observations, not atomic snapshots. Large-repository support beyond these bounds remains a documented limitation; no partial status is presented as clean.
+
+## Open acceptance gates
+
+Checkpoint `021bfed16dddf0cccdfd70e43b25c3ce390be3e0` passed lint, typecheck, E2E, the mandatory M5 security suite and build locally. Its full unit run had 1,111 passes and three failures (two cold-runtime fixture timeouts and a transport error-message regression). GitHub run `39699098824` failed unit verification and two Windows recovery positives. Repairs preserve the prior error message, prepare the real pinned runtime before timed test operations, validate Git before the identity parser can spawn it, and provision an exact private fixture DACL instead of accumulating grants. These repairs require a new committed candidate and fresh full CI; prior checkpoint failures remain historical evidence.
+
+At `3fea60c53835ef9cfa6772eca8948c3cdfd580d0`, independent source architecture/security reviews cleared the reviewed repairs. Full local unit verification reached 1,114 passes with one search timeout: each matching entry redundantly re-enumerated its directory. A new failing call-count assertion reproduced 73 listings for 73 first-page matches; a request-local, 10,000-entry-bounded directory cache reduced that to one without changing result/work limits. All 30 core cases then passed. Windows CI run `39699812004` failed fixture preflight because Windows abbreviated the administrator SID as `LA`; decoded numeric ACE comparisons replace the brittle SDDL string comparison without changing required permissions. Both changes require fresh exact-head whole verification.
+
+Fresh integrated checks, independent review and exact-head GitHub CI remain required after the working tree settles. Historical CI4316 is not evidence for this dirty candidate. Do not combine historical/scoped counts into a current completion result.
+
+Actual Windows Hello approval/denial/cancellation, local-viewer rendering/capture acceptance, external ChatGPT discovery/calls, restore-checked online backups, guarded deployment and deployed production composition have not been accepted for this candidate. Code, mocked approval, availability checks, server-local tools/list and fixture-only M5 success do not close those gates. Preserve live state and evidence until the authorized operational procedure is ready and verified.
+
+## 2026-10-22 validated source and operational stop
+
+The following updates the historical checkpoints above; it does not erase their
+failures or claim that an undeployed source commit is the running service.
+
+Candidate `2d05646471617c14b3d4c2513be1e8468068a1ca` passed fresh local lint,
+typecheck, 1,115 unit tests, 28 E2E tests, the mandatory security suite and build.
+The security runner separately passed 24 security, 13 native, three native-build
+and ten installer cases. Mandatory owner-native verification passed five real
+POSIX/M5 cases; the filesystem-native Python suite passed 17 cases. The exact
+candidate's [GitHub CI run](https://github.com/jskjw157/gram-coding-agent/actions/runs/39701203486)
+passed both Linux verification and Windows native jobs, including the real
+Windows filesystem effects, consent protocol and viewer protocol denials.
+Independent source/security reviews cleared the preceding implementation and
+the final portable synthetic-drive fixture delta. The fixture explicitly does
+not claim native Windows containment.
+
+An isolated actual production-composition probe used a root-owned configuration,
+pinned root-owned artifacts and private disposable state, without starting an
+agent service or changing production data. Native read, create/overwrite,
+search, credential-write denial without owner presence, and native-broker Git
+status/diff/log passed. Git capture took approximately 23–26 seconds for this
+small fixture; this is not a large-project performance claim. One initial probe
+incorrectly expected a rejected promise instead of the documented `DENIED`
+mutation result. The corrected assertion passed; the initial diagnostic is
+retained. Native captures remain bounded observations, not atomic snapshots.
+
+Actual Windows Hello returned `VERIFIED` at `2026-10-22T00:48:48Z` for a synthetic
+credential-write challenge with no file effect. The protected viewer did not
+launch: Windows Code Integrity events 3077/3033 at `2026-10-22T00:50:11Z` rejected
+its unsigned artifact. Its SHA-256 was
+`76285f46bf245b3847f98e6d732117402018487bc71171d88d11aa8620692547`.
+Correlated signature events reported no signatures. The policy is
+`VerifiedAndReputableDesktop`, ID `0283ac0f-fff1-49ae-ada1-8a933130cad6`, the
+built-in Smart App Control policy. No viewer rendering, capture exclusion or
+owner cancellation success is claimed. No alternate binary or policy workaround
+was attempted.
+
+Microsoft's [inbox policy reference](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/operations/inbox-appcontrol-policies)
+identifies this policy; its [signing guidance](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
+and [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
+describe trusted signing and the absence of an individual-app exception. An
+existing authorized publicly trusted signer, or an equivalent signed artifact
+with verified source/build provenance, is required before retrying admission.
+Signing changes the digest: re-pin the final artifact after signer verification.
+A signature is not a guarantee of admission under every active policy. No new
+certificate/key, security-policy change or permission expansion is authorized
+by this report.
+
+A preparation backup at `/var/lib/gram-issue228-preparation/20261022T005239Z`
+passed SQLite online-backup and restored-copy logical fingerprint/integrity
+checks for the main and observation databases. All seven historical worktrees
+were archived and 61 restored regular files compared; private configuration was
+restored and compared inside root-only storage. The owner journal was absent.
+Three completed and seven failed Tasks, zero Repo Locks, and unchanged main DB
+logical content were confirmed. This is preparation evidence, not the fresh
+idle/write-barrier proof required immediately before future activation.
+
+The existing agent and tunnel remained on v0.1.0 `85c7c6c`, PIDs 122130 and
+122316, with zero restarts at observation. The external existing connector
+returned healthy/ok/ready. No new owner tools were deployed, advertised or called
+through external ChatGPT. The protected installer and its non-elevated guard
+tests are preparation artifacts only; elevated provisioning remains unverified.
+Do not reuse the historical Issue 226 activation controller unchanged: its
+candidate/CI bindings and database inventory predate the new owner journal,
+recovery key and native vaults.
+
+**Status: operational activation blocked on trusted viewer artifact provision.**
+Main merge, service activation and Issue 228 completion remain open. Complete
+review/CI for later preparation changes separately; do not apply this candidate's
+test counts to a newer SHA without fresh verification.
+
+The fresh target-Windows filesystem helper also passed all 17 native tests.
+Closing only the synthetic consent helper's own window returned `DENIED` at
+`2026-10-22T00:55:49Z`; this is native cancellation evidence, not a claim that a
+human canceled the viewer. Independent installer review found a creation-time
+ACL gap, reproduced a regression RED, and verified the repair: the explicit
+protected descriptor is supplied atomically to the real .NET file constructor.
+All 27 installer guard checks passed; elevated installation remains unperformed.
+See the [activation gates](issue-228-activation-gates-20261022.md) for the exact
+remaining integration, artifact, preservation and external acceptance sequence.
