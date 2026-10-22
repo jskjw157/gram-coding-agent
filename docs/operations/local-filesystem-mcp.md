@@ -17,6 +17,13 @@ See the [activation gates](issue-228-activation-gates-20261022.md) and
 [protected helper installer](../../scripts/windows-owner-workspace-install.md).
 An environment variable alone does not provision trusted artifacts or ACLs.
 
+The authorized partial core profile omits `windows.viewer`. Normal filesystem,
+Git and policy-based development tools remain available; `local_fs_reveal` is
+denied with no raw-content fallback. Windows Hello consent remains required for
+credential writes, binary export and destructive operations. A missing or blocked
+consent helper cannot be replaced by a remote approval. The optional protected
+viewer and its actual Windows admission remain open Issue 228 requirements.
+
 After a verified deployment and external catalog refresh, the native runtime
 exposes these typed operations:
 

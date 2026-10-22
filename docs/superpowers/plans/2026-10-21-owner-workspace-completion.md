@@ -14,6 +14,17 @@ This records implementation and remaining gates, not Issue 228 completion. Paral
 
 ## Remaining acceptance and release sequence
 
+The [2026-10-22 owner amendment](https://github.com/jskjw157/gram-coding-agent/issues/228#issuecomment-6331066044)
+authorizes an independently verified partial core deployment. Decouple the
+optional viewer in configuration and installation using RED/GREEN tests. Keep
+native owner-presence consent mandatory and test reveal denial without a viewer.
+Run full CI and independent review; prove admission of the installed core helpers
+under unchanged Smart App Control. Merge the reviewed PR 227 HEAD, verify main
+CI, take fresh restore-verified backups and perform the guarded idle-only service
+transition. Verify external discovery, mc-web reads and disposable mutation,
+recovery, Git and security calls. Keep full-viewer requirements below open;
+partial deployment does not complete Issue 228.
+
 8. Finish integration and independent code/security review, including the latest open YAML flow-map screening regressions. Repair findings and run fresh full lint, typecheck, unit, E2E, security, build and mandatory native checks after concurrent edits settle. `pnpm test:owner-native` requires prepared trusted artifacts and runs real ext4/M5 tests without opt-in skips. Label mocked protocol and actual native evidence separately.
 9. Obtain exact-head GitHub CI for the final reviewed candidate and review stacked PR dependencies before merge. Historical CI4316, the earlier 934-test clean-checkout checkpoint and intermediate scoped green runs do not cover the current dirty candidate. No final all-gates pass is asserted.
 10. Coordinate real Windows Hello approval, denial/cancellation and stale/mismatched-request tests; inspect actual viewer rendering/capture behavior. Verify target Windows/WSL backends, directory/recovery semantics and private-path denials with harmless fixtures. Availability and malformed-input checks are not human approval evidence. Keep real mc-web source read-only during acceptance.

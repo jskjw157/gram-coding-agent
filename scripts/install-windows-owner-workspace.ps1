@@ -1,14 +1,15 @@
 # Run only from a reviewed, elevated Windows PowerShell 5.1 session of OwnerSid.
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory)][ValidateSet('core', 'viewer')][string]$Profile,
     [Parameter(Mandatory)][string]$ReleaseSha,
     [Parameter(Mandatory)][string]$OwnerSid,
-    [Parameter(Mandatory)][string]$FilesystemSource,
-    [Parameter(Mandatory)][string]$FilesystemSha256,
-    [Parameter(Mandatory)][string]$ConsentSource,
-    [Parameter(Mandatory)][string]$ConsentSha256,
-    [Parameter(Mandatory)][string]$ViewerSource,
-    [Parameter(Mandatory)][string]$ViewerSha256,
+    [Parameter(Mandatory, ParameterSetName='Core')][string]$FilesystemSource,
+    [Parameter(Mandatory, ParameterSetName='Core')][string]$FilesystemSha256,
+    [Parameter(Mandatory, ParameterSetName='Core')][string]$ConsentSource,
+    [Parameter(Mandatory, ParameterSetName='Core')][string]$ConsentSha256,
+    [Parameter(Mandatory, ParameterSetName='Viewer')][string]$ViewerSource,
+    [Parameter(Mandatory, ParameterSetName='Viewer')][string]$ViewerSha256,
     [switch]$ValidateOnly
 )
 Set-StrictMode -Version Latest
@@ -18,15 +19,31 @@ function Assert-InstallArguments {
     if ($ReleaseSha -cnotmatch '^[a-f0-9]{40}$') { throw 'An exact lowercase release SHA is required' }
     if ($OwnerSid -cnotmatch '^S-1-5-21-\d+-\d+-\d+-\d+$' -or
         $OwnerSid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value) { throw 'Owner SID must match the installing Windows user' }
-    $sources = @($FilesystemSource, $ConsentSource, $ViewerSource)
+    if ($Profile -ceq 'core') {
+        if ($ViewerSource -or $ViewerSha256) { throw 'Core profile forbids viewer arguments' }
+        $sources = @($FilesystemSource, $ConsentSource)
+        $names = @('gram-workspace.exe', 'gram-owner-consent.exe')
+        $digests = @($FilesystemSha256, $ConsentSha256)
+        $directory = 'owner-workspace'
+    } elseif ($Profile -ceq 'viewer') {
+        if ($FilesystemSource -or $FilesystemSha256 -or $ConsentSource -or $ConsentSha256) { throw 'Viewer profile forbids core arguments' }
+        $sources = @($ViewerSource)
+        $names = @('gram-protected-viewer.exe')
+        $digests = @($ViewerSha256)
+        $directory = 'protected-viewer'
+    } else { throw 'An explicit core or viewer profile is required' }
     foreach ($source in $sources) {
         if ($source -cnotmatch '^[A-Z]:\\[^/:*?"<>|\p{Cc}]+$') { throw 'Only canonical local source paths are allowed' }
         if ([IO.Path]::GetFullPath($source) -cne $source -or $source -cnotmatch '\.exe$' -or
             @($source.Substring(3).Split('\') | Where-Object { $_ -match '[. ]$' }).Count) { throw 'Source path is not canonical' }
     }
-    if (@($sources | Select-Object -Unique).Count -ne 3) { throw 'Three distinct sources are required' }
-    foreach ($digest in @($FilesystemSha256, $ConsentSha256, $ViewerSha256)) {
+    if (@($sources | Select-Object -Unique).Count -ne $names.Count) { throw 'Distinct sources are required for the selected profile' }
+    foreach ($digest in $digests) {
         if ($digest -cnotmatch '^[a-f0-9]{64}$') { throw 'An exact lowercase SHA256 is required for each helper' }
+    }
+    return [pscustomobject]@{
+        sources = $sources; names = $names; digests = $digests; parent = $directory
+        directory = "C:\Program Files\Gram\$directory\$ReleaseSha"
     }
 }
 
@@ -109,11 +126,11 @@ function Assert-ProtectedAcl([string]$Path, [bool]$Exact) {
 }
 
 function Invoke-HelperInstall {
-    Assert-InstallArguments
-    $destination = "C:\Program Files\Gram\owner-workspace\$ReleaseSha"
-    $sources = @($FilesystemSource, $ConsentSource, $ViewerSource)
-    $names = @('gram-workspace.exe', 'gram-owner-consent.exe', 'gram-protected-viewer.exe')
-    $digests = @($FilesystemSha256, $ConsentSha256, $ViewerSha256)
+    $selection = Assert-InstallArguments
+    $destination = $selection.directory
+    $sources = $selection.sources
+    $names = $selection.names
+    $digests = $selection.digests
     $signatures = @()
     $handles = [Collections.Generic.List[IDisposable]]::new()
     $streams = [Collections.Generic.List[IO.FileStream]]::new()
@@ -130,7 +147,7 @@ function Invoke-HelperInstall {
                 else { $streams.Add([IO.FileStream]::new($handle, [IO.FileAccess]::Read)) }
             }
         }
-        for ($i = 0; $i -lt 3; $i++) {
+        for ($i = 0; $i -lt $names.Count; $i++) {
             $hash = [Security.Cryptography.SHA256]::Create()
             try { $actual = [BitConverter]::ToString($hash.ComputeHash($streams[$i])).Replace('-', '').ToLowerInvariant() }
             finally { $hash.Dispose() }
@@ -147,7 +164,7 @@ function Invoke-HelperInstall {
         $cursor = 'C:\'
         $handles.Add([GramInstallHandle]::Open($cursor, $true))
         Assert-ProtectedAcl $cursor $false
-        foreach ($part in @('Program Files', 'Gram', 'owner-workspace', $ReleaseSha)) {
+        foreach ($part in @('Program Files', 'Gram', $selection.parent, $ReleaseSha)) {
             $cursor = Join-Path $cursor $part
             $exact = $part -ne 'Program Files'
             if (-not (Test-Path -LiteralPath $cursor)) {
@@ -161,7 +178,7 @@ function Invoke-HelperInstall {
         if (-not $ValidateOnly -and @(Get-ChildItem -LiteralPath $destination -Force).Count) {
             throw 'Version directory is not empty; immutable releases are never overwritten or repaired'
         }
-        for ($i = 0; $i -lt 3; $i++) {
+        for ($i = 0; $i -lt $names.Count; $i++) {
             $target = Join-Path $destination $names[$i]
             if (-not $ValidateOnly) {
                 $output = [IO.FileStream]::new($target, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::Write,
@@ -176,10 +193,10 @@ function Invoke-HelperInstall {
             finally { $hash.Dispose() }
             if ($actual -cne $digests[$i]) { throw 'Installed helper digest mismatch' }
         }
-        if (@(Get-ChildItem -LiteralPath $destination -Force).Count -ne 3) { throw 'Unexpected version directory contents' }
+        if (@(Get-ChildItem -LiteralPath $destination -Force).Count -ne $names.Count) { throw 'Unexpected version directory contents' }
         [pscustomobject]@{
-            releaseSha = $ReleaseSha; directory = $destination; expectedOwnerSid = $OwnerSid; validated = $true
-            helpers = @(for ($i = 0; $i -lt 3; $i++) {
+            profile = $Profile; releaseSha = $ReleaseSha; directory = $destination; expectedOwnerSid = $OwnerSid; validated = $true
+            helpers = @(for ($i = 0; $i -lt $names.Count; $i++) {
                 [pscustomobject]@{ name = $names[$i]; sha256 = $digests[$i]; authenticodeStatus = $signatures[$i] }
             })
         }
