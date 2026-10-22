@@ -53,6 +53,7 @@ static void rule(int fd, const char *path, uint64_t rights, int optional) {
     if (syscall(SYS_landlock_add_rule, fd, LANDLOCK_RULE_PATH_BENEATH, &attr, 0)) die("Landlock path rule failed");
     close(parent);
 }
+#ifndef GRAM_OWNER_FILESYSTEM
 static void script_rule(int fd, const char *workspace, const char *path) {
     canonical(path);
     size_t root_len=strlen(workspace);
@@ -66,6 +67,7 @@ static void script_rule(int fd, const char *workspace, const char *path) {
     if(syscall(SYS_landlock_add_rule,fd,LANDLOCK_RULE_PATH_BENEATH,&attr,0)) die("script execute rule failed");
     close(file);
 }
+#endif
 #define STMT(c,k) ((struct sock_filter)BPF_STMT(c,k))
 #define JUMP(c,k,t,f) ((struct sock_filter)BPF_JUMP(c,k,t,f))
 static struct sock_filter filter[512];
@@ -134,6 +136,9 @@ static void seccomp(void) {
         SYS_sendmsg,SYS_recvmsg,SYS_sendto,SYS_recvfrom,SYS_shutdown,SYS_getsockname,SYS_getpeername,
         SYS_setsockopt,SYS_getsockopt,SYS_utime,SYS_utimes,SYS_utimensat,SYS_statfs,SYS_fstatfs,
         SYS_copy_file_range,SYS_sendfile,SYS_splice,SYS_tee,SYS_vmsplice
+#ifdef GRAM_OWNER_FILESYSTEM
+        ,SYS_fgetxattr,SYS_flistxattr,SYS_fsetxattr,SYS_fremovexattr
+#endif
     };
     for (size_t i=0;i<sizeof(allowed)/sizeof(allowed[0]);i++) allow(allowed[i]);
     emit(STMT(BPF_RET|BPF_K,SECCOMP_RET_ERRNO|EPERM));
@@ -144,6 +149,20 @@ int main(int argc, char **argv) {
 #if !defined(__x86_64__) || defined(__ILP32__)
 #error Only native Linux x86_64 is supported
 #endif
+#ifdef GRAM_OWNER_FILESYSTEM
+    if (argc != 8 || strcmp(argv[6],argv[1]) ||
+        strcmp(argv[2],"/run/gram-owner-fs/runtime") || strcmp(argv[3],"--") ||
+        strcmp(argv[4],"/run/gram-owner-fs/runtime/bin/node") ||
+        strcmp(argv[5],"/usr/local/libexec/gram-owner-fs-worker.mjs"))
+        die("invalid filesystem worker arguments");
+    int command=4;
+    canonical(argv[1]); canonical(argv[2]); canonical(argv[4]); canonical(argv[5]);
+    canonical(argv[7]);
+    size_t root_len=strlen(argv[1]),vault_len=strlen(argv[7]);
+    if ((!strncmp(argv[1],argv[7],root_len) && (argv[7][root_len]=='/' || !argv[7][root_len])) ||
+        (!strncmp(argv[7],argv[1],vault_len) && (argv[1][vault_len]=='/' || !argv[1][vault_len])))
+        die("filesystem vault overlaps workspace");
+#else
     if (argc < 5) die("invalid arguments");
     int command=3,script_count=0;
     while(command+1<argc && !strcmp(argv[command],"--script")) {
@@ -157,6 +176,7 @@ int main(int argc, char **argv) {
     int node_executable = !strncmp(argv[command],argv[2],n) && argv[command][n]=='/';
     int system_executable = !strncmp(argv[command],"/usr/bin/",9) && !strchr(argv[command]+9,'/');
     if (!node_executable && !system_executable) die("executable outside runtime");
+#endif
     int abi = (int)syscall(SYS_landlock_create_ruleset,NULL,0,LANDLOCK_CREATE_RULESET_VERSION);
     if (abi < 7) die("Landlock ABI 7 required");
     uint64_t read=LANDLOCK_ACCESS_FS_READ_FILE|LANDLOCK_ACCESS_FS_READ_DIR;
@@ -170,8 +190,15 @@ int main(int argc, char **argv) {
     rule(fd,"/lib64",read|LANDLOCK_ACCESS_FS_EXECUTE,1);
     rule(fd,argv[2],read|LANDLOCK_ACCESS_FS_EXECUTE,0);
     rule(fd,argv[1],ordinary,0);
+#ifndef GRAM_OWNER_FILESYSTEM
     for(int i=0;i<script_count;i++) script_rule(fd,argv[1],argv[4+i*2]);
+#endif
+#ifdef GRAM_OWNER_FILESYSTEM
+    rule(fd,"/run/gram-owner-fs/home",ordinary,0);
+    rule(fd,argv[7],ordinary,0);
+#else
     rule(fd,"/home/gram-sandbox",ordinary,1);
+#endif
     rule(fd,"/proc",read,0);
     /* Outer sandbox supplies only null/zero/random/urandom and private pts. */
     rule(fd,"/dev",read|LANDLOCK_ACCESS_FS_WRITE_FILE|LANDLOCK_ACCESS_FS_IOCTL_DEV,0);
@@ -179,6 +206,11 @@ int main(int argc, char **argv) {
     if(syscall(SYS_landlock_restrict_self,fd,0)) die("Landlock enforce failed");
     if(syscall(SYS_close_range,3U,~0U,0)) die("descriptor closure failed");
     seccomp();
+#ifdef GRAM_OWNER_FILESYSTEM
+    if(clearenv() || setenv("HOME","/run/gram-owner-fs/home",1) ||
+        setenv("OPENSSL_CONF","/dev/null",1) || setenv("LANG","C",1))
+        die("filesystem worker environment failed");
+#endif
     execv(argv[command],argv+command);
     die("exec failed");
 }

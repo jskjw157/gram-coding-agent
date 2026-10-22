@@ -24,4 +24,36 @@ jobs:
       - run: pnpm test
       - run: pnpm test:e2e
       - run: pnpm test:security
+      - name: Exercise actual owner filesystem isolation and local command workflows
+        run: |
+          python3 tests/security/filesystem-worker-native.test.py
+          pnpm test:owner-native
       - run: pnpm build
+
+  windows-workspace-native:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build fixed typed Windows filesystem helper
+        shell: cmd
+        run: scripts\build-windows-workspace-helper.cmd "%RUNNER_TEMP%\gram-workspace.exe"
+      - name: Exercise actual Windows filesystem effects and denials
+        shell: cmd
+        run: python tests\security\windows-workspace-native.test.py "%RUNNER_TEMP%\gram-workspace.exe"
+      - name: Build native owner-presence helper
+        shell: cmd
+        run: scripts\build-windows-owner-consent-helper.cmd "%RUNNER_TEMP%\gram-owner-consent.exe"
+      - name: Check native consent protocol without synthesizing human approval
+        shell: cmd
+        run: python tests\security\windows-owner-consent-native.test.py "%RUNNER_TEMP%\gram-owner-consent.exe"
+      - name: Build protected local credential viewer
+        shell: cmd
+        run: apps\windows-protected-local-viewer\build.cmd "%RUNNER_TEMP%\gram-local-viewer.exe"
+      - name: Check protected viewer protocol denials without synthesizing owner presence
+        shell: powershell
+        run: apps\windows-protected-local-viewer\test-protocol.ps1 -HelperPath "$env:RUNNER_TEMP\gram-local-viewer.exe"
+      - name: Check protected helper installation guards without elevation or installation
+        shell: powershell
+        run: scripts\test-windows-owner-workspace-install.ps1

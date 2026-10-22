@@ -141,6 +141,111 @@ describe('multi-root local file operations', () => {
     expect(existsSync(join(external, 'safe.txt'))).toBe(false);
   });
 
+  it('refuses hardlinked reads, hashes and search even when the alias is inside an allowed root', () => {
+    const { fs, root, secretDirectory } = fixture({ stateInsideRoot: true });
+    writeFileSync(join(secretDirectory, 'controller'), 'private-controller-fixture');
+    linkSync(join(secretDirectory, 'controller'), join(root, 'ordinary.txt'));
+    expect(() => fs.read({ root: 'windows-c', path: 'ordinary.txt', startLine: 1, maxLines: 5 }))
+      .toThrow(/denied/u);
+    expect(() => fs.stat({ root: 'windows-c', path: 'ordinary.txt' })).toThrow(/denied/u);
+    expect(fs.search({ root: 'windows-c', path: '.', term: 'private-controller', maxResults: 10, maxDepth: 1 }).results)
+      .toEqual([]);
+  });
+
+  it('screens YAML, TOML, multiline environment and PEM values before pagination or search', () => {
+    const { fs, root } = fixture();
+    const content = 'safe: enabled\npassword: yaml-fixture-value\napi_key = "toml-fixture-value"\n' +
+      'APP_SECRET="first-fixture-line\nsecond-fixture-line"\n' +
+      '-----BEGIN PRIVATE KEY-----\nprivate-key-fixture-body\n-----END PRIVATE KEY-----\n';
+    writeFileSync(join(root, 'settings.unknown'), content);
+    const response = fs.read({ root: 'windows-c', path: 'settings.unknown', startLine: 1, maxLines: 20 });
+    expect(response.content).toContain('safe: enabled');
+    for (const secret of ['yaml-fixture-value', 'toml-fixture-value', 'first-fixture-line',
+      'second-fixture-line', 'private-key-fixture-body']) {
+      expect(response.content).not.toContain(secret);
+      expect(fs.search({ root: 'windows-c', path: '.', term: secret, maxResults: 10, maxDepth: 1 }).results)
+        .toEqual([]);
+    }
+    expect(response.sha256).not.toBe(hash(content));
+    expect(fs.stat({ root: 'windows-c', path: 'settings.unknown' }).sha256).toBe(response.sha256);
+  });
+
+  it('refuses a symlinked private backup directory without changing either file', () => {
+    const { fs, root, stateDirectory } = fixture();
+    const external = mkdtempSync(join(tmpdir(), 'gram-mcp-backup-outside-'));
+    created.push(external);
+    symlinkSync(external, join(stateDirectory, 'local-file-recovery'));
+    writeFileSync(join(root, 'original.txt'), 'original');
+    expect(() => fs.write({ root: 'windows-c', path: 'original.txt', expectedSha256: hash('original'), content: 'changed' }))
+      .toThrow(/denied/u);
+    expect(readFileSync(join(root, 'original.txt'), 'utf8')).toBe('original');
+    expect(existsSync(join(external, 'original.txt'))).toBe(false);
+  });
+
+  it('requires owner consent before changing credential-bearing content without banning config names', () => {
+    const { fs, root } = fixture();
+    const original = 'password: original-fixture';
+    writeFileSync(join(root, 'settings.yml'), original);
+    const version = fs.stat({ root: 'windows-c', path: 'settings.yml' }).sha256 ?? '';
+    expect(() => fs.write({ root: 'windows-c', path: 'settings.yml', expectedSha256: version, content: 'safe: replacement' }))
+      .toThrow(/denied/u);
+    expect(() => fs.write({ root: 'windows-c', path: 'new.env', expectedSha256: null, content: 'API_KEY=new-fixture' }))
+      .toThrow(/denied/u);
+    expect(readFileSync(join(root, 'settings.yml'), 'utf8')).toBe(original);
+    fs.write({ root: 'windows-c', path: 'ordinary.env', expectedSha256: null, content: 'SAFE=enabled' });
+    expect(readFileSync(join(root, 'ordinary.env'), 'utf8')).toBe('SAFE=enabled');
+  });
+
+  it('does not leak malformed structured credentials or access-key configuration', () => {
+    const { fs, root } = fixture();
+    for (const content of ['{"nested": {"password": "malformed-fixture"',
+      'AWS_ACCESS_KEY=access-fixture\nPUBLIC=enabled']) {
+      writeFileSync(join(root, 'config'), content);
+      const response = fs.read({ root: 'windows-c', path: 'config', startLine: 1, maxLines: 20 });
+      expect(response.content).not.toContain('malformed-fixture');
+      expect(response.content).not.toContain('access-fixture');
+      expect(response.masked).toBe(true);
+    }
+  });
+  it.each([
+    'password = """\nmultiline-review-fixture\n"""\n',
+    "password = '''\nmultiline-review-fixture\n'''\n",
+    '- password: multiline-review-fixture\n',
+    'secret: | # private value\n  multiline-review-fixture\npublic: enabled\n',
+  ])('screens supported multiline and sequence credentials: %s', content => {
+    const { fs, root } = fixture();writeFileSync(join(root, 'config'), content);
+    expect(fs.read({ root: 'windows-c', path: 'config', startLine: 1, maxLines: 20 }).content)
+      .not.toContain('multiline-review-fixture');
+    expect(fs.stat({ root: 'windows-c', path: 'config' }).sha256).not.toBe(hash(content));
+    expect(fs.search({ root: 'windows-c', path: '.', term: 'multiline-review-fixture', maxDepth: 1, maxResults: 5 }).results).toEqual([]);
+    expect(() => fs.write({ root: 'windows-c', path: 'new-config', content, expectedSha256: null })).toThrow(/denied/u);
+  });
+  it('uses an opaque version when bytes cannot be screened as text', () => {
+    const { fs, root } = fixture();
+    const bytes = Buffer.from('password=low-entropy-fixture\0');writeFileSync(join(root, 'binary'), bytes);
+    expect(fs.stat({ root: 'windows-c', path: 'binary' }).sha256).not.toBe(createHash('sha256').update(bytes).digest('hex'));
+  });
+  it.each([
+    'credentials:\n  value: format-private-fixture\npublic: enabled\n',
+    '{"auths":{"registry":{"auth":"format-private-fixture"}}}',
+    '//registry.npmjs.org/:_authToken=format-private-fixture\n',
+    'origin=https://format-private-fixture@github.com/owner/repo\n',
+    'DATABASE_URL=postgresql://user:format-private-fixture@localhost/db\n',
+    'machine example.org login user password format-private-fixture\n',
+    'machine example.org\n  login user\n  password format-private-fixture\n',
+    '<?xml version="1.0"?><settings><password>format-private-fixture</password></settings>',
+    '[auth]\nvalue=format-private-fixture\n',
+    "const password = 'format-private-fixture';\n",
+    "module.exports = { password: 'format-private-fixture' };\n",
+    'export default { apiKey: "format-private-fixture" };\n',
+    'const token = `format-private-fixture`;\n',
+    'common: &private format-private-fixture\npassword: *private\n',
+  ])('masks supported credential storage syntax before remote preview: %s', content => {
+    const { fs, root } = fixture();writeFileSync(join(root, 'settings'), content);
+    expect(fs.read({ root: 'windows-c', path: 'settings', startLine: 1, maxLines: 20 }).content)
+      .not.toContain('format-private-fixture');
+  });
+
   it('refuses writes in read-only roots and rejects invalid root configuration', () => {
     const { fs } = fixture({ readOnly: true });
     expect(() => fs.mkdir({ root: 'windows-c', path: 'new' })).toThrow(/denied/u);

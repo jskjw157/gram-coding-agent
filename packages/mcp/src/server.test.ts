@@ -5,6 +5,8 @@ import {
   type RunningMcpServer,
 } from './server.js';
 import type { ApprovalToolsPort } from './tools/approval-tools.js';
+import type { OwnerWorkspaceToolsPort } from './tools/owner-workspace-tools.js';
+import type { LocalDeveloperToolsPort } from './tools/local-developer-tools.js';
 
 const running: RunningMcpServer[] = [];
 
@@ -342,6 +344,18 @@ describe('optional read-only local source inspection tools', () => {
 
 
 describe('owner-approved multi-root filesystem MCP catalog', () => {
+  it('advertises the complete native owner filesystem and developer catalog exclusively from their trusted ports', async () => {
+    const owner = Object.fromEntries(['roots', 'list', 'stat', 'read', 'search', 'write', 'patch', 'mkdir',
+      'move', 'copy', 'trash', 'restore', 'readBinary', 'writeBinary', 'reveal', 'convertPath']
+      .map(name => [name, async () => ({ status: 'fixture-only' })])) as unknown as OwnerWorkspaceToolsPort;
+    const developer = Object.fromEntries(['register', 'status', 'diff', 'log', 'run']
+      .map(name => [name, async () => ({ status: 'fixture-only' })])) as unknown as LocalDeveloperToolsPort;
+    const names = await advertisedNames({ ...fullOptions('owner-complete-catalog-secret'), ownerWorkspace: owner, localDeveloper: developer });
+    for (const name of ['local_fs_restore', 'local_fs_read_binary', 'local_fs_write_binary', 'local_fs_reveal',
+      'local_fs_convert_path', 'local_repo_register', 'local_git_status', 'local_git_diff', 'local_git_log', 'local_dev_run']) expect(names).toContain(name);
+    await expect(createMcpHttpServer({ ...fullOptions('owner-catalog-conflict-secret'), ownerWorkspace: owner,
+      localProject: { list: async () => ({}), read: async () => ({}) } as never })).rejects.toThrow('Owner workspace cannot share legacy filesystem authority');
+  });
   it('advertises full directory, search and mutation tools only with the dedicated port', async () => {
     const without = await advertisedNames(fullOptions('local-fs-absent-secret'));
     expect(without).not.toContain('local_fs_roots');
