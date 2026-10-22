@@ -50,3 +50,85 @@ At `3fea60c53835ef9cfa6772eca8948c3cdfd580d0`, independent source architecture/s
 Fresh integrated checks, independent review and exact-head GitHub CI remain required after the working tree settles. Historical CI4316 is not evidence for this dirty candidate. Do not combine historical/scoped counts into a current completion result.
 
 Actual Windows Hello approval/denial/cancellation, local-viewer rendering/capture acceptance, external ChatGPT discovery/calls, restore-checked online backups, guarded deployment and deployed production composition have not been accepted for this candidate. Code, mocked approval, availability checks, server-local tools/list and fixture-only M5 success do not close those gates. Preserve live state and evidence until the authorized operational procedure is ready and verified.
+
+## 2026-10-22 validated source and operational stop
+
+The following updates the historical checkpoints above; it does not erase their
+failures or claim that an undeployed source commit is the running service.
+
+Candidate `2d05646471617c14b3d4c2513be1e8468068a1ca` passed fresh local lint,
+typecheck, 1,115 unit tests, 28 E2E tests, the mandatory security suite and build.
+The security runner separately passed 24 security, 13 native, three native-build
+and ten installer cases. Mandatory owner-native verification passed five real
+POSIX/M5 cases; the filesystem-native Python suite passed 17 cases. The exact
+candidate's [GitHub CI run](https://github.com/jskjw157/gram-coding-agent/actions/runs/39701203486)
+passed both Linux verification and Windows native jobs, including the real
+Windows filesystem effects, consent protocol and viewer protocol denials.
+Independent source/security reviews cleared the preceding implementation and
+the final portable synthetic-drive fixture delta. The fixture explicitly does
+not claim native Windows containment.
+
+An isolated actual production-composition probe used a root-owned configuration,
+pinned root-owned artifacts and private disposable state, without starting an
+agent service or changing production data. Native read, create/overwrite,
+search, credential-write denial without owner presence, and native-broker Git
+status/diff/log passed. Git capture took approximately 23–26 seconds for this
+small fixture; this is not a large-project performance claim. One initial probe
+incorrectly expected a rejected promise instead of the documented `DENIED`
+mutation result. The corrected assertion passed; the initial diagnostic is
+retained. Native captures remain bounded observations, not atomic snapshots.
+
+Actual Windows Hello returned `VERIFIED` at `2026-10-22T00:48:48Z` for a synthetic
+credential-write challenge with no file effect. The protected viewer did not
+launch: Windows Code Integrity events 3077/3033 at `2026-10-22T00:50:11Z` rejected
+its unsigned artifact. Its SHA-256 was
+`76285f46bf245b3847f98e6d732117402018487bc71171d88d11aa8620692547`.
+Correlated signature events reported no signatures. The policy is
+`VerifiedAndReputableDesktop`, ID `0283ac0f-fff1-49ae-ada1-8a933130cad6`, the
+built-in Smart App Control policy. No viewer rendering, capture exclusion or
+owner cancellation success is claimed. No alternate binary or policy workaround
+was attempted.
+
+Microsoft's [inbox policy reference](https://learn.microsoft.com/en-us/windows/security/application-security/application-control/app-control-for-business/operations/inbox-appcontrol-policies)
+identifies this policy; its [signing guidance](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/code-signing-for-smart-app-control)
+and [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)
+describe trusted signing and the absence of an individual-app exception. An
+existing authorized publicly trusted signer, or an equivalent signed artifact
+with verified source/build provenance, is required before retrying admission.
+Signing changes the digest: re-pin the final artifact after signer verification.
+A signature is not a guarantee of admission under every active policy. No new
+certificate/key, security-policy change or permission expansion is authorized
+by this report.
+
+A preparation backup at `/var/lib/gram-issue228-preparation/20261022T005239Z`
+passed SQLite online-backup and restored-copy logical fingerprint/integrity
+checks for the main and observation databases. All seven historical worktrees
+were archived and 61 restored regular files compared; private configuration was
+restored and compared inside root-only storage. The owner journal was absent.
+Three completed and seven failed Tasks, zero Repo Locks, and unchanged main DB
+logical content were confirmed. This is preparation evidence, not the fresh
+idle/write-barrier proof required immediately before future activation.
+
+The existing agent and tunnel remained on v0.1.0 `85c7c6c`, PIDs 122130 and
+122316, with zero restarts at observation. The external existing connector
+returned healthy/ok/ready. No new owner tools were deployed, advertised or called
+through external ChatGPT. The protected installer and its non-elevated guard
+tests are preparation artifacts only; elevated provisioning remains unverified.
+Do not reuse the historical Issue 226 activation controller unchanged: its
+candidate/CI bindings and database inventory predate the new owner journal,
+recovery key and native vaults.
+
+**Status: operational activation blocked on trusted viewer artifact provision.**
+Main merge, service activation and Issue 228 completion remain open. Complete
+review/CI for later preparation changes separately; do not apply this candidate's
+test counts to a newer SHA without fresh verification.
+
+The fresh target-Windows filesystem helper also passed all 17 native tests.
+Closing only the synthetic consent helper's own window returned `DENIED` at
+`2026-10-22T00:55:49Z`; this is native cancellation evidence, not a claim that a
+human canceled the viewer. Independent installer review found a creation-time
+ACL gap, reproduced a regression RED, and verified the repair: the explicit
+protected descriptor is supplied atomically to the real .NET file constructor.
+All 27 installer guard checks passed; elevated installation remains unperformed.
+See the [activation gates](issue-228-activation-gates-20261022.md) for the exact
+remaining integration, artifact, preservation and external acceptance sequence.
