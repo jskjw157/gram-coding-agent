@@ -1,5 +1,69 @@
 # Owner-authorized Windows/WSL filesystem MCP
 
+## Current native runtime
+
+The starter instructions below are historical. Current production composition
+**rejects** `GRAM_AGENT_LOCAL_FS_ROOTS_JSON` and
+`GRAM_AGENT_READONLY_PROJECT_ROOT`; do not deploy either legacy environment value.
+The feature remains off unless trusted local configuration enables it.
+
+The service setting is `GRAM_AGENT_OWNER_WORKSPACE_CONFIG`, pointing to a
+canonical root-owned JSON file with protected ancestors. Its strict schema is
+[`OwnerWorkspaceConfig`](../../apps/agent/src/owner-workspace-runtime.ts).
+Configuration includes named Windows/WSL roots, actual helper paths and SHA-256
+pins, native owner/viewer SID pins, private same-volume recovery vault paths and
+measured identities. Do not guess these values or let a remote request set them.
+See the [activation gates](issue-228-activation-gates-20261022.md) and
+[protected helper installer](../../scripts/windows-owner-workspace-install.md).
+An environment variable alone does not provision trusted artifacts or ACLs.
+
+After a verified deployment and external catalog refresh, the native runtime
+exposes these typed operations:
+
+| Tools | Contract |
+| --- | --- |
+| `local_fs_roots`, `local_fs_convert_path` | Discover configured capabilities and convert validated relative paths. |
+| `local_fs_list`, `local_fs_stat`, `local_fs_read`, `local_fs_search` | Hidden/config names allowed; bounded pagination/search and whole-content credential screening. |
+| `local_fs_write`, `local_fs_patch`, `local_fs_mkdir`, `local_fs_copy`, `local_fs_move` | Version-bound replacement; mkdir/copy/move do not overwrite destinations; journal/recovery evidence. |
+| `local_fs_trash`, `local_fs_restore` | Trash requires destructive consent; restore checks bound recovery/version and sensitive/directory consent. No permanent-delete tool. |
+| `local_fs_read_binary`, `local_fs_write_binary` | Bounded complete base64 bytes; export always requires fresh native consent, as do opaque/sensitive writes. |
+| `local_fs_reveal` | Fresh Windows Hello and local protected viewer; no raw credential text in MCP. |
+| `local_repo_register`, `local_git_status`, `local_git_diff`, `local_git_log`, `local_dev_run` | Origin-validated registration, isolated bounded Git reads and real named isolated Task commands. |
+| `task_get`, `task_list`, `task_logs`, `task_result` | Durable Task/evidence reads. |
+
+For a configured root named `windows-c`, mc-web read-only requests are:
+
+```json
+{"root":"windows-c","path":"source/mc-web","offset":0,"limit":100}
+{"root":"windows-c","path":"source/mc-web/src/main.tsx","startLine":1,"maxLines":120}
+```
+
+Use the **actual root ID returned by `local_fs_roots`**, not an assumed name.
+Versioned operations use the returned opaque `version` as `expectedVersion`, not
+a public SHA-256. Write/write_binary to an absent file use `expectedVersion: null`;
+copy/move use the source version, and mkdir omits that field. Restore uses null
+for an absent destination or its current version when replacement is supported.
+Preserve `requestId` on retry and
+inspect the returned state: `DENIED` and `NEEDS_RECONCILIATION` are not successful
+effects. Never blindly retry an unresolved operation or clear its quarantine.
+The recovery receipt supplies the `recoveryId` for restore.
+
+Ordinary reads cap file content at 1 MiB and responses at 200 lines/32,000
+characters; text/binary writes cap new content at 256 KiB. Binary read is an
+explicitly approved complete bounded snapshot, not an unimplemented streaming
+promise. Sensitive/binary metadata does not expose a public content hash.
+Git capture and named-command limitations are documented in the
+[development evidence](issue-228-development-evidence-20261021.md): oversized or
+unsupported captures fail closed, commands use a clean committed base, external
+network/dependency installation is unavailable, and foreground `dev` is bounded.
+
+Current source/CI validation is not deployment proof. The target machine's Smart
+App Control rejection of the unsigned viewer blocks activation. Existing v0.1.0
+and the external old tool catalog remain in use; do not claim the new tools work
+externally before actual discovery and calls pass.
+
+## Historical starter instructions — superseded, do not deploy
+
 ## Scope
 
 The original local_project_list/local_project_read prototype was single-root and read-only. The owner explicitly requested broad local work. The new local_fs_* tools accept many administrator-configured Windows drive and WSL directory roots; no file extension, dotfile or credential-shaped filename is excluded from listing, status, editing or masked text inspection. Per-root OS permissions still apply and controller state/secrets are protected.
