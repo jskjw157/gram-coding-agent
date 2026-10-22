@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run --config tests/e2e/vitest.config.ts",
     "test:security": "node tests/security/run-security.mjs",
-    "test:security:wsl": "vitest run --config tests/security/vitest.wsl-isolation.config.ts --configLoader runner"
+    "test:security:wsl": "vitest run --config tests/security/vitest.wsl-isolation.config.ts --configLoader runner",
+    "test:owner-native": "vitest run --config tests/security/owner-native.vitest.config.ts --configLoader runner"
   },
   "devDependencies": {
     "@eslint/js": "latest",

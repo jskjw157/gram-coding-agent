@@ -39,3 +39,26 @@ stat -c '%n uid=%u mode=%a' /var/lib /var/cache /var/lib/gram-sandbox-runtime
 uname -r
 /usr/bin/bwrap --version
 sha256sum /usr/bin/bwrap /usr/local/libexec/gram-sandbox-entry /var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified/bin/node
+
+# Mandatory owner-filesystem tests use separately pinned root-owned artifacts.
+# They never replace the ordinary M5 entry or reuse its execution authority.
+sh apps/filesystem-worker/build.sh "$temporary/owner-filesystem"
+test ! -e /var/lib/gram-owner-native-ci
+sudo install -d -o root -g root -m 0755 /var/lib/gram-owner-native-ci
+sudo install -o root -g root -m 0755 "$temporary/owner-filesystem/gram-owner-fs-entry" /var/lib/gram-owner-native-ci/entry
+sudo install -o root -g root -m 0755 "$temporary/owner-filesystem/gram-owner-fs-native" /var/lib/gram-owner-native-ci/native
+sudo install -o root -g root -m 0644 apps/filesystem-worker/worker.mjs /var/lib/gram-owner-native-ci/worker.mjs
+python3 - <<'PY'
+import hashlib, json, os, pathlib
+paths = {
+  'bubblewrap': '/usr/bin/bwrap',
+  'node': '/var/lib/gram-sandbox-runtime/node-24-pnpm-10.34.5-verified/bin/node',
+  'entry': '/var/lib/gram-owner-native-ci/entry',
+  'native': '/var/lib/gram-owner-native-ci/native',
+  'worker': '/var/lib/gram-owner-native-ci/worker.mjs',
+}
+manifest = pathlib.Path(os.environ['RUNNER_TEMP']) / 'gram-owner-native-artifacts.json'
+manifest.write_text(json.dumps({key: {'path': value, 'sha256': hashlib.sha256(pathlib.Path(value).read_bytes()).hexdigest()} for key, value in paths.items()}))
+with open(os.environ['GITHUB_ENV'], 'a') as output:
+    output.write('GRAM_POSIX_NATIVE_ARTIFACTS=' + str(manifest) + '\n')
+PY

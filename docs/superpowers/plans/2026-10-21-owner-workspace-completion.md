@@ -1,12 +1,23 @@
-# Issue 228 execution plan
+# Issue 228 execution plan — implementation checkpoint
 
-1. Preserve baseline and write failing security tests for hardlink reads, broader configuration masking, private backup traversal and protected controller paths.
-2. Implement content screening and private recovery hardening; retain compatible ordinary-file versions and use opaque sensitive-content versions.
-3. Prove native Windows handle containment and WSL worker confinement before exposing mutations; add fixed typed backend and platform tests, with explicit conflict/recovery semantics.
-4. Complete bounded search, binary transfers, directory operations, restore, durable redacted audit and retry handling through that boundary.
-5. Implement native per-request owner presence and protected reveal; integrate one-use bound consent. Test denial, replay, expiration, restart and mismatched operation.
-6. Implement Git/project contracts and genuine isolated local-command workflow without changing coding publication invariants.
-7. Integrate MCP schemas and composition, run all tests and independent reviews, repair findings, obtain exact-head GitHub CI. Submit reviewed stacked PRs and merge in dependency order under the owner's authorization.
-8. Preserve live state and verify online backups/restoration; perform guarded exact-SHA deployment, then actual Windows/WSL and external ChatGPT acceptance. Record every feature's evidence and any uncompleted gate honestly.
+This records implementation and remaining gates, not Issue 228 completion. Parallel ownership remains explicit. This documentation update changes no source, services, production repositories, release tags or historical evidence.
 
-Parallel file ownership is explicit. Source changes by other agents are preserved. Production, historic evidence, release tags and mc-web source remain unchanged throughout development.
+## Implemented candidate; validation remains scoped
+
+1. Preserve baseline and behavioral RED evidence for hardlink reads, configuration masking, private recovery traversal and controller-path denial. Complete-content screening and opaque sensitive versions are implemented; screening remains a preview filter.
+2. Keep Agent-private reads/exports denied regardless of owner consent. Trusted configuration pins roots, artifacts and vaults. The dedicated private `owner-workspace.sqlite` journal is separate from main migrations; unresolved mutations require reconciliation.
+3. Use the fixed Windows handle backend and actual-root Landlock ext4 backend. POSIX mount-alias/nested-mount guards and original-inode capture into the private original-path vault are implemented. DrvFs is not a POSIX fallback; Windows mutations require supported TxF capability. Retain open-FD and external-writer limitations.
+4. Bounded search, file/binary writes, directory snapshots, no-overwrite move/trash/restore, recovery associations and retry metadata are implemented. Tree versions are captured snapshots, not universal frozen-tree CAS. Native inode/tree vaults use private permissions; controller recovery envelopes are encrypted.
+5. Separate disclosure paths: normal text/search is screened; protected reveal uses fresh exact-content Windows Hello and a local-only viewer requiring queried `0x11` capture exclusion before/after Hello, without a monitor-only fallback; binary export uses separate one-use exact-snapshot consent and warns that complete bytes, potentially including secrets, go to remote ChatGPT. Recheck live identity/bytes before export. Remote approval or a viewer grant cannot substitute. Actual interactive acceptance remains open.
+6. Coordinate Task lease acquisition and filesystem effects through the global in-process reservation, then enforce persisted active-scope denial and fresh native alias protections on every mutation. Read-only project inspection may continue under an active lease.
+7. Git status/diff/log/registration and genuine `LOCAL_COMMAND` execution are implemented. Registration checks current Tasks/locks before persistence. Commands use clean committed HEAD in a separate M5-isolated worktree, with real lease/command evidence and scoped completion. Network is blocked; base dependencies are not copied/installed. Dirty bases, unsupported submodules/layouts, missing dependencies and failed commands remain explicit failures. Coding publication invariants are unchanged.
+
+## Remaining acceptance and release sequence
+
+8. Finish integration and independent code/security review, including the latest open YAML flow-map screening regressions. Repair findings and run fresh full lint, typecheck, unit, E2E, security, build and mandatory native checks after concurrent edits settle. `pnpm test:owner-native` requires prepared trusted artifacts and runs real ext4/M5 tests without opt-in skips. Label mocked protocol and actual native evidence separately.
+9. Obtain exact-head GitHub CI for the final reviewed candidate and review stacked PR dependencies before merge. Historical CI4316, the earlier 934-test clean-checkout checkpoint and intermediate scoped green runs do not cover the current dirty candidate. No final all-gates pass is asserted.
+10. Coordinate real Windows Hello approval, denial/cancellation and stale/mismatched-request tests; inspect actual viewer rendering/capture behavior. Verify target Windows/WSL backends, directory/recovery semantics and private-path denials with harmless fixtures. Availability and malformed-input checks are not human approval evidence. Keep real mc-web source read-only during acceptance.
+11. Before upgrade, take and restore-check online backups, inspect exact live Tasks/locks/process identities, ensure no active work and preserve databases, failed worktrees, evidence and rollback material. Deploy only the reviewed exact SHA and matching trusted artifacts through the authorized guarded procedure.
+12. Verify deployed composition, MCP/tunnel health and fixture recovery/private-path denial. Separately verify external ChatGPT catalog discovery and real calls, including masked reads, local-only reveal and explicitly authorized binary export. External and production gates remain incomplete; do not close Issue 228 until their evidence exists.
+
+See [the amended design](../specs/2026-10-21-owner-workspace-design.md) and [development evidence](../../operations/issue-228-development-evidence-20261021.md) for source references and evidence limits.

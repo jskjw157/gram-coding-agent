@@ -1,5 +1,5 @@
 export interface WorkspaceAuthorization { workspace: string; identity: string }
-interface TaskState { repoId: number | null; status: string }
+interface TaskState { repoId: number | null; status: string; taskType?: string }
 interface WorkspaceState { id: number; repoId: number; linuxPath: string; branch: string; recoveryState: string | null }
 interface LeaseState { repoId: number; ownerTaskId: string; leaseToken: string; ownerPid: number; ownerBootId: string; leaseUntil: string; acquiredAt: string }
 interface HeldLease { repoId: number; taskId: string; leaseToken: string }
@@ -14,7 +14,8 @@ export interface OrdinaryExecutionAuthorizationOptions {
 export function ordinaryExecutionAuthorization(options: OrdinaryExecutionAuthorizationOptions) {
   return (taskId: string): WorkspaceAuthorization | undefined => {
     const task = options.tasks.get(taskId), workspace = options.workspaces.getByTaskId(taskId);
-    if (task?.status !== 'VERIFYING' || task.repoId === null || workspace === undefined ||
+    const admitted = task?.status === 'VERIFYING' || (task?.taskType === 'LOCAL_COMMAND' && task.status === 'RUNNING');
+    if (!admitted || !task || task.repoId === null || workspace === undefined ||
         workspace.repoId !== task.repoId || workspace.recoveryState !== null) return undefined;
     const lease = ownedExecutionLease(options, taskId, task.repoId);
     return lease === undefined ? undefined : { workspace: workspace.linuxPath,

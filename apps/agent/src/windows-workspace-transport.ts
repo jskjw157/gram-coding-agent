@@ -3,8 +3,9 @@ import { spawn } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { NativeWorkspaceRequest, NativeWorkspaceTransport } from './windows-workspace-client.js';
+import { NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError } from './windows-workspace-client.js';
 
-const deny = () => new Error('Native workspace transport denied or failed');
+const deny = () => new NativeWorkspaceDeniedError();
 const INPUT_LIMIT = 3 * 1024 * 1024;
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
 
@@ -40,7 +41,6 @@ export class FixedWindowsWorkspaceTransport implements NativeWorkspaceTransport 
       const input = JSON.stringify(request);
       if (Buffer.byteLength(input) > INPUT_LIMIT) throw deny();
       return await new Promise<unknown>((resolve, reject) => {
-        const began = Date.now();
         const child = spawn(this.helperPath, [], { cwd: '/', env: {}, shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
         let size = 0;let failed = false;const chunks: Buffer[] = [];
         const fail = () => { failed = true;chunks.length = 0;if (child.pid !== undefined) child.kill('SIGKILL'); };
@@ -58,17 +58,31 @@ export class FixedWindowsWorkspaceTransport implements NativeWorkspaceTransport 
         child.on('close', code => {
           clearTimeout(timer);
           const finish = () => {
-            if (failed || code !== 0) {reject(deny());return;}
+            if (failed || code !== 0) {
+              if (!failed && code === 1) {
+                try {
+                  const receipt: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+                  if (receipt !== null && typeof receipt === 'object' && !Array.isArray(receipt) &&
+                      Object.keys(receipt).length === 2 && 'ok' in receipt && receipt.ok === false &&
+                      'code' in receipt && receipt.code === 'DENIED_NO_CHANGE') {reject(deny());return;}
+                } catch { /* Missing native rollback evidence remains unresolved. */ }
+              }
+              reject(child.pid !== undefined && ['write', 'move', 'mkdir', 'trash', 'restore'].includes(request.operation)
+                ? new NativeWorkspaceUnresolvedError() : deny());return;
+            }
             try {resolve(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))) as unknown);}
-            catch {reject(deny());}
+            catch {reject(['write', 'move', 'mkdir', 'trash', 'restore'].includes(request.operation) ? new NativeWorkspaceUnresolvedError() : deny());}
           };
-          // The native worker has its own fixed five-second watchdog. If the
-          // WSL relay was killed, wait beyond that deadline before reporting.
-          if (failed) setTimeout(finish, Math.max(0, 6500 - (Date.now() - began)));
-          else finish();
+          // A watchdog is a mitigation, not proof of native termination. Failed
+          // mutations stay unresolved in the controller journal; elapsed time
+          // never authorizes a retry or another mutation against that root.
+          finish();
         });
         child.stdin.end(input);
       });
-    } catch { throw deny(); }
+    } catch (error) {
+      if (error instanceof NativeWorkspaceUnresolvedError) throw error;
+      throw deny();
+    }
   }
 }

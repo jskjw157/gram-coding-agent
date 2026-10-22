@@ -4,6 +4,7 @@ These exercise native filesystem effects, not mocked authorization or production
 state. The helper is not deployed by this test.
 """
 import base64
+import ctypes
 import json
 import pathlib
 import subprocess
@@ -22,11 +23,23 @@ class WindowsWorkspace(unittest.TestCase):
         self.root.mkdir()
         self.recovery = self.base / "private-recovery"
         self.recovery.mkdir()
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong]
+        self.assertTrue(kernel.SetFileAttributesW(str(self.recovery), 2))
+        user = subprocess.run(['whoami.exe', '/user', '/fo', 'csv', '/nh'],
+                              capture_output=True, text=True, check=True).stdout.strip().split(',')[-1].strip('"')
+        secured = subprocess.run(['icacls.exe', str(self.recovery), '/inheritance:r', '/grant:r',
+                                  '*' + user + ':(OI)(CI)F'], capture_output=True, check=False)
+        self.assertEqual(secured.returncode, 0)
 
     def tearDown(self):
         self.fixture.cleanup()
 
     def call(self, operation, **fields):
+        if operation in ('write', 'move', 'mkdir'):
+            fields.setdefault('expectedRootIdentity', self.call('stat', path='.')['identity'])
+            if operation != 'mkdir':
+                fields.setdefault('expectedFileIdentity', None if fields.get('expectedBase64') is None else self.call('stat', path=fields['path']).get('identity', '0:0'))
         request = {"operation": operation, "root": str(self.root), "path": ".",
                    "protectedPaths": [str(self.recovery)], **fields}
         result = subprocess.run([str(HELPER)], input=json.dumps(request), text=True,
@@ -38,8 +51,24 @@ class WindowsWorkspace(unittest.TestCase):
         (self.root / ".env").write_bytes(b"SAFE=enabled\n")
         binary = b"\x00\x01\xff\x89PNG"
         (self.root / "image.bin").write_bytes(binary)
-        self.assertEqual({item["name"] for item in self.call("list")["entries"]}, {".env", "image.bin"})
+        listing = self.call('list')
+        self.assertEqual({item['name'] for item in listing['entries']}, {'.env', 'image.bin'})
+        self.assertIs(listing['omitted'], False)
         self.assertEqual(base64.b64decode(self.call("read", path="image.bin")["base64"]), binary)
+
+    def test_list_completeness_includes_reserved_and_protected_names(self):
+        reserved = '.gram-owner-fs-12345678-1234-1234-1234-123456789abc'
+        (self.root / reserved).write_bytes(b'fixture')
+        protected = self.root / 'protected'
+        protected.mkdir()
+        listing = self.call('list', protectedPaths=[str(self.recovery), str(protected)])
+        self.assertEqual({entry['name'] for entry in listing['entries']}, {reserved, 'protected'})
+        self.assertIs(listing['omitted'], False)
+
+    def test_actual_drive_root_is_browsable_without_project_hardcoding(self):
+        result = self.call('list', root=self.root.anchor, path='.')
+        self.assertTrue(result['ok'], result)
+        self.assertIsInstance(result['entries'], list)
 
     def test_atomic_expected_preimage_write_and_permissions(self):
         target = self.root / "existing.txt"
@@ -47,6 +76,7 @@ class WindowsWorkspace(unittest.TestCase):
         encoded = lambda value: base64.b64encode(value).decode("ascii")
         conflict = self.call("write", path="existing.txt", expectedBase64=encoded(b"wrong"), base64=encoded(b"new"))
         self.assertFalse(conflict["ok"])
+        self.assertEqual(conflict['code'], 'DENIED_NO_CHANGE')
         self.assertEqual(target.read_bytes(), b"original")
         changed = self.call("write", path="existing.txt", expectedBase64=encoded(b"original"), base64=encoded(b"changed"))
         self.assertTrue(changed["ok"], changed)
@@ -98,6 +128,165 @@ class WindowsWorkspace(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertFalse((self.root / "source").exists())
         self.assertEqual((self.root / "created" / "moved").read_bytes(), b"fixture")
+
+    def test_mutation_binds_root_and_file_identity_even_when_bytes_match(self):
+        target = self.root / 'original'
+        target.write_bytes(b'same-content')
+        identity = self.call('stat', path='original')['identity']
+        target.rename(self.root / 'preserved-original')
+        target.write_bytes(b'same-content')
+        self.assertNotEqual(self.call('stat', path='original')['identity'], identity)
+        encoded = lambda value: base64.b64encode(value).decode('ascii')
+        result = self.call('write', path='original', expectedBase64=encoded(b'same-content'),
+                           base64=encoded(b'changed'), expectedFileIdentity=identity)
+        self.assertFalse(result['ok'])
+        result = self.call('write', path='original', expectedBase64=encoded(b'same-content'),
+                           base64=encoded(b'changed'), expectedRootIdentity='0:0')
+        self.assertFalse(result['ok'])
+        self.assertEqual(target.read_bytes(), b'same-content')
+
+    def test_drive_alias_cannot_bypass_a_protected_ancestor(self):
+        private = self.root / 'controller'
+        child = private / 'nested'
+        child.mkdir(parents=True)
+        (child / 'sentinel').write_bytes(b'private-alias-fixture')
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.DefineDosDeviceW.argtypes = [ctypes.c_ulong, ctypes.c_wchar_p, ctypes.c_wchar_p]
+        kernel.DefineDosDeviceW.restype = ctypes.c_int
+        drives = kernel.GetLogicalDrives()
+        drive = next(chr(index + 65) + ':' for index in range(25, 3, -1) if not drives & (1 << index))
+        target = str(child)
+        self.assertTrue(kernel.DefineDosDeviceW(8, drive, target), ctypes.get_last_error())
+        try:
+            result = self.call('read', root=drive + '\\', path='sentinel', protectedPaths=[str(private)])
+            self.assertFalse(result['ok'])
+        finally:
+            # Remove only our exact definition, preserving any other mappings.
+            self.assertTrue(kernel.DefineDosDeviceW(8 | 2 | 4, drive, target), ctypes.get_last_error())
+
+    def test_controller_code_is_readable_but_not_mutable(self):
+        code = self.root / 'controller-code'
+        code.mkdir()
+        (code / 'main.js').write_bytes(b'fixed-controller-code')
+        protected = {'protectedMutationPaths': [str(code)]}
+        self.assertTrue(self.call('read', path='controller-code/main.js', **protected)['ok'])
+        encoded = lambda value: base64.b64encode(value).decode('ascii')
+        result = self.call('write', path='controller-code/main.js', expectedBase64=encoded(b'fixed-controller-code'),
+                           base64=encoded(b'changed'), **protected)
+        self.assertFalse(result['ok'])
+        self.assertEqual((code / 'main.js').read_bytes(), b'fixed-controller-code')
+
+    def test_directory_move_and_recovery_preserve_complete_tree(self):
+        tree = self.root / 'tree'
+        (tree / 'nested' / 'empty').mkdir(parents=True)
+        (tree / 'nested' / '.hidden').write_bytes(b'\x00binary\xff')
+        snapshot = self.call('treeStat', path='tree')
+        self.assertTrue(snapshot['ok'], snapshot)
+        fields = dict(expectedKind='directory', expectedVersion=snapshot['version'],
+                      expectedFileIdentity=snapshot['identity'],
+                      expectedRootIdentity=self.call('stat', path='.')['identity'])
+        moved = self.call('move', path='tree', destination='moved', **fields)
+        self.assertTrue(moved['ok'], moved)
+        self.assertFalse(tree.exists())
+        self.assertEqual((self.root / 'moved/nested/.hidden').read_bytes(), b'\x00binary\xff')
+        self.assertTrue((self.root / 'moved/nested/empty').is_dir())
+        snapshot = self.call('treeStat', path='moved')
+        fields.update(expectedVersion=snapshot['version'])
+        recovery = dict(recoveryRoot=str(self.recovery), recoveryId='fixture-recovery',
+                        expectedRecoveryRootIdentity=self.call('stat', root=str(self.recovery), protectedPaths=[], path='.')['identity'])
+        trashed = self.call('trash', path='moved', **fields, **recovery)
+        self.assertTrue(trashed['ok'], trashed)
+        self.assertFalse((self.root / 'moved').exists())
+        self.assertFalse(self.call('list', root=str(self.recovery))['ok'])
+        restored = self.call('restore', path='restored', **fields, **recovery)
+        self.assertTrue(restored['ok'], restored)
+        self.assertEqual((self.root / 'restored/nested/.hidden').read_bytes(), b'\x00binary\xff')
+        self.assertTrue((self.root / 'restored/nested/empty').is_dir())
+
+    def test_directory_move_rejects_changed_tree_existing_target_and_protected_ancestor(self):
+        tree = self.root / 'tree'
+        tree.mkdir()
+        (tree / 'child').write_bytes(b'first')
+        snapshot = self.call('treeStat', path='tree')
+        self.assertTrue(snapshot['ok'], snapshot)
+        fields = dict(expectedKind='directory', expectedVersion=snapshot['version'],
+                      expectedFileIdentity=snapshot['identity'])
+        (tree / 'child').write_bytes(b'changed')
+        self.assertFalse(self.call('move', path='tree', destination='moved', **fields)['ok'])
+        snapshot = self.call('treeStat', path='tree')
+        fields['expectedVersion'] = snapshot['version']
+        (self.root / 'occupied').mkdir()
+        self.assertFalse(self.call('move', path='tree', destination='occupied', **fields)['ok'])
+        for exclusion in ('protectedPaths', 'protectedMutationPaths'):
+            self.assertFalse(self.call('move', path='tree', destination='moved',
+                                       **fields, **{exclusion: [str(tree / 'child')]})['ok'])
+        (tree / 'alias').hardlink_to(tree / 'child')
+        self.assertFalse(self.call('treeStat', path='tree')['ok'])
+        self.assertTrue(tree.is_dir())
+
+    def test_file_recovery_is_private_version_bound_and_never_clobbers(self):
+        target = self.root / 'file'
+        target.write_bytes(b'preserve-file')
+        fields = dict(expectedKind='file', expectedBase64=base64.b64encode(b'preserve-file').decode('ascii'),
+                      expectedFileIdentity=self.call('stat', path='file')['identity'],
+                      expectedRootIdentity=self.call('stat', path='.')['identity'],
+                      recoveryRoot=str(self.recovery), recoveryId='file-recovery',
+                      expectedRecoveryRootIdentity=self.call('stat', root=str(self.recovery), protectedPaths=[], path='.')['identity'])
+        self.assertTrue(self.call('trash', path='file', **fields)['ok'])
+        self.assertFalse(target.exists())
+        self.assertFalse(self.call('read', root=str(self.recovery), path='file-recovery')['ok'])
+        target.write_bytes(b'new-writer')
+        self.assertFalse(self.call('restore', path='file', **fields)['ok'])
+        self.assertEqual(target.read_bytes(), b'new-writer')
+        self.assertEqual((self.recovery / 'file-recovery').read_bytes(), b'preserve-file')
+        target.unlink()
+        tampered = dict(fields, expectedFileIdentity='0:0')
+        self.assertFalse(self.call('restore', path='file', **tampered)['ok'])
+        self.assertFalse(self.call('restore', path='file', **dict(fields, recoveryId='../file-recovery'))['ok'])
+        self.assertTrue(self.call('restore', path='file', **fields)['ok'])
+        self.assertEqual(target.read_bytes(), b'preserve-file')
+        self.assertFalse((self.recovery / 'file-recovery').exists())
+
+    def test_directory_junction_descendant_and_swapped_identity_are_denied(self):
+        tree = self.root / 'tree'
+        tree.mkdir()
+        outside = self.base / 'outside'
+        outside.mkdir()
+        (outside / 'sentinel').write_bytes(b'outside')
+        snapshot = self.call('treeStat', path='tree')
+        tree.rename(self.root / 'original')
+        tree.mkdir()
+        fields = dict(expectedKind='directory', expectedVersion=snapshot['version'],
+                      expectedFileIdentity=snapshot['identity'])
+        self.assertFalse(self.call('move', path='tree', destination='moved', **fields)['ok'])
+        junction = tree / 'junction'
+        made = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(junction), str(outside)], capture_output=True)
+        self.assertEqual(made.returncode, 0)
+        try:
+            self.assertFalse(self.call('treeStat', path='tree')['ok'])
+            fields['expectedFileIdentity'] = self.call('stat', path='tree')['identity']
+            self.assertFalse(self.call('move', path='tree', destination='moved', **fields)['ok'])
+        finally:
+            junction.rmdir()
+        self.assertEqual((outside / 'sentinel').read_bytes(), b'outside')
+
+    def test_recovery_requires_hidden_protected_private_vault(self):
+        (self.root / 'file').write_bytes(b'fixture')
+        fields = dict(expectedKind='file', expectedBase64=base64.b64encode(b'fixture').decode('ascii'),
+                      expectedFileIdentity=self.call('stat', path='file')['identity'],
+                      expectedRootIdentity=self.call('stat', path='.')['identity'],
+                      recoveryRoot=str(self.recovery), recoveryId='fixture',
+                      expectedRecoveryRootIdentity=self.call('stat', root=str(self.recovery), protectedPaths=[], path='.')['identity'])
+        self.assertFalse(self.call('trash', path='file', protectedPaths=[], **fields)['ok'])
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.SetFileAttributesW.argtypes = [ctypes.c_wchar_p, ctypes.c_ulong]
+        self.assertTrue(kernel.SetFileAttributesW(str(self.recovery), 0x80))
+        self.assertFalse(self.call('trash', path='file', **fields)['ok'])
+        self.assertTrue(kernel.SetFileAttributesW(str(self.recovery), 2))
+        public = subprocess.run(['icacls.exe', str(self.recovery), '/grant', '*S-1-1-0:(OI)(CI)R'], capture_output=True)
+        self.assertEqual(public.returncode, 0)
+        self.assertFalse(self.call('trash', path='file', **fields)['ok'])
+        self.assertEqual((self.root / 'file').read_bytes(), b'fixture')
 
     def test_no_generic_exec_or_caller_selected_root_reparse(self):
         self.assertFalse(self.call("exec", executable="cmd.exe")["ok"])

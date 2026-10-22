@@ -2,11 +2,12 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 export interface LocalOwnerOperation {
   taskId: string;
-  action: 'protected-reveal' | 'credential-write' | 'destructive';
+  action: 'protected-reveal' | 'credential-write' | 'destructive' | 'binary-export';
   rootId: string;
   rootIdentity: string;
   path: string;
   fileIdentity: string | null;
+  targetState: 'EXISTING' | 'ABSENT';
   preimageDigest: string | null;
   postimageDigest: string | null;
   destination: string | null;
@@ -30,7 +31,7 @@ export type NativeOwnerPresenceResult =
  */
 export type NativeOwnerPresenceVerifier = (challenge: NativeOwnerChallenge) => Promise<NativeOwnerPresenceResult>;
 
-const KEYS = ['taskId', 'action', 'rootId', 'rootIdentity', 'path', 'fileIdentity',
+const KEYS = ['taskId', 'action', 'rootId', 'rootIdentity', 'path', 'fileIdentity', 'targetState',
   'preimageDigest', 'postimageDigest', 'destination', 'destinationRootIdentity'] as const;
 const IDENTITY = /^\d+:\d+$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -44,13 +45,21 @@ function snapshot(input: LocalOwnerOperation): LocalOwnerOperation | null {
       Object.keys(input).some(k => !KEYS.includes(k as typeof KEYS[number]))) return null;
   const op = Object.fromEntries(KEYS.map(k => [k, input[k]])) as unknown as LocalOwnerOperation;
   if (typeof op.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/u.test(op.taskId) ||
-      !['protected-reveal', 'credential-write', 'destructive'].includes(op.action) ||
+      !['protected-reveal', 'credential-write', 'destructive', 'binary-export'].includes(op.action) ||
       typeof op.rootId !== 'string' || !/^[a-z][a-z0-9_-]{0,31}$/u.test(op.rootId) ||
       typeof op.rootIdentity !== 'string' || !IDENTITY.test(op.rootIdentity) || !safePath(op.path) ||
       (op.fileIdentity !== null && (typeof op.fileIdentity !== 'string' || !IDENTITY.test(op.fileIdentity))) ||
       [op.preimageDigest, op.postimageDigest].some(d => d !== null && (typeof d !== 'string' || !DIGEST.test(d))) ||
       (op.destination !== null && !safePath(op.destination)) ||
       (op.destinationRootIdentity !== null && (typeof op.destinationRootIdentity !== 'string' || !IDENTITY.test(op.destinationRootIdentity)))) return null;
+  if (!['EXISTING', 'ABSENT'].includes(op.targetState) ||
+      (op.targetState === 'EXISTING' && (op.fileIdentity === null || op.preimageDigest === null)) ||
+      (op.targetState === 'ABSENT' && (op.fileIdentity !== null || op.preimageDigest !== null)) ||
+      ((op.destination === null) !== (op.destinationRootIdentity === null))) return null;
+  if (op.action === 'credential-write') {
+    if (op.postimageDigest === null) return null;
+  } else if (op.targetState !== 'EXISTING' || op.postimageDigest !== null ||
+      (['protected-reveal', 'binary-export'].includes(op.action) && op.destination !== null)) return null;
   return Object.freeze(op);
 }
 

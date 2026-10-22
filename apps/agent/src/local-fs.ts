@@ -205,7 +205,7 @@ export class MultiRootLocalFs implements LocalFsToolsPort {
   private version(root: Root, path: string, bytes: Buffer): string {
     let sensitive: boolean;
     try { sensitive = secretSafe(asText(bytes), this.redactor).masked; }
-    catch { sensitive = this.redactor.redact(bytes.toString('latin1')) !== bytes.toString('latin1'); }
+    catch { sensitive = true; }
     return sensitive
       ? createHmac('sha256', this.versionKey).update(root.id + '\0' + path + '\0').update(bytes).digest('hex')
       : hash(bytes);

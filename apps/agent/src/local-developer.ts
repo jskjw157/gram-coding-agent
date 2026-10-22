@@ -3,7 +3,8 @@ import type {
   LocalGitDiffView, LocalGitLogInputValue, LocalGitLogView, LocalGitStatusView, LocalRepositoryInputValue,
 } from '@gram/mcp';
 
-export interface LocalDeveloperProject { canonicalPath: string; identity: string }
+import type { LocalGitSnapshotSource } from './local-git-read-snapshot.js';
+export interface LocalDeveloperProject { canonicalPath: string; identity: string; gitSnapshotSource?: LocalGitSnapshotSource }
 export interface LocalRepositoryMetadata { githubRepositoryId: number; owner: string; name: string; defaultBranch: string }
 export interface LocalDeveloperOptions {
   /** Must pin/revalidate the configured root and reject controller-private paths for the whole callback. */

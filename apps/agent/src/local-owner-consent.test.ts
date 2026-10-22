@@ -3,7 +3,7 @@ import { LocalOwnerConsent, type LocalOwnerOperation, type NativeOwnerPresenceVe
 
 const operation: LocalOwnerOperation = {
   taskId: 'fixture-task', action: 'protected-reveal', rootId: 'fixture', rootIdentity: '1:2',
-  path: '.env', fileIdentity: '1:3', preimageDigest: 'a'.repeat(64),
+  path: '.env', fileIdentity: '1:3', targetState: 'EXISTING', preimageDigest: 'a'.repeat(64),
   postimageDigest: null, destination: null, destinationRootIdentity: null,
 };
 // Synthetic verifier exercises the real state machine, not native human presence.
@@ -84,5 +84,27 @@ describe('local owner consent capabilities', () => {
     expect(JSON.stringify(grant)).not.toContain('.env');
     expect(displayed).not.toContain(operation.preimageDigest ?? 'missing-fixture-digest');
     expect(await f.consent.request({ ...operation, content: 'fixture-secret' } as LocalOwnerOperation)).toBeNull();
+  });
+  it.each([
+    { ...operation, action: 'credential-write' as const },
+    { ...operation, fileIdentity: null, preimageDigest: null },
+    { ...operation, destination: 'other', destinationRootIdentity: null },
+    { ...operation, action: 'destructive' as const, fileIdentity: null, preimageDigest: null },
+  ])('denies incomplete action-specific content or identity binding', async incomplete => {
+    expect(await fixture().consent.request(incomplete)).toBeNull();
+  });
+  it('binds remote binary export separately from a protected local reveal', async () => {
+    const f = fixture();
+    const exportOperation = { ...operation, action: 'binary-export' as const };
+    const grant = granted(await f.consent.request(exportOperation));
+    expect(f.consent.consume(grant.capability, operation)).toBe(false);
+    expect(f.consent.consume(grant.capability, exportOperation)).toBe(true);
+  });
+  it('binds a valid credential creation to an explicitly absent target and intended bytes', async () => {
+    const f = fixture();const creation: LocalOwnerOperation = { ...operation, action: 'credential-write',
+      targetState: 'ABSENT', fileIdentity: null, preimageDigest: null, postimageDigest: 'b'.repeat(64) };
+    const grant = granted(await f.consent.request(creation));
+    expect(f.consent.consume(grant.capability, { ...creation, targetState: 'EXISTING', fileIdentity: '1:8', preimageDigest: 'c'.repeat(64) })).toBe(false);
+    expect(f.consent.consume(grant.capability, creation)).toBe(true);
   });
 });

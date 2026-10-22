@@ -8,7 +8,7 @@ const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = mkdtempSync('/tmp/gram-execution-authorization-'); roots.push(root);
-  const task = { repoId: 123, status: 'VERIFYING' };
+  const task = { repoId: 123, status: 'VERIFYING', taskType: 'CODING' };
   const workspace = { id: 1, repoId: 123, linuxPath: root + '/workspace', branch: 'fix/task', recoveryState: null as string | null };
   const lease = { repoId: 123, ownerTaskId: 'task', leaseToken: randomUUID(), ownerPid: process.pid,
     ownerBootId: readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(),
@@ -24,6 +24,12 @@ function fixture() {
 }
 it('admits a matching live Task/workspace/SQLite/file/held-lease binding', () => {
   const f = fixture(); expect(f.get('task')?.workspace).toBe(f.workspace.linuxPath);
+});
+it('admits RUNNING only for explicitly typed LOCAL_COMMAND tasks', () => {
+  const f = fixture();f.task.status = 'RUNNING';expect(f.get('task')).toBeUndefined();
+  f.task.taskType = 'LOCAL_COMMAND';expect(f.get('task')?.workspace).toBe(f.workspace.linuxPath);
+  f.task.status = 'PREPARING';expect(f.get('task')).toBeUndefined();
+  f.task.status = 'COMPLETED';expect(f.get('task')).toBeUndefined();
 });
 it.each(['repo', 'workspace-repo', 'held-token', 'owner-task', 'expired', 'recovery', 'file-owner'])('rejects inconsistent or expired execution binding: %s', (field) => {
   const f = fixture();

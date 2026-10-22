@@ -120,6 +120,29 @@ export class TaskRepository {
     }
   }
 
+  /** A local command completes without inventing coding verification/publication.
+   * The SQL binds terminal success to this task's exact declared command and
+   * persisted workspace. The global CODING transition graph is unchanged. */
+  completeLocalCommand(id: TaskId, commandRunId: number): void {
+    if (!Number.isSafeInteger(commandRunId) || commandRunId <= 0) throw new Error('Invalid local command evidence');
+    const result = this.db.prepare(`
+      UPDATE tasks SET status = 'COMPLETED', updated_at = ?
+      WHERE id = ? AND task_type = 'LOCAL_COMMAND' AND status = 'RUNNING'
+        AND json_extract(metadata_json, '$.localCommand') IN ('lint', 'test', 'build', 'dev')
+        AND EXISTS (
+          SELECT 1 FROM command_runs c JOIN workspaces w ON w.task_id = tasks.id
+          WHERE c.id = ? AND c.task_id = tasks.id AND w.repo_id = tasks.repo_id
+            AND c.cwd = w.linux_path AND w.recovery_state IS NULL
+            AND c.category = 'DEVELOPMENT' AND c.shell_text IS NULL
+            AND c.status = 'SUCCEEDED' AND c.exit_code = 0 AND c.finished_at IS NOT NULL
+            AND c.executable = json_extract(tasks.metadata_json, '$.packageManager')
+            AND c.executable IN ('npm', 'pnpm')
+            AND c.args_json = json_array('run', json_extract(tasks.metadata_json, '$.localCommand'))
+        )
+    `).run(new Date().toISOString(), id, commandRunId);
+    if (result.changes !== 1) throw new Error('Local command completion evidence rejected');
+  }
+
   listRunnable(perStatusLimit: number): StoredTask[] {
     if (!Number.isSafeInteger(perStatusLimit) || perStatusLimit <= 0) {
       throw new Error('perStatusLimit must be a positive safe integer');
@@ -131,14 +154,14 @@ export class TaskRepository {
           SELECT id, seq, goal, repo_id AS repoId, repo_selector AS repoSelector, status,
                  task_type AS taskType, publish_mode AS publishMode, priority,
                  created_at AS createdAt, updated_at AS updatedAt, 0 AS statusOrder
-          FROM tasks WHERE status = 'WAITING_REPO_LOCK'
+          FROM tasks WHERE status = 'WAITING_REPO_LOCK' AND task_type <> 'LOCAL_COMMAND'
           ORDER BY priority ASC, seq ASC LIMIT ?
         ),
         queued AS (
           SELECT id, seq, goal, repo_id AS repoId, repo_selector AS repoSelector, status,
                  task_type AS taskType, publish_mode AS publishMode, priority,
                  created_at AS createdAt, updated_at AS updatedAt, 1 AS statusOrder
-          FROM tasks WHERE status = 'QUEUED'
+          FROM tasks WHERE status = 'QUEUED' AND task_type <> 'LOCAL_COMMAND'
           ORDER BY priority ASC, seq ASC LIMIT ?
         )
         SELECT id, seq, goal, repoId, repoSelector, status, taskType, publishMode,
