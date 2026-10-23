@@ -412,7 +412,7 @@ async function superviseFixedGit(
   };
   return { exitCode, stdout: decode(stdout), stderr: decode(stderr) };
 }
-function validateConfig(output: string, url: string): void {
+function validateConfig(output: string, url: string, readOnlyLocal = false): void {
   let originCount = 0;
   for (const record of output.split('\0').filter(Boolean)) {
     const separator = record.indexOf('\n');
@@ -420,7 +420,12 @@ function validateConfig(output: string, url: string): void {
     const key = record.slice(0, separator).toLowerCase();
     const value = record.slice(separator + 1);
     if (key === 'remote.origin.url') {
-      if (value !== url && value !== url.slice(0, -4)) reject();
+      if (readOnlyLocal) {
+        // Read-only snapshots never use the remote; accepting an inert GitLab,
+        // SSH or local origin cannot grant Git fetch/push authority. The fixed
+        // production publisher keeps its strict GitHub identity contract.
+        if (value.length === 0 || value.length > 2048 || controls(value)) reject();
+      } else if (value !== url && value !== url.slice(0, -4)) reject();
       originCount++;
       continue;
     }
@@ -439,7 +444,7 @@ function validateConfig(output: string, url: string): void {
       continue;
     reject();
   }
-  if (originCount !== 1) reject();
+  if (readOnlyLocal ? originCount > 1 : originCount !== 1) reject();
 }
 
 export type TrustedLocalGitRead =
@@ -484,7 +489,7 @@ async function readonlyGitLibraries(): Promise<string[]> {
 }
 /** A fixed read-only namespace over a complete private native-broker capture.
  * Live project/config/object paths never enter Git's execution namespace. */
-export async function readTrustedLocalGit(basePath: string, request: TrustedLocalGitRead, options: TrustedLocalGitReadOptions): Promise<SpawnResult & { owner: string; name: string }> {
+export async function readTrustedLocalGit(basePath: string, request: TrustedLocalGitRead, options: TrustedLocalGitReadOptions): Promise<SpawnResult & { owner: string; name: string; partialCapture?: boolean }> {
   let snapshot: Awaited<ReturnType<typeof createLocalGitSnapshot>> | undefined;
   try {
     if (!options || !path.isAbsolute(basePath) || process.platform !== 'linux' || process.arch !== 'x64') reject();
@@ -510,13 +515,21 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
     const configPath = path.join(snapshot.workspace, '.git/config');
     const config = await superviseTrustedGit(snapshot.workspace, ['config', '--no-includes', '--file', configPath, '--null', '--list'], env, execution);
     if (config.exitCode !== 0) reject();
-    const origins = config.stdout.split('\0').filter(value => value.startsWith('remote.origin.url\n'));
-    if (origins.length !== 1) reject();
-    const origin = origins[0]?.slice('remote.origin.url\n'.length) ?? '';
-    const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100}?)\/?(?:\.git)?$/u.exec(origin);
-    const owner = match?.[1], name = match?.[2];
-    if (!owner || !name || name === '.' || name === '..') reject();
-    validateConfig(config.stdout, `https://github.com/${owner}/${name}.git`);
+    let owner = '', name = '';
+    if (request.operation === 'identity') {
+      const origins = config.stdout.split('\0').filter(value => value.startsWith('remote.origin.url\n'));
+      if (origins.length !== 1) reject();
+      const origin = origins[0]?.slice('remote.origin.url\n'.length) ?? '';
+      const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9_.-]{1,100}?)\/?(?:\.git)?$/u.exec(origin);
+      owner = match?.[1] ?? ''; name = match?.[2] ?? '';
+      if (!owner || !name || name === '.' || name === '..') reject();
+      validateConfig(config.stdout, `https://github.com/${owner}/${name}.git`);
+    } else {
+      // Local status/diff/log must also work in owner-selected GitLab repositories.
+      // Their remote URLs are never copied into the synthesized config and the
+      // command executes in the same network-free, read-only Git namespace.
+      validateConfig(config.stdout, '', true);
+    }
     if (args.length === 0) return { owner, name, exitCode: 0, stdout: '', stderr: '' };
     let safeConfig = '[core]\nrepositoryformatversion = 0\nbare = false\n';
     for (const field of config.stdout.split('\0')) {
@@ -541,7 +554,9 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
     namespace.push('--', '/gram-sandbox-entry', '/workspace', '/runtime', '--', '/usr/bin/git', '--no-pager', ...fixedConfig, ...args);
     const result = await superviseFixedGit('read-only-namespace', '/', namespace, {}, execution);
     if (result.exitCode !== 0) reject();
-    return { owner, name, ...result };
+    return { owner, name, ...result,
+      ...(snapshot.skippedUntrackedDirectories.length > 0 ? { partialCapture: true } : {}) };
+
   } catch { throw new Error('Trusted local Git denied or failed'); }
   finally {await snapshot?.close();}
 }

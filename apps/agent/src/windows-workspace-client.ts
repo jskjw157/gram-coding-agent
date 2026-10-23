@@ -4,6 +4,7 @@ type NativeDirectoryPreimage = { expectedKind: 'directory'; expectedVersion: str
 type NativeFilePreimage = { expectedKind: 'file'; expectedBase64: string; expectedFileIdentity: string };
 export type NativeWorkspaceOperation =
   | { operation: 'list' | 'stat' | 'read' | 'treeStat'; path: string }
+  | { operation: 'readGitChunk'; path: string; offset: number; length: number }
   | { operation: 'mkdir'; path: string; expectedRootIdentity: string }
   | { operation: 'write'; path: string; expectedBase64: string | null; base64: string; expectedRootIdentity: string; expectedFileIdentity: string | null }
   | ({ operation: 'move'; path: string; destination: string; expectedRootIdentity: string } &
@@ -16,12 +17,14 @@ export interface NativeWorkspaceRequest {
   protectedMutationPaths?: readonly string[];
   expectedRootIdentity?: string; expectedFileIdentity?: string | null;
   expectedKind?: 'file' | 'directory'; expectedVersion?: string;
+  offset?: number; length?: number;
   recoveryRoot?: string; recoveryId?: string; expectedRecoveryRootIdentity?: string;
 }
 export interface NativeWorkspaceReply {
   ok: true; rootIdentity: string; kind?: 'file' | 'directory'; identity?: string; bytes?: number; base64?: string; version?: string;
   entries?: { name: string; type: 'file' | 'directory' | 'symlink' }[];
   omitted?: boolean;
+  totalBytes?: number; gitStamp?: string;
 }
 export interface NativeWorkspaceTransport { run(request: NativeWorkspaceRequest): Promise<unknown> }
 export class NativeWorkspaceUnresolvedError extends Error {
@@ -33,6 +36,10 @@ export class NativeWorkspaceDeniedError extends Error {
   constructor() {super('Native workspace operation denied or failed');}
 }
 const LIMIT = 1024 * 1024;
+export const GIT_CHUNK_BYTES = 256 * 1024;
+export const GIT_PACK_MAX_BYTES = 64 * 1024 * 1024;
+export const GIT_CHUNK_PATH = /(?:^|\/)\.git\/objects\/pack\/pack-[0-9a-f]{40}\.(?:pack|idx|rev)$/iu;
+export const GIT_CHUNK_STAMP = /^\d+:\d+:\d+:\d+:\d+$/u;
 const deny = () => new NativeWorkspaceDeniedError();
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function textPath(value: unknown, allowRoot = false): value is string {
@@ -50,12 +57,20 @@ function base64(value: unknown): value is string {
 const mutations = ['mkdir', 'write', 'move', 'trash', 'restore'];
 const identity = (value: unknown): value is string => typeof value === 'string' && /^\d+:\d+$/u.test(value);
 function validate(input: NativeWorkspaceOperation): void {
-  if (!object(input) || !['list', 'stat', 'read', 'treeStat', ...mutations].includes(String(input.operation)) ||
+  if (!object(input) || !['list', 'stat', 'read', 'readGitChunk', 'treeStat', ...mutations].includes(String(input.operation)) ||
       !textPath(input.path, input.operation === 'list' || input.operation === 'stat')) throw deny();
   const keys = ['operation', 'path'];
   if (mutations.includes(input.operation)) {
     keys.push('expectedRootIdentity');
     if (!('expectedRootIdentity' in input) || !identity(input.expectedRootIdentity)) throw deny();
+  }
+  if (input.operation === 'readGitChunk') {
+    keys.push('offset', 'length');
+    if (!GIT_CHUNK_PATH.test(input.path) ||
+        !Number.isSafeInteger(input.offset) || input.offset < 0 ||
+        input.offset > GIT_PACK_MAX_BYTES ||
+        !Number.isSafeInteger(input.length) || input.length < 1 || input.length > GIT_CHUNK_BYTES ||
+        input.offset + input.length > GIT_PACK_MAX_BYTES) throw deny();
   }
   if (input.operation === 'write') {
     keys.push('expectedBase64', 'base64', 'expectedFileIdentity');
@@ -88,14 +103,22 @@ function reply(value: unknown, operation: NativeWorkspaceOperation['operation'])
   if (!object(value) || value.ok !== true || typeof value.rootIdentity !== 'string' || !/^\d+:\d+$/u.test(value.rootIdentity) ||
       Object.keys(value).some(k => !['ok', 'rootIdentity', ...(operation === 'list' ? ['entries', 'omitted'] :
         operation === 'treeStat' ? ['kind', 'identity', 'version'] : operation === 'read' ? ['kind', 'identity', 'bytes', 'base64'] :
+        operation === 'readGitChunk' ? ['kind', 'identity', 'bytes', 'base64', 'totalBytes', 'gitStamp'] :
           operation === 'stat' ? ['kind', 'identity', 'bytes'] : [])].includes(k))) throw deny();
   if (operation === 'treeStat' && (value.kind !== 'directory' || !identity(value.identity) ||
       typeof value.version !== 'string' || !/^[a-f0-9]{64}$/u.test(value.version))) throw deny();
-  if (operation === 'read' || operation === 'stat') {
+  if (operation === 'read' || operation === 'stat' || operation === 'readGitChunk') {
     if (!['file', 'directory'].includes(String(value.kind)) || typeof value.identity !== 'string' || !/^\d+:\d+$/u.test(value.identity) ||
         (value.bytes !== undefined && (!Number.isSafeInteger(value.bytes) || Number(value.bytes) < 0))) throw deny();
   }
   if (operation === 'read' && (value.kind !== 'file' || !base64(value.base64) || Buffer.from(value.base64, 'base64').length !== value.bytes)) throw deny();
+  if (operation === 'readGitChunk' &&
+      (value.kind !== 'file' || !base64(value.base64) ||
+       typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > GIT_CHUNK_BYTES ||
+       Buffer.from(value.base64, 'base64').length !== value.bytes ||
+       typeof value.totalBytes !== 'number' || !Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1 ||
+       value.totalBytes > GIT_PACK_MAX_BYTES ||
+       typeof value.gitStamp !== 'string' || !/^\d+:\d+:\d+:\d+:\d+$/u.test(value.gitStamp))) throw deny();
   if (operation === 'list') {
     if (Object.hasOwn(value, 'omitted') && typeof value.omitted !== 'boolean') throw deny();
     if (!Array.isArray(value.entries) || value.entries.length > 10000 || value.entries.some(entry => !object(entry) ||

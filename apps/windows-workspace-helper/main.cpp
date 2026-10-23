@@ -28,6 +28,8 @@
 namespace {
 using namespace winrt::Windows::Data::Json;
 constexpr size_t LIMIT=1024*1024;
+constexpr DWORD GIT_CHUNK=256*1024;
+constexpr ULONGLONG GIT_PACK_MAX=64ULL*1024*1024;
 enum class Outcome {NoChange,Unknown,Applied};
 Outcome outcome=Outcome::NoChange;
 struct Failure {};
@@ -95,6 +97,27 @@ std::unique_ptr<Handle> relativeOpen(HANDLE parent,const std::wstring& name,bool
   NTSTATUS status=ntCreate(&result->value,SYNCHRONIZE|FILE_READ_ATTRIBUTES|(directory?FILE_LIST_DIRECTORY:FILE_READ_DATA),&object,&io,nullptr,FILE_ATTRIBUTE_NORMAL,
     directory?FILE_SHARE_READ|FILE_SHARE_WRITE:FILE_SHARE_READ,FILE_OPEN,FILE_SYNCHRONOUS_IO_NONALERT|FILE_OPEN_REPARSE_POINT|(directory?FILE_DIRECTORY_FILE:FILE_NON_DIRECTORY_FILE),nullptr,0);
   require(status>=0);ordinary(result->value,directory);return result;
+}
+bool gitPackPath(const std::vector<std::wstring>& parts) {
+  if(parts.size()<4) return false;
+  size_t start=parts.size()-4;
+  if(lower(parts[start])!=L".git"||lower(parts[start+1])!=L"objects"||lower(parts[start+2])!=L"pack") return false;
+  auto file=lower(parts.back());
+  if(file.size()!=50&&file.size()!=49) return false;
+  if(file.substr(0,5)!=L"pack-") return false;
+  for(size_t i=5;i<45;i++) {
+    wchar_t c=file[i];if(!((c>=L'0'&&c<=L'9')||(c>=L'a'&&c<=L'f'))) return false;
+  }
+  if(file.size()<45) return false;
+  auto extension=file.substr(45);
+  return extension==L".pack"||extension==L".idx"||extension==L".rev";
+}
+std::wstring gitStamp(const BY_HANDLE_FILE_INFORMATION& info) {
+  ULONGLONG fileIndex=(static_cast<ULONGLONG>(info.nFileIndexHigh)<<32)|info.nFileIndexLow;
+  ULONGLONG size=(static_cast<ULONGLONG>(info.nFileSizeHigh)<<32)|info.nFileSizeLow;
+  return std::to_wstring(info.dwVolumeSerialNumber)+L":"+std::to_wstring(fileIndex)+
+    L":"+std::to_wstring(size)+L":"+std::to_wstring(info.ftLastWriteTime.dwHighDateTime)+
+    L":"+std::to_wstring(info.ftLastWriteTime.dwLowDateTime);
 }
 std::vector<BYTE> readBytes(HANDLE handle) {
   LARGE_INTEGER size{};require(GetFileSizeEx(handle,&size)&&size.QuadPart>=0&&size.QuadPart<=static_cast<LONGLONG>(LIMIT));
@@ -265,6 +288,7 @@ void privateVault(HANDLE h) {
 JsonObject perform(const JsonObject& request) {
   auto op=string(request,L"operation");auto path=string(request,L"path");
   if(op==L"list"||op==L"stat"||op==L"read"||op==L"treeStat") strict(request,{});
+  else if(op==L"readGitChunk") strict(request,{L"offset",L"length"});
   else if(op==L"mkdir") strict(request,{L"expectedRootIdentity"});
   else if(op==L"write") strict(request,{L"expectedBase64",L"base64",L"expectedRootIdentity",L"expectedFileIdentity"});
   else if(op==L"move"||op==L"trash"||op==L"restore") strict(request,{L"destination",L"expectedBase64",L"expectedRootIdentity",L"expectedFileIdentity",L"expectedKind",L"expectedVersion",L"recoveryRoot",L"recoveryId",L"expectedRecoveryRootIdentity"});
@@ -294,6 +318,35 @@ JsonObject perform(const JsonObject& request) {
     out.Insert(L"kind",JsonValue::CreateStringValue(L"directory"));
     out.Insert(L"identity",JsonValue::CreateStringValue(identity(tree.pins.front()->value)));
     out.Insert(L"version",JsonValue::CreateStringValue(tree.version()));return out;
+  }
+  if(op==L"readGitChunk") {
+    require(gitPackPath(parts));
+    const double offsetNumber=request.GetNamedNumber(L"offset");
+    const double lengthNumber=request.GetNamedNumber(L"length");
+    require(offsetNumber>=0&&offsetNumber<=static_cast<double>(GIT_PACK_MAX)&&
+      offsetNumber==static_cast<double>(static_cast<ULONGLONG>(offsetNumber)));
+    require(lengthNumber>=1&&lengthNumber<=GIT_CHUNK&&
+      lengthNumber==static_cast<double>(static_cast<DWORD>(lengthNumber)));
+    auto file=relativeOpen(parent,parts.back(),false);root.check(file->value);
+    BY_HANDLE_FILE_INFORMATION before{};require(GetFileInformationByHandle(file->value,&before));
+    ULONGLONG total=(static_cast<ULONGLONG>(before.nFileSizeHigh)<<32)|before.nFileSizeLow;
+    const ULONGLONG offset=static_cast<ULONGLONG>(offsetNumber);
+    const DWORD length=static_cast<DWORD>(lengthNumber);
+    require(total>LIMIT&&total<=GIT_PACK_MAX&&offset<=total&&length<=total-offset);
+    LARGE_INTEGER location{};location.QuadPart=static_cast<LONGLONG>(offset);
+    require(SetFilePointerEx(file->value,location,nullptr,FILE_BEGIN));
+    std::vector<BYTE> bytes(length);DWORD received=0;
+    require(ReadFile(file->value,bytes.data(),length,&received,nullptr)&&received==length);
+    BY_HANDLE_FILE_INFORMATION after{};require(GetFileInformationByHandle(file->value,&after));
+    const auto stamp=gitStamp(before);
+    require(gitStamp(after)==stamp);
+    out.Insert(L"kind",JsonValue::CreateStringValue(L"file"));
+    out.Insert(L"identity",JsonValue::CreateStringValue(identity(file->value)));
+    out.Insert(L"bytes",JsonValue::CreateNumberValue(length));
+    out.Insert(L"totalBytes",JsonValue::CreateNumberValue(static_cast<double>(total)));
+    out.Insert(L"gitStamp",JsonValue::CreateStringValue(stamp));
+    out.Insert(L"base64",JsonValue::CreateStringValue(encode(bytes)));
+    return out;
   }
   if(op==L"read"||op==L"stat") {
     if(parts.empty()) {out.Insert(L"kind",JsonValue::CreateStringValue(L"directory"));out.Insert(L"identity",JsonValue::CreateStringValue(identity(root.handle())));return out;}
