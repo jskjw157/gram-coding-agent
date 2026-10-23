@@ -189,6 +189,24 @@ describe('trusted application Git boundary', () => {
       await expect(readFile(marker, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {hook.mockRestore();syncBuiltinESMExports();}
   });
+  it('reads local GitLab projects without granting remote or GitHub registration identity', async () => {
+    git(['remote', 'set-url', 'origin', 'git@gitlab.internal:project/mc-web.git']);
+    await writeFile(path.join(base, 'counter.ts'), 'export const n = 9;');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 9;');
+    expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\0');
+    await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+    git(['remote', 'remove', 'origin']);
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 9;');
+    await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+  });
+  it('still rejects executable Git config in a non-GitHub local project', async () => {
+    git(['remote', 'set-url', 'origin', 'git@gitlab.internal:project/mc-web.git']);
+    git(['config', 'core.hooksPath', '/tmp/unsafe']);
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    await expect(readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).rejects.toThrow();
+  });
   it('reads typed local identity, status, diff and log with real Git and no credentials', async () => {
     const identity = await readTrustedLocalGit(base, { operation: 'identity' });
     expect(identity).toMatchObject({ owner: 'fixture', name: 'smoke' });
@@ -201,7 +219,8 @@ describe('trusted application Git boundary', () => {
     git(['config', 'diff.external', '/fixture/never-execute']);
     await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();
     git(['config', '--unset', 'diff.external']);git(['remote', 'set-url', 'origin', 'https://other.invalid/private.git']);
-    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toBe('');
+    await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
     await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false, relativePath: '--output=/private' })).rejects.toThrow();
   });
   it('rejects invalid UTF-8 object bytes for a strict review reader', async () => {
