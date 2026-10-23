@@ -81,7 +81,7 @@ it('skips only checksum-verified untracked generated root directories while reta
   f.files.set(packPath, pack);
   const snapshot = await createLocalGitSnapshot(f.source, join(f.directory, 'snapshots'));
   try {
-    expect(snapshot.skippedUntrackedDirectories).toEqual(['.pnpm-store', 'node_modules']);
+    expect([...snapshot.skippedUntrackedDirectories].sort()).toEqual(['.pnpm-store', 'node_modules']);
     expect(readFileSync(join(snapshot.workspace, 'file.ts'), 'utf8')).toBe('source');
     expect(readFileSync(join(snapshot.workspace, packPath))).toEqual(pack);
     expect(() => readFileSync(join(snapshot.workspace, 'node_modules/a.js'))).toThrow();
