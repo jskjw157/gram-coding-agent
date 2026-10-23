@@ -322,6 +322,25 @@ describe('T5 approval tool wiring', () => {
 });
 
 
+describe('opt-in ego(lite) public shopping browser MCP catalog', () => {
+  it('exposes exactly the narrow public-snapshot tool only when wired', async () => {
+    const without = await advertisedNames(fullOptions('ego-disabled-secret'));
+    expect(without).not.toContain('ego_public_shopping_snapshot');
+    const names = await advertisedNames({
+      ...fullOptions('ego-enabled-secret'),
+      egoBrowser: { read: async ({ source }) => ({
+        source, pageKind: 'product_rankings', requestedUrl: 'https://snxbest.naver.com/product/best/click',
+        actualUrl: 'https://snxbest.naver.com/product/best/click',
+        observedAt: '2026-10-23T00:00:00.000Z', snapshot: 'visible item', truncated: false,
+        evidence: 'page_snapshot_only',
+      }) },
+    });
+    expect(names).toContain('ego_public_shopping_snapshot');
+    expect(names).not.toContain('ego_execute_script');
+    expect(names).not.toContain('ego_browser_shell');
+  });
+});
+
 describe('optional read-only local source inspection tools', () => {
   it('does not expose local browsing until the trusted Agent provides a scoped port', async () => {
     const without = await advertisedNames(fullOptions('local-disabled-secret'));

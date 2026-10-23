@@ -31,6 +31,26 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe('trusted opt-in ego(lite) browser composition', () => {
+  it('starts with the browser disabled unless explicitly configured', async () => {
+    vi.stubEnv('GRAM_AGENT_EGO_BROWSER_MODE', undefined);
+    const app = await startAgent({ ...fixture(), port: 0, installSignalHandlers: false });
+    running.push(app);
+    expect(app.health().status).toBe('healthy');
+  });
+  it('accepts explicit Windows host mode without executing any browser at startup', async () => {
+    vi.stubEnv('GRAM_AGENT_EGO_BROWSER_MODE', 'windows');
+    const app = await startAgent({ ...fixture(), port: 0, installSignalHandlers: false });
+    running.push(app);
+    expect(app.health().status).toBe('healthy');
+  });
+  it('refuses arbitrary/malformed host mode before MCP startup', async () => {
+    vi.stubEnv('GRAM_AGENT_EGO_BROWSER_MODE', 'powershell -command arbitrary');
+    await expect(startAgent({ ...fixture(), port: 0, installSignalHandlers: false }))
+      .rejects.toThrow('Invalid trusted ego browser mode');
+  });
+});
+
 describe('opt-in smoke observer startup', () => {
   it('composes and drains the complete owner runtime only from trusted native configuration', async () => {
     vi.stubEnv('GRAM_AGENT_OWNER_WORKSPACE_CONFIG', '/etc/gram-coding-agent/owner-workspace.json');

@@ -15,3 +15,4 @@ export * from './tools/local-project-tools.js';
 export * from './tools/local-fs-tools.js';
 export * from './tools/local-developer-tools.js';
 export * from './tools/owner-workspace-tools.js';
+export * from './tools/ego-browser-tools.js';
