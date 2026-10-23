@@ -12,7 +12,7 @@ describe('ego-browser MCP tool boundary', () => {
 
   it('registers a single typed read-only tool and passes only strict input to its port', async () => {
     let handler: ((input: { source: 'naver_best_viewed' }) => Promise<unknown>) | undefined;
-    const registerTool = vi.fn((_name, _definition, callback) => { handler = callback; });
+    const registerTool = vi.fn((_name: string, _definition: unknown, callback: (input: { source: 'naver_best_viewed' }) => Promise<unknown>) => { handler = callback; });
     const server = { registerTool } as unknown as McpServer;
     const view = {
       source: 'naver_best_viewed' as const,
