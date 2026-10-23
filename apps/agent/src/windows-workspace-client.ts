@@ -114,9 +114,9 @@ function reply(value: unknown, operation: NativeWorkspaceOperation['operation'])
   if (operation === 'read' && (value.kind !== 'file' || !base64(value.base64) || Buffer.from(value.base64, 'base64').length !== value.bytes)) throw deny();
   if (operation === 'readGitChunk' &&
       (value.kind !== 'file' || !base64(value.base64) ||
-       !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > GIT_CHUNK_BYTES ||
+       typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 1 || value.bytes > GIT_CHUNK_BYTES ||
        Buffer.from(value.base64, 'base64').length !== value.bytes ||
-       !Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1 ||
+       typeof value.totalBytes !== 'number' || !Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1 ||
        value.totalBytes > GIT_PACK_MAX_BYTES ||
        typeof value.gitStamp !== 'string' || !/^\d+:\d+:\d+:\d+:\d+$/u.test(value.gitStamp))) throw deny();
   if (operation === 'list') {
