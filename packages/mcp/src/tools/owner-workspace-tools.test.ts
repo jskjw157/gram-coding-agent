@@ -25,7 +25,7 @@ describe('owner workspace remote authority boundary', () => {
       write: fail, patch: fail, mkdir: fail, move: fail, copy: fail, trash: fail, restore: fail,
       readBinary: fail, writeBinary: fail, reveal: fail, convertPath: fail };
     registerOwnerWorkspaceTools(server as unknown as McpServer, port);
-    expect(names).toEqual(['local_fs_roots', 'local_fs_list', 'local_fs_stat', 'local_fs_read', 'local_fs_search',
+    expect(names).toEqual(['local_fs_roots', 'local_fs_list', 'local_fs_stat', 'local_fs_read', 'local_fs_read_lines', 'local_fs_search',
       'local_fs_write', 'local_fs_patch', 'local_fs_mkdir', 'local_fs_move', 'local_fs_copy', 'local_fs_trash',
       'local_fs_restore', 'local_fs_read_binary', 'local_fs_write_binary', 'local_fs_reveal', 'local_fs_convert_path']);
     await expect(handlers.get('local_fs_read')?.({ root: 'windows-c', path: '.env' })).rejects.toThrow('Owner workspace operation denied or failed');
