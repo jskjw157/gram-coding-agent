@@ -63,6 +63,45 @@ describe('fixed typed native workspace boundary', () => {
 });
 
 
+
+describe('fixed native Git pack chunk admission', () => {
+  const path = '.git/objects/pack/pack-' + 'a'.repeat(40) + '.pack';
+  const valid = {
+    ok: true, rootIdentity: '1:1', kind: 'file', identity: '1:4',
+    bytes: 4, base64: Buffer.from('PACK').toString('base64'), totalBytes: 1048580,
+    gitStamp: '1:4:1048580:0:4',
+  };
+  it('admits only bounded Git pack frames, not ordinary files or arbitrary read APIs', async () => {
+    const run = vi.fn(async () => valid);
+    const client = new WindowsWorkspaceClient({ roots: { c: { windowsPath: 'C:\\', writable: false } },
+      protectedPaths: [], transport: { run } });
+    const result = await client.invoke('c', { operation: 'readGitChunk', path, offset: 0, length: 4 });
+    expect(result).toMatchObject({ base64: valid.base64, gitStamp: valid.gitStamp, totalBytes: 1048580 });
+    expect(run).toHaveBeenCalledWith({ operation: 'readGitChunk', path, offset: 0, length: 4,
+      root: 'C:\\', protectedPaths: [] });
+    for (const invalid of [
+      { path: 'private.txt' }, { path: '.git/objects/pack/foo.pack' },
+      { offset: -1 }, { length: 262145 }, { offset: 67108864 }, { length: 0 },
+      { path: '.git/objects/pack/pack-' + 'a'.repeat(40) + '.pack:ads' },
+    ]) {
+      await expect(client.invoke('c', { operation: 'readGitChunk', path, offset: 0, length: 4, ...invalid }))
+        .rejects.toThrow();
+    }
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('denies malformed chunks and refuses untrusted extra reply fields', async () => {
+    for (const mutation of [
+      { bytes: 500000 }, { totalBytes: 67108865 }, { gitStamp: 'bad' },
+      { unexpectedNativePath: 'C:\\private' }, { base64: '*' },
+    ]) {
+      const client = new WindowsWorkspaceClient({ roots: { c: { windowsPath: 'C:\\', writable: false } },
+        protectedPaths: [], transport: { run: async () => ({ ...valid, ...mutation }) } });
+      await expect(client.invoke('c', { operation: 'readGitChunk', path, offset: 0, length: 4 }))
+        .rejects.toThrow();
+    }
+  });
+});
+
 describe('native directory and recovery protocol', () => {
   function recoveryFixture() {
     const run = vi.fn(async (): Promise<unknown> => ({ ok: true, rootIdentity: '1:1' }));
