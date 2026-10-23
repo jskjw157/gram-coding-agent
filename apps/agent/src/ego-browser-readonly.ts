@@ -124,7 +124,7 @@ export function buildTrustedEgoInvocation(script: string, mode: HostMode): EgoIn
     '$payload | & $browser nodejs',
     'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
   ].join('\r\n');
-  return { executable: 'powershell.exe',
+  return { executable: '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe',
     args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')] };
 }
 
