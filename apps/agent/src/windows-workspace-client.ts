@@ -39,6 +39,7 @@ const LIMIT = 1024 * 1024;
 export const GIT_CHUNK_BYTES = 256 * 1024;
 export const GIT_PACK_MAX_BYTES = 64 * 1024 * 1024;
 export const GIT_CHUNK_PATH = /(?:^|\/)\.git\/objects\/pack\/pack-[0-9a-f]{40}\.(?:pack|idx|rev)$/iu;
+export const GIT_CHUNK_STAMP = /^\d+:\d+:\d+:\d+:\d+$/u;
 const deny = () => new NativeWorkspaceDeniedError();
 function object(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function textPath(value: unknown, allowRoot = false): value is string {
