@@ -117,7 +117,11 @@ export function buildTrustedEgoInvocation(script: string, mode: HostMode): EgoIn
     "$OutputEncoding = [Text.UTF8Encoding]::new($false)",
     "$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encodedScript + "'))",
     "$installRoot = Join-Path $env:ProgramFiles 'Citro Labs\\ego lite\\Application'",
-    "$versions = @(Get-ChildItem -LiteralPath $installRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\\d+\\.\\d+\\.\\d+\\.\\d+
+    "$versions = @(Get-ChildItem -LiteralPath $installRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^[0-9]+([.][0-9]+){3}$' } | Sort-Object -Property @{ Expression = { [version]$_.Name }; Descending = $true })",
+    "$browser = $null",
+    "foreach ($v in $versions) { $candidate = Join-Path $v.FullName 'ego-browser.exe'; if ([IO.File]::Exists($candidate)) { $browser = $candidate; break } }",
+    "if ($null -eq $browser) { throw 'ego-browser unavailable in Citro Labs installation' }",
+    '$payload | & $browser nodejs',
     'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
   ].join('\r\n');
   return { executable: 'powershell.exe',
