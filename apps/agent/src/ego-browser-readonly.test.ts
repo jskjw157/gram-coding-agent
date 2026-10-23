@@ -11,7 +11,7 @@ function result(url: string, snapshot = '1 위 상품 A', truncated = false) {
 
 describe('HAAR fixed-source ego(lite) host adapter', () => {
   it('only requests an allowlisted public ranking page and never emits browser interaction code', async () => {
-    const execute = vi.fn(async () => result('https://snxbest.naver.com/product/best/click'));
+    const execute = vi.fn(async (_script: string) => result('https://snxbest.naver.com/product/best/click'));
     const reader = createEgoPublicReader({ mode: 'windows', execute });
     const view = await reader.read({ source: 'naver_best_viewed' });
     expect(view.pageKind).toBe('product_rankings');
