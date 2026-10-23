@@ -330,7 +330,8 @@ JsonObject perform(const JsonObject& request) {
     auto file=relativeOpen(parent,parts.back(),false);root.check(file->value);
     BY_HANDLE_FILE_INFORMATION before{};require(GetFileInformationByHandle(file->value,&before));
     ULONGLONG total=(static_cast<ULONGLONG>(before.nFileSizeHigh)<<32)|before.nFileSizeLow;
-    const auto offset=static_cast<ULONGLONG>(offsetNumber),length=static_cast<DWORD>(lengthNumber);
+    const ULONGLONG offset=static_cast<ULONGLONG>(offsetNumber);
+    const DWORD length=static_cast<DWORD>(lengthNumber);
     require(total>LIMIT&&total<=GIT_PACK_MAX&&offset<=total&&length<=total-offset);
     LARGE_INTEGER location{};location.QuadPart=static_cast<LONGLONG>(offset);
     require(SetFilePointerEx(file->value,location,nullptr,FILE_BEGIN));
