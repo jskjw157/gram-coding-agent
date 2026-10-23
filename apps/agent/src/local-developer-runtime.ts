@@ -71,7 +71,7 @@ async function cleanHead(project: LocalDeveloperProject, snapshotDirectory: stri
   if (!project.gitSnapshotSource) throw denied();
   const options = { snapshotDirectory, source: project.gitSnapshotSource };
   const status = await readTrustedLocalGit(project.canonicalPath, { operation: 'status' }, options);
-  if (status.stdout !== '') throw denied();
+  if (status.stdout !== '' || status.partialCapture === true) throw denied();
   const tracked = await readTrustedLocalGit(project.canonicalPath, { operation: 'tracked' }, options);
   // Do not let assume-unchanged/skip-worktree index flags hide local edits.
   if (tracked.stdout.split('\0').filter(Boolean).some(entry => !entry.startsWith('H '))) throw denied();
@@ -147,10 +147,12 @@ export function createLocalDeveloperRuntime(options: LocalDeveloperRuntimeOption
           entries.push({ status: entry.slice(0, 2), path: entry.slice(3) });
           if (entry.slice(0, 2).includes('R') || entry.slice(0, 2).includes('C')) i++;
         }
-        return { entries, truncated: false };
+        return { entries, truncated: result.partialCapture === true };
       },
-      diff: async (project, input) => ({ diff: (await readGit(project,
-        { operation: 'diff', ...input })).stdout, truncated: false }),
+      diff: async (project, input) => {
+        const result = await readGit(project, { operation: 'diff', ...input });
+        return { diff: result.stdout, truncated: result.partialCapture === true };
+      },
       log: async (project, maxCount) => {
         const text = (await readGit(project, { operation: 'log', maxCount })).stdout;
         const fields = text.split('\0');const commits: { sha: string; subject: string }[] = [];
