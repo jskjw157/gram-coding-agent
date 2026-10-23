@@ -5,7 +5,10 @@ function fixture() {
   const project = { canonicalPath: '/source/project', identity: 'pinned' };
   const metadata = { githubRepositoryId: 7, owner: 'owner', name: 'repo', defaultBranch: 'main' };
   const options: LocalDeveloperOptions = {
-    withProject: async (_input, operation) => operation(project),
+    withProject: async (input, operation) => {
+      expect(Object.keys(input).sort()).toEqual(['path', 'root']);
+      return operation(project);
+    },
     git: { status: vi.fn(async () => ({ entries: [{ path: 'file.ts', status: ' M' }], truncated: false })),
       diff: vi.fn(async () => ({ diff: 'fake-secret', truncated: false })), log: vi.fn(async () => ({ commits: [], truncated: false })),
       inspectRepository: vi.fn(async () => metadata) },
@@ -32,6 +35,17 @@ describe('local developer boundary', () => {
     const result = await f.service.run({ repositoryId: 7, command: 'test', timeoutMs: 1000 });
     expect(result.stdout).toBe('[redacted]'); expect(result.commandRunId).toBe(1);
     expect(result).not.toHaveProperty('checksPassed');
+  });
+  it.each([undefined, 'src/file.ts'])('projects only the selector while retaining diff options (%s)', async relativePath => {
+    const f = fixture();
+    const options = { staged: false, ...(relativePath === undefined ? {} : { relativePath }) };
+    await f.service.diff({ root: 'source', path: 'project', ...options });
+    expect(f.options.git.diff).toHaveBeenCalledWith(f.project, options);
+  });
+  it('projects only the selector while retaining the log limit', async () => {
+    const f = fixture();
+    await f.service.log({ root: 'source', path: 'project', maxCount: 3 });
+    expect(f.options.git.log).toHaveBeenCalledWith(f.project, 3);
   });
   it('denies undeclared commands and invalid workflow receipts', async () => {
     const f = fixture();

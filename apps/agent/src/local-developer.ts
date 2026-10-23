@@ -60,14 +60,14 @@ export class LocalDeveloper implements LocalDeveloperToolsPort {
   }
   async diff(input: LocalGitDiffInputValue): Promise<LocalGitDiffView> {
     target(input); if (typeof input.staged !== 'boolean' || (input.relativePath !== undefined && !relative(input.relativePath))) throw denied();
-    return this.options.withProject(input, async project => {
+    return this.options.withProject({ root: input.root, path: input.path }, async project => {
       const result = await this.options.git.diff(project, { staged: input.staged, ...(input.relativePath === undefined ? {} : { relativePath: input.relativePath }) });
       return { diff: this.text(result.diff), truncated: result.truncated || result.diff.length > MAX_TEXT };
     });
   }
   async log(input: LocalGitLogInputValue): Promise<LocalGitLogView> {
     target(input); if (!Number.isSafeInteger(input.maxCount) || input.maxCount < 1 || input.maxCount > 100) throw denied();
-    return this.options.withProject(input, async project => {
+    return this.options.withProject({ root: input.root, path: input.path }, async project => {
       const result = await this.options.git.log(project, input.maxCount);
       return { commits: result.commits.slice(0, input.maxCount).map(commit => {
         if (!/^[a-f0-9]{40}$/u.test(commit.sha)) throw denied();
