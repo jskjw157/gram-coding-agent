@@ -489,7 +489,7 @@ async function readonlyGitLibraries(): Promise<string[]> {
 }
 /** A fixed read-only namespace over a complete private native-broker capture.
  * Live project/config/object paths never enter Git's execution namespace. */
-export async function readTrustedLocalGit(basePath: string, request: TrustedLocalGitRead, options: TrustedLocalGitReadOptions): Promise<SpawnResult & { owner: string; name: string }> {
+export async function readTrustedLocalGit(basePath: string, request: TrustedLocalGitRead, options: TrustedLocalGitReadOptions): Promise<SpawnResult & { owner: string; name: string; partialCapture?: boolean }> {
   let snapshot: Awaited<ReturnType<typeof createLocalGitSnapshot>> | undefined;
   try {
     if (!options || !path.isAbsolute(basePath) || process.platform !== 'linux' || process.arch !== 'x64') reject();
@@ -554,7 +554,9 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
     namespace.push('--', '/gram-sandbox-entry', '/workspace', '/runtime', '--', '/usr/bin/git', '--no-pager', ...fixedConfig, ...args);
     const result = await superviseFixedGit('read-only-namespace', '/', namespace, {}, execution);
     if (result.exitCode !== 0) reject();
-    return { owner, name, ...result };
+    return { owner, name, ...result,
+      ...(snapshot.skippedUntrackedDirectories.length > 0 ? { partialCapture: true } : {}) };
+
   } catch { throw new Error('Trusted local Git denied or failed'); }
   finally {await snapshot?.close();}
 }
