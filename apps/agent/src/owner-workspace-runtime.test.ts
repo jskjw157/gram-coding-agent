@@ -12,13 +12,22 @@ const fixture = vi.hoisted(() => ({ trustedConfig: '', configFds: new Set<number
   windowsRoot: '',
   read: undefined as (() => Promise<void>) | undefined, mutation: undefined as (() => Promise<void>) | undefined,
   afterMutation: undefined as (() => void) | undefined, nativeMutationPaths: [] as string[],
-  rootIdentity: '7:1', omitted: false as boolean | undefined, protectedPaths: [] as string[], protectedMutationPaths: [] as string[] }));
+  rootIdentity: '7:1', omitted: false as boolean | undefined, protectedPaths: [] as string[], protectedMutationPaths: [] as string[],
+  afterPolicyRead: undefined as (() => void) | undefined }));
 vi.mock('node:fs', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs')>();
   return { ...fs,
     openSync(...args: Parameters<typeof fs.openSync>) {
       if (fixture.windowsRoot && args[0] === '/mnt/c') args[0] = fixture.windowsRoot;
-      const fd = fs.openSync(...args);if (args[0] === fixture.trustedConfig) fixture.configFds.add(fd);return fd;
+      const fd = fs.openSync(...args);
+      if (args[0] === fixture.trustedConfig || args[0] === join(fixture.trustedConfig, '..', 'owner-workspace-automation.json')) fixture.configFds.add(fd);
+      return fd;
+    },
+    readFileSync(...args: Parameters<typeof fs.readFileSync>) {
+      const value = fs.readFileSync(...args);
+      if (typeof args[0] === 'number' && fixture.configFds.has(args[0]) && fixture.afterPolicyRead &&
+          fs.realpathSync(`/proc/self/fd/${args[0]}`).endsWith('/owner-workspace-automation.json')) fixture.afterPolicyRead();
+      return value;
     },
     realpathSync(path: string) {
       const result = fs.realpathSync(fixture.windowsRoot && path === '/mnt/c' ? fixture.windowsRoot : path);
@@ -122,6 +131,7 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
   fixture.trustedConfig = '';fixture.windowsRoot = '';fixture.calls.length = 0;fixture.read = undefined;fixture.mutation = undefined;fixture.afterMutation = undefined;fixture.rootIdentity = '7:1';
+  fixture.afterPolicyRead = undefined;
 });
 async function runtimeFixture(before?: (base: string) => void) {
   const base = mkdtempSync(join(homedir(), '.owner-runtime-'));chmodSync(base, 0o700);
@@ -139,6 +149,42 @@ async function runtimeFixture(before?: (base: string) => void) {
   return { base, runtime, setActive: (paths: string[]) => {active = paths;} };
 }
 describe('owner runtime composition with synthetic installed/native ports', () => {
+  it('loads only the fixed protected sibling policy and retains its immutable startup roots', async () => {
+    const { base, runtime } = await runtimeFixture(base => {
+      writeFileSync(join(base, 'owner-workspace-automation.json'), JSON.stringify({ version: 1, unattendedRootIds: ['home'] }), { mode: 0o600 });
+    });
+    const stat = await runtime.core.read({ root: 'home', path: 'file' });
+    writeFileSync(join(base, 'owner-workspace-automation.json'), JSON.stringify({ version: 1, unattendedRootIds: [] }));
+    await expect(runtime.core.readBinary({ root: 'home', path: 'file', expectedVersion: String(stat.version) }))
+      .resolves.toMatchObject({ base64: 'aGk=', authorizationSource: 'trusted-local-policy' });
+  });
+  it.each([
+    null, {}, { version: 2, unattendedRootIds: ['home'] }, { version: 1, unattendedRootIds: ['*'] },
+    { version: 1, unattendedRootIds: ['missing'] }, { version: 1, unattendedRootIds: ['home', 'home'] },
+    { version: 1, unattendedRootIds: ['home'], mode: 'unattended' },
+  ])('fails closed for an invalid present automation policy %#', async value => {
+    await expect(runtimeFixture(base => writeFileSync(join(base, 'owner-workspace-automation.json'), JSON.stringify(value), { mode: 0o600 })))
+      .rejects.toThrow('Owner workspace runtime denied');
+  });
+  it.each(['writable', 'hardlink', 'symlink', 'dangling', 'oversized', 'changed-during-read'])('rejects unsafe present automation policy: %s', async kind => {
+    await expect(runtimeFixture(base => {
+      const policy = join(base, 'owner-workspace-automation.json');
+      if (kind === 'dangling') {symlinkSync(join(base, 'missing'), policy);return;}
+      writeFileSync(policy, JSON.stringify({ version: 1, unattendedRootIds: ['home'] }), { mode: 0o600 });
+      if (kind === 'writable') chmodSync(policy, 0o620);
+      if (kind === 'hardlink') linkSync(policy, join(base, 'policy-alias'));
+      if (kind === 'symlink') {renameSync(policy, join(base, 'policy-target'));symlinkSync(join(base, 'policy-target'), policy);}
+      if (kind === 'oversized') writeFileSync(policy, ' '.repeat(65537));
+      if (kind === 'changed-during-read') fixture.afterPolicyRead = () => writeFileSync(policy, '{}');
+    })).rejects.toThrow();
+  });
+  it('protects the fixed policy path even when absent beneath a configured ancestor root', async () => {
+    await runtimeFixture(base => {
+      const input = config();input.roots.home.wslPath = base;writeFileSync(fixture.trustedConfig, JSON.stringify(input));
+    });
+    expect(fixture.protectedPaths).toContain('owner-workspace-automation.json');
+    expect(fixture.protectedMutationPaths).toContain('owner-workspace-automation.json');
+  });
   it('waits for a native filesystem mutation before admitting a repository lease', async () => {
     const { runtime } = await runtimeFixture();let release = () => {};let admitted = false;
     fixture.mutation = () => new Promise<void>(resolve => {release = resolve;});

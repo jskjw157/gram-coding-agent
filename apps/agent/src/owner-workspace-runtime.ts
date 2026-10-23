@@ -128,7 +128,7 @@ function protectedAncestors(path: string): void {
     if (parent === '/') break;
   }
 }
-function readConfig(path: string): OwnerWorkspaceConfig {
+function readInstalledJson(path: string): unknown {
   if (process.platform !== 'linux' || !canonical(path) || realpathSync(path) !== path) throw deny();
   protectedAncestors(path);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -138,8 +138,20 @@ function readConfig(path: string): OwnerWorkspaceConfig {
     const bytes = readFileSync(fd);const after = fstatSync(fd, { bigint: true });
     if (bytes.length > 65536 || before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size ||
         before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) throw deny();
-    return parseOwnerWorkspaceConfig(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
   } finally {closeSync(fd);}
+}
+function readAutomation(path: string, roots: OwnerWorkspaceConfig['roots']): readonly string[] {
+  try {lstatSync(path);}
+  catch (error) {if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Object.freeze([]);throw deny();}
+  try {
+    const input = readInstalledJson(path);
+    shape(input, ['version', 'unattendedRootIds']);
+    if (input.version !== 1 || !Array.isArray(input.unattendedRootIds) || input.unattendedRootIds.length > 26 ||
+        new Set(input.unattendedRootIds).size !== input.unattendedRootIds.length ||
+        input.unattendedRootIds.some(id => typeof id !== 'string' || !Object.hasOwn(roots, id))) throw deny();
+    return Object.freeze([...input.unattendedRootIds] as string[]);
+  } catch {throw deny();}
 }
 function directory(path: string, ext4: boolean): { fd: number; identity: string } {
   if (!canonical(path) || realpathSync(path) !== path) throw deny();
@@ -172,8 +184,10 @@ function reserveAdmission<T>(operation: () => Promise<T>): Promise<T> {
 
 /** Trusted local composition only. No caller can select executable paths, hashes, or native ports. */
 export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntimeOptions): Promise<OwnerWorkspaceRuntime> {
-  const config = readConfig(options.configPath);
-  const reads = [options.configPath, options.stateDirectory, options.secretDirectory, ...options.protectedReadPaths,
+  const config = parseOwnerWorkspaceConfig(readInstalledJson(options.configPath));
+  const automationPath = join(dirname(options.configPath), 'owner-workspace-automation.json');
+  const unattendedRootIds = readAutomation(automationPath, config.roots);
+  const reads = [options.configPath, automationPath, options.stateDirectory, options.secretDirectory, ...options.protectedReadPaths,
     ...Object.values(config.posix?.artifacts ?? {}).map(pin => pin.path),
     ...(config.windows ? [config.windows.helper.path, config.windows.ownerPresence.path,
       ...(config.windows.viewer ? [config.windows.viewer.path] : [])] : []),
@@ -274,7 +288,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
     const live = lstatSync(journalPath);if (live.dev !== journalStat.dev || live.ino !== journalStat.ino || live.nlink !== 1) throw deny();
     const recovery = new LocalRecoveryStore({ stateDirectory: options.stateDirectory });
     const ownerPin = config.windows?.ownerPresence;const viewerPin = config.windows?.viewer;
-    const rawCore = await OwnerWorkspaceCore.create({ roots: config.roots, backend, recovery,
+    const rawCore = await OwnerWorkspaceCore.create({ roots: config.roots, backend, recovery, unattendedRootIds,
       journal: new LocalOperationRepository(db), redactor: options.redactor,
       ...(ownerPin ? { consent: new LocalOwnerConsent({ verifier: createWindowsOwnerConsentVerifier({ helperPath: ownerPin.path, helperSha256: ownerPin.sha256, expectedOwnerSid: ownerPin.expectedOwnerSid }) }) } : {}),
       ...(viewerPin ? { viewer: createWindowsProtectedLocalViewer({ helperPath: viewerPin.path, helperSha256: viewerPin.sha256, expectedOwnerSid: viewerPin.expectedOwnerSid }) } : {}),
