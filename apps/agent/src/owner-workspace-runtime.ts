@@ -237,7 +237,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
     }
     const nativeIdentities = new Map<string, string>();
     const backend = { invoke(id: string, operation: NativeWorkspaceOperation) {
-      const mutation = !['list', 'stat', 'read', 'treeStat'].includes(operation.operation);
+      const mutation = !['list', 'stat', 'read', 'readGitChunk', 'treeStat'].includes(operation.operation);
       const invoke = async () => {
         const client = (() => {
           try {
@@ -319,12 +319,46 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
             },
             read: async relative => {
               await verify();const relativePath = scoped(relative);
-              const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath });await verify();
-              if (reply.base64 === undefined || reply.kind !== 'file') throw deny();
-              // Bytes are obtained only through native containment. Mode is
-              // non-secret metadata; Windows repositories use core.filemode=false.
+              const entry = await backend.invoke(input.root, { operation: 'stat', path: relativePath });await verify();
+              if (entry.kind !== 'file' || typeof entry.bytes !== 'number' ||
+                  !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) throw deny();
+              let bytes: Buffer;
+              if (entry.bytes > 1024 * 1024) {
+                // Only Git's immutable pack-index objects have a bounded
+                // chunk transport. No ordinary file/credential limit changes.
+                if (root.kind !== 'windows-drive' ||
+                    !/(?:^|\\/)\\.git\\/objects\\/pack\\/pack-[0-9a-f]{40}\\.(?:pack|idx|rev)$/iu.test(relative) ||
+                    entry.bytes > 64 * 1024 * 1024 || !entry.identity) throw deny();
+                const parts: Buffer[] = [];
+                let stamp: string | undefined, received = 0;
+                for (let offset = 0; offset < entry.bytes; offset += 256 * 1024) {
+                  const length = Math.min(256 * 1024, entry.bytes - offset);
+                  const chunk = await backend.invoke(input.root, {
+                    operation: 'readGitChunk', path: relativePath, offset, length,
+                  });
+                  await verify();
+                  if (chunk.kind !== 'file' || chunk.identity !== entry.identity ||
+                      chunk.totalBytes !== entry.bytes || typeof chunk.gitStamp !== 'string' ||
+                      !/^\\d+:\\d+:\\d+:\\d+:\\d+$/u.test(chunk.gitStamp) ||
+                      (stamp !== undefined && chunk.gitStamp !== stamp) || typeof chunk.base64 !== 'string') throw deny();
+                  const decoded = Buffer.from(chunk.base64, 'base64');
+                  if (decoded.length !== length || decoded.toString('base64') !== chunk.base64) throw deny();
+                  stamp = chunk.gitStamp;received += decoded.length;parts.push(decoded);
+                }
+                if (received !== entry.bytes) throw deny();
+                const final = await backend.invoke(input.root, { operation: 'stat', path: relativePath });
+                await verify();
+                if (final.identity !== entry.identity || final.bytes !== entry.bytes) throw deny();
+                bytes = Buffer.concat(parts, received);
+              } else {
+                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath });await verify();
+                if (reply.base64 === undefined || reply.kind !== 'file' || reply.identity !== entry.identity) throw deny();
+                bytes = Buffer.from(reply.base64, 'base64');
+                if (bytes.length !== entry.bytes || bytes.toString('base64') !== reply.base64) throw deny();
+              }
+              // All bytes were admitted by the same native contained reader.
               const mode = root.kind === 'windows-drive' ? 0 : lstatSync(posix.join(root.wslPath, relativePath)).mode;
-              return { bytes: Buffer.from(reply.base64, 'base64'), executable: (mode & 0o111) !== 0 };
+              return { bytes, executable: (mode & 0o111) !== 0 };
             },
           },
         });
