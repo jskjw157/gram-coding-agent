@@ -127,6 +127,29 @@ class WindowsWorkspace(unittest.TestCase):
                                             rootVolume=self.root.stat().st_dev)
         return reply
 
+    def test_git_pack_chunk_is_bounded_and_native_identity_is_stable(self):
+        pack_dir = self.root / '.git' / 'objects' / 'pack'
+        pack_dir.mkdir(parents=True)
+        name = 'pack-' + ('a' * 40) + '.pack'
+        pack_path = pack_dir / name
+        contents = b'PACK' + bytes((i % 251 for i in range(1024 * 1024 + 8192 - 4)))
+        pack_path.write_bytes(contents)
+        relative = '.git/objects/pack/' + name
+        one = self.call('readGitChunk', path=relative, offset=0, length=262144)
+        self.assertTrue(one['ok'], one)
+        self.assertEqual(base64.b64decode(one['base64']), contents[:262144])
+        self.assertEqual(one['totalBytes'], len(contents))
+        two = self.call('readGitChunk', path=relative, offset=262144, length=262144)
+        self.assertTrue(two['ok'], two)
+        self.assertEqual(one['identity'], two['identity'])
+        self.assertEqual(one['gitStamp'], two['gitStamp'])
+        self.assertEqual(base64.b64decode(two['base64']), contents[262144:524288])
+        self.assertFalse(self.call('readGitChunk', path=relative, offset=0, length=262145)['ok'])
+        self.assertFalse(self.call('readGitChunk', path=relative, offset=len(contents), length=1)['ok'])
+        (self.root / 'secret.bin').write_bytes(contents)
+        self.assertFalse(self.call('readGitChunk', path='secret.bin', offset=0, length=1024)['ok'])
+        self.assertFalse(self.call('read', path=relative)['ok'])
+
     def test_real_hidden_binary_read_and_list(self):
         (self.root / ".env").write_bytes(b"SAFE=enabled\n")
         binary = b"\x00\x01\xff\x89PNG"
