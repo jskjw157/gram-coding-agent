@@ -31,7 +31,9 @@ describe('ego-browser MCP tool boundary', () => {
     expect(handler).toBeDefined();
     const result = await handler?.({ source: 'naver_best_viewed' }) as { content: { type: string; text: string }[] };
     expect(read).toHaveBeenCalledWith({ source: 'naver_best_viewed' });
-    expect(JSON.parse(result.content[0]!.text)).toEqual(view);
+    const text = result.content[0]?.text;
+    expect(text).toBeDefined();
+    expect(JSON.parse(text ?? '{}')).toEqual(view);
   });
 
   it('hides adapter failures and does not leak captured browser output', async () => {
