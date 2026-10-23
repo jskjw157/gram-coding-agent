@@ -83,7 +83,7 @@ export function parseEgoOutput(output: string): { url: string; snapshot: string;
   const lines = output.split(/\r?\n/u).filter(line => line.startsWith(MARKER));
   if (lines.length !== 1) throw new Error('Missing or ambiguous structured result');
   let parsed: unknown;
-  try { parsed = JSON.parse(lines[0]!.slice(MARKER.length)); }
+  try { parsed = JSON.parse((lines[0] ?? '').slice(MARKER.length)); }
   catch { throw new Error('Invalid structured result'); }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid result');
   const v = parsed as Record<string, unknown>;
