@@ -49,6 +49,7 @@ import { ordinaryExecutionAuthorization, ownedExecutionLease } from './ordinary-
 import { TrustedGitSpawner } from './trusted-git-spawner.js';
 import { createOwnerWorkspaceRuntime, type OwnerWorkspaceRuntime } from './owner-workspace-runtime.js';
 import { createLocalDeveloperRuntime } from './local-developer-runtime.js';
+import { createEgoPublicReader } from './ego-browser-readonly.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -451,6 +452,14 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
           return { id: Number(record.id), owner: identity.login, name: record.name, defaultBranch: record.default_branch };
         } },
       });
+      const egoMode = process.env.GRAM_AGENT_EGO_BROWSER_MODE;
+      if (egoMode !== undefined && !['disabled', 'windows', 'native'].includes(egoMode)) {
+        throw new Error('Invalid trusted ego browser mode');
+      }
+      // Explicit administrator opt-in. WSL2 invokes a fixed Windows host adapter;
+      // native mode is for an agent and ego(lite) installed on the same OS.
+      const egoBrowser = egoMode === 'windows' || egoMode === 'native'
+        ? createEgoPublicReader({ mode: egoMode }) : undefined;
       const mcp = await createMcpHttpServer({
         host,
         port,
@@ -463,6 +472,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         approvals: approvalTools,
         ...(owner === undefined ? {} : { ownerWorkspace: owner.core }),
         ...(localDeveloper === undefined ? {} : { localDeveloper }),
+        ...(egoBrowser === undefined ? {} : { egoBrowser }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
