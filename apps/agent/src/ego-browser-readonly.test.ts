@@ -70,7 +70,7 @@ describe('HAAR fixed-source ego(lite) host adapter', () => {
     const native = buildTrustedEgoInvocation(script, 'native');
     expect(native).toEqual({ executable: 'ego-browser', args: ['nodejs'], stdin: script });
     const windows = buildTrustedEgoInvocation(script, 'windows');
-    expect(windows.executable).toBe('powershell.exe');
+    expect(windows.executable).toBe('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe');
     expect(windows.args.slice(0, 4)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand']);
     const hostScript = Buffer.from(windows.args[4] ?? '', 'base64').toString('utf16le');
     expect(hostScript).toContain("Join-Path $env:ProgramFiles 'Citro Labs\\ego lite\\Application'");
