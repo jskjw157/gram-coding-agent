@@ -69,7 +69,7 @@ describe('HAAR fixed-source ego(lite) host adapter', () => {
     const windows = buildTrustedEgoInvocation(script, 'windows');
     expect(windows.executable).toBe('powershell.exe');
     expect(windows.args.slice(0, 4)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand']);
-    const hostScript = Buffer.from(windows.args[4]!, 'base64').toString('utf16le');
+    const hostScript = Buffer.from(windows.args[4] ?? '', 'base64').toString('utf16le');
     expect(hostScript).toContain('Get-Command ego-browser -CommandType Application');
     expect(hostScript).toContain('nodejs');
     expect(hostScript).not.toContain('Invoke-Expression');
