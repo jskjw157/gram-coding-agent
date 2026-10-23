@@ -149,7 +149,7 @@ class StateMachineBackend {
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0).reverse()) close(); });
 
-async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withViewer = true) {
+async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withViewer = true, unattendedRootIds?: readonly string[]) {
   const directory = mkdtempSync(join(tmpdir(), 'owner-workspace-core-'));
   chmodSync(directory, 0o700);
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -179,12 +179,55 @@ async function fixture(approval: 'allow' | 'deny' | 'absent' = 'allow', withView
       readonly: { label: 'Read only', kind: 'wsl-directory', wslPath: '/readonly', writable: false },
     },
     backend, recovery, journal, ...(consent === undefined ? {} : { consent }), redactor: new SecretRedactor(),
+    ...(unattendedRootIds === undefined ? {} : { unattendedRootIds }),
     ...(withViewer ? { viewer: { show: async (input: { content: Buffer }) => { views.push(input.content.toString());return { status: approval === 'allow' ? 'DISPLAYED' as const : 'DENIED' as const }; } } } : {}),
   });
   return { core, backend, journal, recovery, db, directory, challenges, views };
 }
 
 describe('OwnerWorkspaceCore state-machine-only coordination', () => {
+  it('uses trusted root policy for sensitive writes, destructive operations and exact binary export without a verifier', async () => {
+    const f = await fixture('deny', false, ['main']);
+    const written = await f.core.write({ root: 'main', path: '.env', expectedVersion: null, content: 'PASSWORD=policy-fixture' });
+    expect(written.state).toBe('APPLIED');
+    const binary = await f.core.readBinary({ root: 'main', path: '.env', expectedVersion: present(written.version) });
+    expect(binary.authorizationSource).toBe('trusted-local-policy');
+    expect(Buffer.from(binary.base64, 'base64').toString()).toBe('PASSWORD=policy-fixture');
+    const moved = await f.core.move({ root: 'main', path: '.env', destination: 'moved.env', expectedVersion: present(written.version) });
+    expect(moved.state).toBe('APPLIED');
+    const trashed = await f.core.trash({ root: 'main', path: 'moved.env', expectedVersion: present(moved.version) });
+    expect(trashed.state).toBe('APPLIED');
+    const restored = await f.core.restore({ root: 'main', path: 'moved.env', recoveryId: present(trashed.recoveryId), expectedVersion: null });
+    expect(restored.state).toBe('APPLIED');expect(f.challenges).toEqual([]);
+    await expect(f.core.reveal({ root: 'main', path: 'moved.env', expectedVersion: present(restored.version) })).rejects.toThrow();
+    expect(f.views).toEqual([]);
+    const rows = JSON.stringify(f.db.prepare('SELECT * FROM local_workspace_operations').all());
+    expect(rows).not.toContain('policy-fixture');expect(rows).not.toContain(binary.base64);
+  });
+  it('copies trusted policy roots and keeps other roots on the Hello path', async () => {
+    const roots = ['main'];const f = await fixture('deny', false, roots);roots.push('second');
+    expect((await f.core.write({ root: 'main', path: '.env', expectedVersion: null, content: 'PASSWORD=main-fixture' })).state).toBe('APPLIED');
+    expect((await f.core.write({ root: 'second', path: '.env', expectedVersion: null, content: 'PASSWORD=second-fixture' })).state).toBe('DENIED');
+    expect(f.challenges.map(c => c.target.rootId)).toEqual(['second']);
+  });
+  it('revalidates policy-authorized binary bytes and identities before export', async () => {
+    const f = await fixture('absent', false, ['main']);f.backend.seed('file', 'before');
+    const initial = await f.core.stat({ root: 'main', path: 'file' });
+    const invoke = f.backend.invoke.bind(f.backend);let reads = 0;
+    f.backend.invoke = async (root, operation) => {
+      if (operation.operation === 'read' && ++reads === 2) f.backend.seed('file', 'changed');
+      return invoke(root, operation);
+    };
+    await expect(f.core.readBinary({ root: 'main', path: 'file', expectedVersion: present(initial.version) })).rejects.toThrow();
+    expect(reads).toBe(2);expect(f.challenges).toEqual([]);
+  });
+  it('rejects invalid trusted root lists and untrusted request policy fields', async () => {
+    for (const roots of [['*'], ['missing'], ['main', 'main']]) await expect(fixture('absent', false, roots)).rejects.toThrow();
+    const f = await fixture('absent', false, ['main']);f.backend.seed('file', 'ordinary');
+    const metadata = await f.core.stat({ root: 'main', path: 'file' });
+    await expect(f.core.readBinary({ root: 'main', path: 'file', expectedVersion: present(metadata.version),
+      unattendedRootIds: ['main'] } as Parameters<typeof f.core.readBinary>[0])).rejects.toThrow();
+  });
   it.each(['\r', '\u2028', '\u2029'])('denies unapproved credentials after an ordinary line with separator %#', async ending => {
     const f = await fixture('absent', false);
     const result = await f.core.write({ root: 'main', path: '.env', expectedVersion: null,
@@ -324,6 +367,7 @@ describe('OwnerWorkspaceCore state-machine-only coordination', () => {
     const view = await f.core.stat({ root: 'main', path: 'image.bin' });
     const exported = await f.core.readBinary({ root: 'main', path: 'image.bin', expectedVersion: present(view.version) });
     expect(exported.base64).toBe('AP8BBw==');
+    expect(exported.authorizationSource).toBe('windows-hello');
     expect(f.challenges.at(-1)?.target.action).toBe('binary-export');
     f.backend.seed('image.bin', 'changed');
     await expect(f.core.readBinary({ root: 'main', path: 'image.bin', expectedVersion: present(view.version) })).rejects.toThrow();

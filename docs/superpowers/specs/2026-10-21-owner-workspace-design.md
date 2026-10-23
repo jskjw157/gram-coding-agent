@@ -66,3 +66,34 @@ Require fresh full lint/typecheck/unit/E2E/security/build/native checks on the e
 Actual Windows Hello approval/cancellation, viewer rendering/capture behavior, external ChatGPT discovery/calls and deployed production composition remain unverified for this candidate. Before upgrade, verify online backups/restoration, live Tasks/locks/processes, no active work, retained worktrees and rollback evidence. Deploy exact reviewed source/dist/runtime identities through the guarded procedure, then verify health, fixture recovery and private-path denial. Do not close #228 from code or historical CI alone.
 
 Historical references remain PR #227 `1723856d8baaddebbf9fb08c005c87be26bc3c25` and recorded production main `85c7c6c6f7ff00868160ef195180b98405159b8c`. Diagnostics remain under `C:\source\gram-agent-diagnostics\issue228\security-discovery`. Reported Windows owner-presence availability is not a completed human ceremony.
+
+### 2026-10-23 owner-authorized unattended roots
+
+The owner explicitly requested removal of repeated application approval prompts
+for already permitted folders. A separate, optional root-owned sibling of the
+trusted workspace configuration, `owner-workspace-automation.json`, may grant
+standing application authority to configured root IDs:
+
+```json
+{"version":1,"unattendedRootIds":["c","home"]}
+```
+
+This is an explicit change to the application authorization policy described
+above, not Windows Hello verification. With this policy, credential writes,
+binary export and destructive operations in the named roots do not request
+per-operation Windows Hello. Binary responses identify `trusted-local-policy`
+authorization and can disclose complete project bytes, including credentials,
+to the remote caller. Normal text screening remains enabled and does not edit
+the source file. Protected reveal still requires the separately installed viewer.
+
+The policy is loaded once at startup through the same protected, bounded,
+held-file configuration checks. Missing policy retains the fresh-Hello default;
+an invalid or unsafe policy prevents startup. Only configured root IDs are valid.
+Remote requests and environment variables cannot grant standing authority.
+Changing the policy requires trusted local administration and a safe restart.
+
+Agent-private credentials and state, controller/configuration mutation guards,
+root and file identity checks, byte/version rechecks, recovery journaling,
+active-work protections and M5 command isolation remain mandatory. Standing
+authority never produces a native verification result or a reusable Hello grant.
+Historical physical-presence evidence is not evidence of future user presence.

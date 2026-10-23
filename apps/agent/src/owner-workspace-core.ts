@@ -30,6 +30,8 @@ export interface OwnerWorkspaceOptions {
   recovery: LocalRecoveryStore;
   journal: LocalOperationRepository;
   consent?: LocalOwnerConsent;
+  /** Trusted startup composition only; never supplied by an operation request. */
+  unattendedRootIds?: readonly string[];
   viewer?: WindowsProtectedLocalViewer;
   redactor: SecretRedactor;
 }
@@ -136,13 +138,18 @@ export class OwnerWorkspaceCore {
   private readonly configured: Record<string, Readonly<OwnerWorkspaceRoot>>;
   private readonly identities = new Map<string, string>();
   private readonly cursors = new Map<string, SearchState>();
+  private readonly unattendedRootIds: ReadonlySet<string>;
 
   private constructor(private readonly options: OwnerWorkspaceOptions) {
     this.configured = Object.fromEntries(Object.entries(options.roots)
       .map(([id, root]) => [id, Object.freeze({ ...root })]));
+    this.unattendedRootIds = new Set(options.unattendedRootIds ?? []);
   }
 
   static async create(options: OwnerWorkspaceOptions): Promise<OwnerWorkspaceCore> {
+    const unattended = options.unattendedRootIds ?? [];
+    if (!Array.isArray(unattended) || unattended.length > 26 || new Set(unattended).size !== unattended.length ||
+        unattended.some(id => typeof id !== 'string' || !Object.hasOwn(options.roots, id))) throw denied();
     const entries = Object.entries(options.roots);
     if (!entries.length || entries.length > 26) throw denied();
     for (const [id, root] of entries) {
@@ -482,7 +489,6 @@ export class OwnerWorkspaceCore {
     const sensitive = old?.sensitive || source?.snapshot.sensitive ||
       screened === null || screenLocalText(screened, this.options.redactor).masked;
     if (!sensitive) return;
-    if (!this.options.consent) throw denied();
     const subject = source?.target ?? target;
     const preimage = source?.snapshot ?? old;
     const operation: LocalOwnerOperation = {
@@ -494,8 +500,9 @@ export class OwnerWorkspaceCore {
       destination: source ? target.path : null,
       destinationRootIdentity: source ? this.rootIdentity(target.root) : null,
     };
-    const grant = await this.options.consent.request(operation);
-    if (!grant) throw denied();
+    const unattended = this.unattendedRootIds.has(subject.root) && this.unattendedRootIds.has(target.root);
+    const grant = unattended ? undefined : await this.options.consent?.request(operation);
+    if (!unattended && !grant) throw denied();
     if (preimage) {
       const live = await this.snapshot(subject);
       if (live.identity !== preimage.identity || !live.bytes.equals(preimage.bytes)) throw denied();
@@ -503,7 +510,7 @@ export class OwnerWorkspaceCore {
       const live = await this.invoke(target.root, { operation: 'stat', path: '.' });
       if (live.kind !== 'directory' || live.identity !== this.identities.get(target.root)) throw denied();
     }
-    if (!this.options.consent.consume(grant.capability, operation)) throw denied();
+    if (grant && !this.options.consent?.consume(grant.capability, operation)) throw denied();
   }
 
   private preview(old: Snapshot | null, bytes: Buffer): MutationResult['preview'] {
@@ -548,7 +555,7 @@ export class OwnerWorkspaceCore {
     this.target(input);expected(input.expectedVersion);
     return this.observe(input, 'binary-read', { path: input.path, expectedVersion: input.expectedVersion }, async () => {
       const snapshot = await this.snapshot(input);
-      if (snapshot.version !== input.expectedVersion || !this.options.consent) throw denied();
+      if (snapshot.version !== input.expectedVersion) throw denied();
       const operation: LocalOwnerOperation = {
         taskId: randomUUID(), action: 'binary-export', rootId: input.root,
         rootIdentity: this.rootIdentity(input.root), path: input.path,
@@ -556,13 +563,15 @@ export class OwnerWorkspaceCore {
         preimageDigest: snapshot.version, postimageDigest: null,
         destination: null, destinationRootIdentity: null,
       };
-      const grant = await this.options.consent.request(operation);
-      if (!grant) throw denied();
+      const unattended = this.unattendedRootIds.has(input.root);
+      const grant = unattended ? undefined : await this.options.consent?.request(operation);
+      if (!unattended && !grant) throw denied();
       const current = await this.snapshot(input);
-      if (current.identity !== snapshot.identity || !current.bytes.equals(snapshot.bytes) ||
-          !this.options.consent.consume(grant.capability, operation)) throw denied();
+      if (current.identity !== snapshot.identity || current.version !== snapshot.version || !current.bytes.equals(snapshot.bytes) ||
+          (grant && !this.options.consent?.consume(grant.capability, operation))) throw denied();
       return { base64: snapshot.bytes.toString('base64'), bytes: snapshot.bytes.length,
-        version: snapshot.version, versionKind: VERSION_KIND, approvedSnapshot: true };
+        version: snapshot.version, versionKind: VERSION_KIND, approvedSnapshot: true,
+        authorizationSource: unattended ? 'trusted-local-policy' as const : 'windows-hello' as const };
     });
   }
 
@@ -685,18 +694,18 @@ export class OwnerWorkspaceCore {
 
   private async authorizeMoving(id: string, input: Target, snapshot: MovingSnapshot, destination?: string, live = true, required = false): Promise<void> {
     if (!required && snapshot.kind === 'file' && !snapshot.snapshot.sensitive) return;
-    if (!this.options.consent) throw denied();
     const operation: LocalOwnerOperation = { taskId: id, action: 'destructive', rootId: input.root,
       rootIdentity: this.rootIdentity(input.root), path: input.path, fileIdentity: snapshot.identity,
       targetState: 'EXISTING', preimageDigest: snapshot.version, postimageDigest: null,
       destination: destination ?? null, destinationRootIdentity: destination ? this.rootIdentity(input.root) : null };
-    const grant = await this.options.consent.request(operation);
-    if (!grant) throw denied();
+    const unattended = this.unattendedRootIds.has(input.root);
+    const grant = unattended ? undefined : await this.options.consent?.request(operation);
+    if (!unattended && !grant) throw denied();
     if (live) {
       const current = await this.movingSnapshot(input);
       if (current.identity !== snapshot.identity || current.version !== snapshot.version) throw denied();
     }
-    if (!this.options.consent.consume(grant.capability, operation)) throw denied();
+    if (grant && !this.options.consent?.consume(grant.capability, operation)) throw denied();
   }
 
   async move(input: CopyInput): Promise<MutationResult> {

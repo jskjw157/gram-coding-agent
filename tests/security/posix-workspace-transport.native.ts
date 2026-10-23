@@ -1,9 +1,53 @@
 import { expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync, linkSync, symlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { assertOriginalMountTopology, FixedPosixWorkspaceTransport, PosixWorkspaceClient } from '../../apps/agent/src/posix-workspace-transport.js';
+import { LocalOperationRepository, openDatabase } from '../../packages/persistence/src/index.js';
+import { SecretRedactor } from '../../packages/secrets/src/index.js';
+import { LocalRecoveryStore } from '../../apps/agent/src/local-recovery-store.js';
+import { OwnerWorkspaceCore } from '../../apps/agent/src/owner-workspace-core.js';
+
+it('keeps real native private-path, alias, CAS and controller-write denials under trusted local policy', async () => {
+  const manifest = process.env.GRAM_POSIX_NATIVE_ARTIFACTS;
+  if (!manifest) throw new Error('missing native fixture artifact manifest');
+  const artifacts = JSON.parse(readFileSync(manifest, 'utf8')) as ConstructorParameters<typeof FixedPosixWorkspaceTransport>[0]['artifacts'];
+  const fixture = mkdtempSync(join(homedir(), 'gram-owner-policy-native-'));
+  const db = openDatabase(':memory:');
+  try {
+    const rootPath = join(fixture, 'root'), recoveryBase = join(fixture, 'captures'), vault = join(fixture, 'vault'), state = join(fixture, 'state');
+    for (const path of [rootPath, recoveryBase, vault, state]) mkdirSync(path, { mode: 0o700 });
+    mkdirSync(join(rootPath, 'controller'));
+    writeFileSync(join(rootPath, 'private'), 'synthetic-private-canary');
+    linkSync(join(rootPath, 'private'), join(rootPath, 'hardlink'));
+    symlinkSync(join(rootPath, 'private'), join(rootPath, 'symlink'));
+    writeFileSync(join(rootPath, 'file'), 'original');
+    const st = statSync(vault, { bigint: true });
+    const transport = new FixedPosixWorkspaceTransport({ rootPath, recoveryBase,
+      recoveryRoot: { path: vault, identity: `${st.dev}:${st.ino}` }, artifacts });
+    const backend = new PosixWorkspaceClient({ rootId: 'main', rootPath, writable: true,
+      protectedPaths: ['private'], protectedMutationPaths: ['controller'], transport });
+    const core = await OwnerWorkspaceCore.create({ roots: { main: { label: 'Fixture', kind: 'wsl-directory', wslPath: rootPath, writable: true } },
+      backend, recovery: new LocalRecoveryStore({ stateDirectory: state }), journal: new LocalOperationRepository(db),
+      redactor: new SecretRedactor(), unattendedRootIds: ['main'] });
+    const before = await core.stat({ root: 'main', path: 'file' });
+    if (!before.version) throw new Error('missing fixture version');
+    const exported = await core.readBinary({ root: 'main', path: 'file', expectedVersion: before.version });
+    expect(exported.authorizationSource).toBe('trusted-local-policy');
+    expect(Buffer.from(exported.base64, 'base64').toString()).toBe('original');
+    const changed = await core.write({ root: 'main', path: 'file', expectedVersion: before.version, content: 'PASSWORD=synthetic-policy-canary' });
+    expect(changed.state).toBe('APPLIED');
+    expect((await core.write({ root: 'main', path: 'file', expectedVersion: before.version, content: 'stale' })).state).toBe('DENIED');
+    for (const path of ['private', 'hardlink', 'symlink']) {
+      await expect(core.read({ root: 'main', path })).rejects.toThrow();
+      await expect(core.readBinary({ root: 'main', path, expectedVersion: before.version })).rejects.toThrow();
+    }
+    expect((await core.write({ root: 'main', path: 'controller/file', expectedVersion: null, content: 'PASSWORD=blocked' })).state).toBe('DENIED');
+    await expect(core.reveal({ root: 'main', path: 'file', expectedVersion: String(changed.version) })).rejects.toThrow();
+    expect(JSON.stringify(db.prepare('SELECT * FROM local_workspace_operations').all())).not.toContain('synthetic-policy-canary');
+  } finally { db.close();rmSync(fixture, { recursive: true, force: true }); }
+}, 60000);
 
 it('rejects a real whole-filesystem root bind alias even when mountinfo source root is slash', () => {
   const manifest = process.env.GRAM_POSIX_NATIVE_ARTIFACTS;
