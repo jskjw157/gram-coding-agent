@@ -3,6 +3,7 @@ import { registerLocalProjectTools, type LocalProjectToolsPort } from './tools/l
 import { registerLocalFsTools, type LocalFsToolsPort } from './tools/local-fs-tools.js';
 import { registerOwnerWorkspaceTools, type OwnerWorkspaceToolsPort } from './tools/owner-workspace-tools.js';
 import { registerLocalDeveloperTools, type LocalDeveloperToolsPort } from './tools/local-developer-tools.js';
+import { registerEgoBrowserTools, type EgoBrowserToolsPort } from './tools/ego-browser-tools.js';
 import { registerCodingCapabilityTools, type CodingCapabilityPort } from './tools/coding-capability-tools.js';
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -49,6 +50,7 @@ export interface CreateMcpHttpServerOptions {
   localFs?: LocalFsToolsPort;
   ownerWorkspace?: OwnerWorkspaceToolsPort;
   localDeveloper?: LocalDeveloperToolsPort;
+  egoBrowser?: EgoBrowserToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -117,6 +119,7 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
     if (options.localFs !== undefined) registerLocalFsTools(server, options.localFs);
     if (options.ownerWorkspace !== undefined) registerOwnerWorkspaceTools(server, options.ownerWorkspace);
     if (options.localDeveloper !== undefined) registerLocalDeveloperTools(server, options.localDeveloper);
+    if (options.egoBrowser !== undefined) registerEgoBrowserTools(server, options.egoBrowser);
 
     return server;
   });
