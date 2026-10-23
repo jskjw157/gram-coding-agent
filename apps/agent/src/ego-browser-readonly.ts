@@ -116,8 +116,59 @@ export function buildTrustedEgoInvocation(script: string, mode: HostMode): EgoIn
     "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
     "$OutputEncoding = [Text.UTF8Encoding]::new($false)",
     "$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encodedScript + "'))",
-    "$application = Get-Command ego-browser -CommandType Application -ErrorAction Stop",
-    '$payload | & ($application.Source) nodejs',
+    "$installRoot = Join-Path $env:ProgramFiles 'Citro Labs\\ego lite\\Application'",
+    "$versions = @(Get-ChildItem -LiteralPath $installRoot -Directory -ErrorAction Stop | Where-Object { $_.Name -match '^\\d+\\.\\d+\\.\\d+\\.\\d+
+    'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
+  ].join('\r\n');
+  return { executable: 'powershell.exe',
+    args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')] };
+}
+
+/** Shell:false, bounded output, time limit, secret-safe failure messages. */
+async function executeTrustedEgo(script: string, mode: HostMode): Promise<string> {
+  const invocation = buildTrustedEgoInvocation(script, mode);
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let stdout = '';
+    let byteCount = 0;
+    const env: NodeJS.ProcessEnv = {};
+    for (const name of ['PATH', 'HOME', 'USERPROFILE', 'SystemRoot', 'WINDIR', 'TMP', 'TEMP', 'LOCALAPPDATA', 'APPDATA']) {
+      if (process.env[name] !== undefined) env[name] = process.env[name];
+    }
+    const child = spawn(invocation.executable, invocation.args, {
+      shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env,
+    });
+    const finish = (error?: Error, output?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error !== undefined) reject(error);
+      else resolve(output ?? '');
+    };
+    const timeout = setTimeout(() => {
+      child.kill();
+      finish(new Error('Ego host timed out'));
+    }, TIMEOUT_MS);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      byteCount += Buffer.byteLength(chunk);
+      if (byteCount > MAX_OUTPUT_BYTES) {
+        child.kill();
+        finish(new Error('Ego host output exceeded bound'));
+      } else stdout += chunk;
+    });
+    child.stderr.on('data', () => {}); // Drain but never log potentially sensitive stderr.
+    child.once('error', () => finish(new Error('Ego host process unavailable')));
+    child.once('close', code => code === 0 ? finish(undefined, stdout) : finish(new Error('Ego host command failed')));
+    child.stdin.on('error', () => {});
+    child.stdin.end(invocation.stdin ?? '');
+  });
+}
+ } | Sort-Object -Property @{ Expression = { [version]$_.Name }; Descending = $true })",
+    "$browser = $null",
+    "foreach ($version in $versions) { $candidate = Join-Path $version.FullName 'ego-browser.exe'; if ([IO.File]::Exists($candidate) -and -not (([IO.File]::GetAttributes($candidate) -band [IO.FileAttributes]::ReparsePoint) -eq [IO.FileAttributes]::ReparsePoint)) { $browser = $candidate; break } }",
+    "if ($null -eq $browser) { throw 'Ego browser executable unavailable in protected installation directory' }",
+    '$payload | & $browser nodejs',
     'if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',
   ].join('\r\n');
   return { executable: 'powershell.exe',
