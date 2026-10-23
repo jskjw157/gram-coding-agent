@@ -69,6 +69,22 @@ export function registerOwnerWorkspaceTools(server: McpServer, port: OwnerWorksp
   server.registerTool(names.list, { description: descriptions.list, inputSchema: OwnerWorkspaceInputs.list }, async input => call(() => port.list(input)));
   server.registerTool(names.stat, { description: descriptions.stat, inputSchema: OwnerWorkspaceInputs.stat }, async input => call(() => port.stat(input)));
   server.registerTool(names.read, { description: descriptions.read, inputSchema: OwnerWorkspaceInputs.read }, async input => call(() => port.read(input)));
+  // Separate neutral-shape response for connectors which reserve or consume
+  // an inner "content" key. Preserve the original read API for older clients.
+  // Only screened ordinary text can reach this endpoint; native owner-reveal
+  // remains a separate, local-only explicit consent operation.
+  server.registerTool('local_fs_read_lines', {
+    description: 'Read screened UTF-8 source lines as a bounded lines array; equivalent authority to local_fs_read.',
+    inputSchema: OwnerWorkspaceInputs.read,
+  }, async input => call(async () => {
+    const result = await port.read(input);
+    if (!result || typeof result !== 'object' || Array.isArray(result) ||
+        !('content' in result) || typeof result.content !== 'string') {
+      throw new Error('Invalid screened read result');
+    }
+    const { content, ...metadata } = result;
+    return { ...metadata, lines: content.split('\n') };
+  }));
   server.registerTool(names.search, { description: descriptions.search, inputSchema: OwnerWorkspaceInputs.search }, async input => call(() => port.search(input)));
   server.registerTool(names.write, { description: descriptions.write, inputSchema: OwnerWorkspaceInputs.write }, async input => call(() => port.write(input)));
   server.registerTool(names.patch, { description: descriptions.patch, inputSchema: OwnerWorkspaceInputs.patch }, async input => call(() => port.patch(input)));
