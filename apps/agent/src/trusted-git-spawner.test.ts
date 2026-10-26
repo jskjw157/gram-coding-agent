@@ -213,9 +213,9 @@ describe('trusted application Git boundary', () => {
     git(['config', 'branch.explain-orca-gpt-tab.base', 'refs/remotes/origin/dev']);
     git(['config', 'push.autoSetupRemote', 'true']);
     await writeFile(path.join(base, 'counter.ts'), 'export const n = 9;');
-    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\\0');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
     expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 9;');
-    expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\\0');
+    expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\0');
     await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
   });
   it('does not extend application Git or GitHub registration authority for VS Code metadata', async () => {
