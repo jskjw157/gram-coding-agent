@@ -442,6 +442,20 @@ function validateConfig(output: string, url: string, readOnlyLocal = false): voi
     if (/^branch\.[a-z0-9_/-]+\.remote$/.test(key) && value === 'origin') continue;
     if (/^branch\.[a-z0-9_/-]+\.merge$/.test(key) && value.startsWith('refs/heads/') && branch(value.slice(11)))
       continue;
+    if (readOnlyLocal) {
+      // Windows VS Code and recent Git create these inert tracking hints in
+      // ordinary local repositories. They are never copied to the sanitized
+      // Git config, so they cannot choose a remote, command or executable.
+      // Keep the application Git and GitHub registration paths strict.
+      const localBranchKey = /^branch\.[a-z0-9_/-]+\.(?:vscode-merge-base|base)$/u;
+      if (localBranchKey.test(key) &&
+          ((value.startsWith('origin/') && branch(value.slice('origin/'.length))) ||
+           (value.startsWith('refs/heads/') && branch(value.slice('refs/heads/'.length))) ||
+           (value.startsWith('refs/remotes/origin/') && branch(value.slice('refs/remotes/origin/'.length)))))
+        continue;
+      if (key === 'push.autosetupremote' && (value === 'true' || value === 'false'))
+        continue;
+    }
     reject();
   }
   if (readOnlyLocal ? originCount > 1 : originCount !== 1) reject();

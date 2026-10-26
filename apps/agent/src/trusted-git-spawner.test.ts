@@ -201,6 +201,40 @@ describe('trusted application Git boundary', () => {
     expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 9;');
     await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
   });
+  it('reads Windows mc-web GitLab projects with inert VS Code branch and push metadata', async () => {
+    git(['remote', 'set-url', 'origin', 'https://gitlab.example.invalid/project/mc-web.git']);
+    git(['config', 'core.filemode', 'false']);
+    git(['config', 'core.ignorecase', 'true']);
+    git(['config', 'core.symlinks', 'false']);
+    git(['config', 'branch.dev.remote', 'origin']);
+    git(['config', 'branch.dev.merge', 'refs/heads/dev']);
+    git(['config', 'branch.dev.vscode-merge-base', 'origin/dev']);
+    git(['config', 'branch.jiwon/aicc-new-conversation-20261022.base', 'refs/heads/feature/MAMF-2247']);
+    git(['config', 'branch.explain-orca-gpt-tab.base', 'refs/remotes/origin/dev']);
+    git(['config', 'push.autoSetupRemote', 'true']);
+    await writeFile(path.join(base, 'counter.ts'), 'export const n = 9;');
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toContain(' M counter.ts\0');
+    expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 9;');
+    expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\0');
+    await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+  });
+  it('does not extend application Git or GitHub registration authority for VS Code metadata', async () => {
+    git(['config', 'branch.dev.vscode-merge-base', 'origin/dev']);
+    git(['config', 'push.autoSetupRemote', 'true']);
+    expect((await readTrustedLocalGit(base, { operation: 'status' })).stdout).toBe('');
+    await expect(readTrustedLocalGit(base, { operation: 'identity' })).rejects.toThrow();
+    await expect(spawner.spawn(request(['status', '--porcelain=v1', '-z']))).rejects.toThrow();
+  });
+  it.each([
+    ['branch.dev.vscode-merge-base', '../../escape'],
+    ['branch.dev.vscode-merge-base', 'origin/dev;include.path=/tmp/exploit'],
+    ['branch.dev.base', '/tmp/config'],
+    ['branch.dev.base', 'refs/heads/feature/../../escape'],
+    ['push.autoSetupRemote', 'maybe'],
+  ])('rejects malformed inert metadata %s=%s even for read-only snapshots', async (key, value) => {
+    git(['config', key, value]);
+    await expect(readTrustedLocalGit(base, { operation: 'status' })).rejects.toThrow();
+  });
   it('still rejects executable Git config in a non-GitHub local project', async () => {
     git(['remote', 'set-url', 'origin', 'git@gitlab.internal:project/mc-web.git']);
     git(['config', 'core.hooksPath', '/tmp/unsafe']);
