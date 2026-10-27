@@ -163,3 +163,20 @@ it('serializes Git pack reads so a larger ordinary-file worker pool cannot multi
   const snapshot = await createLocalGitSnapshot(f.source, join(f.directory, 'snapshots'));
   expect(maximum).toBe(1);await snapshot.close();
 });
+
+it('captures only Git metadata for commands that cannot read the worktree, without reading source or generated output', async () => {
+  const f = fixture();f.files.set('generated/huge.bin', Buffer.alloc(1024 * 1024 + 1));
+  const read = f.source.read;const reads: string[] = [];
+  f.source.read = async path => {reads.push(path);if (!path.startsWith('.git/')) throw new Error('worktree read denied');return read(path);};
+  const snapshot = await createLocalGitSnapshot(f.source, join(f.directory, 'snapshots'), { includeWorktree: false });
+  try {
+    expect(reads.every(path => path.startsWith('.git/'))).toBe(true);
+    expect(readFileSync(join(snapshot.workspace, '.git/HEAD'), 'utf8')).toContain('refs/heads/main');
+    expect(() => readFileSync(join(snapshot.workspace, 'file.ts'))).toThrow();
+    expect(snapshot.skippedUntrackedDirectories).toEqual([]);
+  } finally {await snapshot.close();}
+});
+it('still denies forbidden alternate object stores during metadata-only capture', async () => {
+  const f = fixture();f.files.set('.git/objects/info/alternates', '/outside');
+  await expect(createLocalGitSnapshot(f.source, join(f.directory, 'snapshots'), { includeWorktree: false })).rejects.toThrow();
+});

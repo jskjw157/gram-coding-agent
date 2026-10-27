@@ -145,6 +145,18 @@ void strict(const JsonObject& request,const std::set<std::wstring>& extra) {
   }
 }
 
+
+std::vector<std::wstring> projectGuard(const JsonObject& request,const std::vector<std::wstring>& parts,const std::wstring& op) {
+  require(request.HasKey(L"projectPath")==request.HasKey(L"expectedProjectIdentity"));
+  if(!request.HasKey(L"projectPath")) return {};
+  auto expected=string(request,L"expectedProjectIdentity");auto colon=expected.find(L':');
+  require(expected.size()<=31&&colon!=std::wstring::npos&&colon>0&&colon+1<expected.size());
+  for(size_t i=0;i<expected.size();i++) require(i==colon||(expected[i]>=L'0'&&expected[i]<=L'9'));
+  auto project=segments(string(request,L"projectPath"),true);require(project.size()<=parts.size());
+  for(size_t i=0;i<project.size();i++) require(lower(project[i])==lower(parts[i]));
+  require(project.size()!=parts.size()||op==L"stat"||op==L"list");return project;
+}
+
 class Root {
   std::vector<std::unique_ptr<Handle>> pins;
   std::vector<std::wstring> protectedPaths;
@@ -287,14 +299,25 @@ void privateVault(HANDLE h) {
 
 JsonObject perform(const JsonObject& request) {
   auto op=string(request,L"operation");auto path=string(request,L"path");
-  if(op==L"list"||op==L"stat"||op==L"read"||op==L"treeStat") strict(request,{});
-  else if(op==L"readGitChunk") strict(request,{L"offset",L"length"});
+  if(op==L"list"||op==L"stat"||op==L"read") strict(request,{L"projectPath",L"expectedProjectIdentity"});
+  else if(op==L"treeStat") strict(request,{});
+  else if(op==L"readGitChunk") strict(request,{L"offset",L"length",L"projectPath",L"expectedProjectIdentity"});
   else if(op==L"mkdir") strict(request,{L"expectedRootIdentity"});
   else if(op==L"write") strict(request,{L"expectedBase64",L"base64",L"expectedRootIdentity",L"expectedFileIdentity"});
   else if(op==L"move"||op==L"trash"||op==L"restore") strict(request,{L"destination",L"expectedBase64",L"expectedRootIdentity",L"expectedFileIdentity",L"expectedKind",L"expectedVersion",L"recoveryRoot",L"recoveryId",L"expectedRecoveryRootIdentity"});
   else deny();
   Root root(request);auto parts=segments(path,op==L"list"||op==L"stat");auto parents=root.parents(parts);
   HANDLE parent=parents.empty()?root.handle():parents.back()->value;
+  auto project=projectGuard(request,parts,op);
+  std::unique_ptr<Handle> projectLeaf;
+  if(request.HasKey(L"projectPath")) {
+    HANDLE selected=root.handle();
+    if(!project.empty()) {
+      if(project.size()<parts.size()) selected=parents[project.size()-1]->value;
+      else {projectLeaf=relativeOpen(parent,parts.back(),true);selected=projectLeaf->value;}
+    }
+    root.check(selected);require(identity(selected)==string(request,L"expectedProjectIdentity"));
+  }
   auto out=success();out.Insert(L"rootIdentity",JsonValue::CreateStringValue(identity(root.handle())));
   if(op==L"list") {
     auto directory=parts.empty()?nullptr:relativeOpen(parent,parts.back(),true);
@@ -433,6 +456,39 @@ JsonObject perform(const JsonObject& request) {
   }
   transaction.commit();return out;
 }
+JsonObject readBatch(const JsonObject& request) {
+  strict(request,{L"items",L"projectPath",L"expectedProjectIdentity"});require(string(request,L"path")==L".");
+  auto items=request.GetNamedArray(L"items");require(items.Size()>=1&&items.Size()<=16);
+  std::wstring operation;
+  std::vector<JsonObject> requests;
+  for(const auto& value:items) {
+    auto item=value.GetObject();auto op=string(item,L"operation");
+    require(op==L"stat"||op==L"read"||op==L"readGitChunk");
+    if(operation.empty()) operation=op;
+    require(op==operation&&items.Size()<=(op==L"stat"?16u:op==L"read"?2u:8u));
+    for(const auto& field:item) {
+      auto key=std::wstring(field.Key());
+      require(key==L"operation"||key==L"path"||(op==L"readGitChunk"&&(key==L"offset"||key==L"length")));
+    }
+    auto parts=segments(string(item,L"path"),op==L"stat");
+    projectGuard(request,parts,op);
+    if(op==L"readGitChunk") {
+      require(gitPackPath(parts));
+      auto offset=item.GetNamedNumber(L"offset"),length=item.GetNamedNumber(L"length");
+      require(offset>=0&&offset<=static_cast<double>(GIT_PACK_MAX)&&offset==static_cast<double>(static_cast<ULONGLONG>(offset)));
+      require(length>=1&&length<=GIT_CHUNK&&length==static_cast<double>(static_cast<DWORD>(length)));
+    }
+    JsonObject child;
+    for(const auto* key:{L"root",L"protectedPaths",L"protectedMutationPaths",L"projectPath",L"expectedProjectIdentity"})
+      if(request.HasKey(key)) child.Insert(key,request.GetNamedValue(key));
+    for(const auto& field:item) child.Insert(field.Key(),field.Value());
+    requests.push_back(child);
+  }
+  // Validate every child before dispatch; failures never publish partial reads.
+  JsonArray results;
+  for(const auto& child:requests) results.Append(perform(child));
+  auto out=success();out.Insert(L"results",results);return out;
+}
 }
 
 int main() {
@@ -445,8 +501,9 @@ int main() {
   try {
     winrt::init_apartment();std::string input;input.reserve(4096);char buffer[4096];
     while(std::cin) {std::cin.read(buffer,sizeof(buffer));auto count=std::cin.gcount();require(input.size()+static_cast<size_t>(count)<=3*LIMIT);input.append(buffer,static_cast<size_t>(count));}
-    auto request=JsonObject::Parse(winrt::to_hstring(input));auto response=perform(request);
-    std::cout<<winrt::to_string(response.Stringify())<<"\n";return 0;
+    auto request=JsonObject::Parse(winrt::to_hstring(input));auto response=string(request,L"operation")==L"readBatch"?readBatch(request):perform(request);
+    auto output=winrt::to_string(response.Stringify());require(output.size()+1<=4*LIMIT);
+    std::cout<<output<<"\n";return 0;
   } catch(...) {
     std::cout<<(outcome==Outcome::NoChange?"{\"ok\":false,\"code\":\"DENIED_NO_CHANGE\"}\n":"{\"ok\":false,\"code\":\"OUTCOME_UNKNOWN\"}\n");return 1;
   }

@@ -249,6 +249,22 @@ describe('trusted application Git boundary', () => {
     expect((await readTrustedLocalGit(base, { operation: 'diff', staged: false })).stdout).toContain('+export const n = 2;');
     expect((await readTrustedLocalGit(base, { operation: 'log', maxCount: 1 })).stdout).toContain('initial\0');
   });
+  it('captures a multi-file readonly diff above 1MiB without enlarging application Git output authority', async () => {
+    for (let i = 0; i < 3; i++) await writeFile(path.join(base, `large-${i}.txt`), 'a'.repeat(256 * 1024) + '\n');
+    git(['add', '--', 'large-0.txt', 'large-1.txt', 'large-2.txt']);git(['commit', '-m', 'fixture large files']);
+    for (let i = 0; i < 3; i++) await writeFile(path.join(base, `large-${i}.txt`), 'b'.repeat(256 * 1024) + '\n');
+    const result = await readTrustedLocalGit(base, { operation: 'diff', staged: false });
+    expect(result.exitCode).toBe(0);expect(Buffer.byteLength(result.stdout)).toBeGreaterThan(1024 * 1024);
+    expect(result.stdout).toContain('diff --git a/large-2.txt b/large-2.txt');
+    await expect(superviseTrustedGit(base, ['status'], {}, { maxOutputBytes: 2 * 1024 * 1024 })).rejects.toThrow();
+  });
+  it('still rejects readonly diffs above the separate 8MiB capture bound', async () => {
+    const names = Array.from({ length: 9 }, (_, i) => `huge-${i}.txt`);
+    for (const name of names) await writeFile(path.join(base, name), 'a'.repeat(512 * 1024) + '\n');
+    git(['add', '--', ...names]);git(['commit', '-m', 'fixture bounded files']);
+    for (const name of names) await writeFile(path.join(base, name), 'b'.repeat(512 * 1024) + '\n');
+    await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();
+  });
   it('rejects local metadata command hooks, origin rewrites and arbitrary path flags', async () => {
     git(['config', 'diff.external', '/fixture/never-execute']);
     await expect(readTrustedLocalGit(base, { operation: 'diff', staged: false })).rejects.toThrow();

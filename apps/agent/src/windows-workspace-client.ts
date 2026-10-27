@@ -11,10 +11,12 @@ export type NativeWorkspaceOperation =
       (NativeDirectoryPreimage | { expectedKind?: 'file'; expectedBase64: string; expectedFileIdentity: string }))
   | ({ operation: 'trash' | 'restore'; path: string; recoveryId: string; expectedRootIdentity: string } &
       (NativeDirectoryPreimage | NativeFilePreimage));
+export interface NativeProjectGuard { path: string; identity: string }
 export interface NativeWorkspaceRequest {
   operation: NativeWorkspaceOperation['operation']; root: string; path: string;
   protectedPaths: readonly string[]; destination?: string; expectedBase64?: string | null; base64?: string;
   protectedMutationPaths?: readonly string[];
+  projectPath?: string; expectedProjectIdentity?: string;
   expectedRootIdentity?: string; expectedFileIdentity?: string | null;
   expectedKind?: 'file' | 'directory'; expectedVersion?: string;
   offset?: number; length?: number;
@@ -150,14 +152,23 @@ export class WindowsWorkspaceClient {
     this.protectedMutationPaths = Object.freeze([...(options.protectedMutationPaths ?? [])]);
     this.transport = options.transport;
   }
-  async invoke(rootId: string, input: NativeWorkspaceOperation): Promise<NativeWorkspaceReply> {
+  async invoke(rootId: string, input: NativeWorkspaceOperation, project?: NativeProjectGuard): Promise<NativeWorkspaceReply> {
     try {
-      validate(input);const root = Object.hasOwn(this.roots, rootId) ? this.roots[rootId] : undefined;
+      validate(input);
+      if (project !== undefined) {
+        if (!object(project) || Object.keys(project).sort().join() !== 'identity,path' ||
+            !['list', 'stat', 'read', 'readGitChunk'].includes(input.operation) || !identity(project.identity)) throw deny();
+        validate({ operation: 'stat', path: project.path });
+        const prefix = project.path.toLowerCase(), target = input.path.toLowerCase();
+        if (prefix !== '.' && target !== prefix && !target.startsWith(prefix + '/')) throw deny();
+      }
+      const root = Object.hasOwn(this.roots, rootId) ? this.roots[rootId] : undefined;
       if (root === undefined || (!root.writable && mutations.includes(input.operation))) throw deny();
       const recovery = (input.operation === 'trash' || input.operation === 'restore') && Object.hasOwn(this.recoveryRoots, rootId)
         ? this.recoveryRoots[rootId] : undefined;
       if ((input.operation === 'trash' || input.operation === 'restore') && recovery === undefined) throw deny();
       const request = { ...input, ...(recovery === undefined ? {} : { recoveryRoot: recovery.windowsPath, expectedRecoveryRootIdentity: recovery.identity }), root: root.windowsPath, protectedPaths: [...this.protectedPaths],
+        ...(project === undefined ? {} : { projectPath: project.path, expectedProjectIdentity: project.identity }),
         ...(this.protectedMutationPaths.length === 0 ? {} : { protectedMutationPaths: [...this.protectedMutationPaths] }) };
       let response: unknown;
       try {response = await this.transport.run(request);}

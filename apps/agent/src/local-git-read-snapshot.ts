@@ -57,7 +57,7 @@ async function privateDirectory(path: string): Promise<void> {
 }
 /** Complete bounded capture, not an atomic snapshot of concurrent writers.
  * Every source byte comes from the configured native containment broker. */
-export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, directory: string): Promise<{
+export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, directory: string, options: { includeWorktree?: boolean } = {}): Promise<{
   workspace: string; skippedUntrackedDirectories: readonly string[]; close(): Promise<void>;
 }> {
   if (active >= 2) throw deny();
@@ -83,10 +83,12 @@ export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, dir
     // or execute helper commands in order to choose omitted worktree roots.
     let tracked: ReadonlySet<string> | undefined;
     const check = async () => {if (Date.now() >= deadline) throw deny();await source.verify();};
-    await check();
-    try {tracked = trackedIndexPaths((await source.read('.git/index')).bytes);}
-    catch {tracked = undefined;}
-    await check();
+    if (options.includeWorktree !== false) {
+      await check();
+      try {tracked = trackedIndexPaths((await source.read('.git/index')).bytes);}
+      catch {tracked = undefined;}
+      await check();
+    }
     const copy = async (relative: string) => {
       await check();const value = await source.read(relative);await check();
       if (!Buffer.isBuffer(value.bytes) || typeof value.executable !== 'boolean' ||
@@ -108,6 +110,7 @@ export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, dir
             /[\\/\p{Cc}\p{Cf}]/u.test(entry.name) || names.has(entry.name)) throw deny();
         names.add(entry.name);
         const child = relative === '.' ? entry.name : relative + '/' + entry.name;
+        if (relative === '.' && options.includeWorktree === false && child !== '.git') continue;
         if (child.length > 2048 || entry.type === 'symlink' || !['file', 'directory'].includes(entry.type)) throw deny();
         if (child === '.git/config.worktree' || child === '.git/commondir' ||
             child === '.git/objects/info/alternates' || child === '.git/objects/info/http-alternates') throw deny();

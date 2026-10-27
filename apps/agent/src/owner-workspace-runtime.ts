@@ -9,7 +9,7 @@ import { LocalRecoveryStore } from './local-recovery-store.js';
 import { OwnerWorkspaceCore, type OwnerWorkspaceRoot } from './owner-workspace-core.js';
 import { FixedPosixWorkspaceTransport, PosixWorkspaceClient } from './posix-workspace-transport.js';
 import { FixedWindowsWorkspaceTransport } from './windows-workspace-transport.js';
-import { GIT_CHUNK_PATH, GIT_CHUNK_STAMP, WindowsWorkspaceClient, NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError, validateNativeWorkspaceOperation, type NativeWorkspaceOperation, type NativeWorkspaceReply, type NativeWorkspaceTransport } from './windows-workspace-client.js';
+import { GIT_CHUNK_PATH, GIT_CHUNK_STAMP, WindowsWorkspaceClient, NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError, validateNativeWorkspaceOperation, type NativeProjectGuard, type NativeWorkspaceOperation, type NativeWorkspaceReply, type NativeWorkspaceTransport } from './windows-workspace-client.js';
 import { createWindowsOwnerConsentVerifier, createWindowsProtectedLocalViewer } from './windows-owner-consent-verifier.js';
 
 interface Pin { path: string; sha256: string }
@@ -227,7 +227,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
       transport: dynamicTransport(new FixedWindowsWorkspaceTransport({ helperPath: config.windows.helper.path, expectedSha256: config.windows.helper.sha256 }),
         active => active.map(toWindows).filter((p): p is string => p !== null)),
     });
-    const clients = new Map<string, { invoke(root: string, operation: NativeWorkspaceOperation): Promise<NativeWorkspaceReply> }>();
+    const clients = new Map<string, { invoke(root: string, operation: NativeWorkspaceOperation, projectGuard?: NativeProjectGuard): Promise<NativeWorkspaceReply> }>();
     for (const [id, root] of Object.entries(config.roots)) {
       if (root.kind === 'windows-drive') {if (!windows) throw deny();clients.set(id, windows);}
       else {
@@ -250,19 +250,19 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
       if ([...mutations, ...active].some(path => overlap(path, target))) throw new NativeWorkspaceDeniedError();
     }
     const nativeIdentities = new Map<string, string>();
-    const backend = { invoke(id: string, operation: NativeWorkspaceOperation) {
+    const backend = { invoke(id: string, operation: NativeWorkspaceOperation, projectGuard?: NativeProjectGuard) {
       const mutation = !['list', 'stat', 'read', 'readGitChunk', 'treeStat'].includes(operation.operation);
       const invoke = async () => {
         const client = (() => {
           try {
-            validateNativeWorkspaceOperation(operation);const root = checkRoot(id);const client = clients.get(id);if (!client) throw deny();
+            validateNativeWorkspaceOperation(operation);const root = checkRoot(id);if (projectGuard && root.kind !== 'windows-drive') throw deny();const client = clients.get(id);if (!client) throw deny();
             const target = posix.join(root.wslPath, operation.path);
             if (reads.some(path => inside(path, target))) throw deny();
             if (mutation) {mutationGuard(target);if ('destination' in operation) mutationGuard(posix.join(root.wslPath, operation.destination));}
             return client;
           } catch {throw new NativeWorkspaceDeniedError();}
         })();
-        const reply = await client.invoke(id, operation);
+        const reply = await client.invoke(id, operation, projectGuard);
         try {
           checkRoot(id);const expected = nativeIdentities.get(id);
           if (expected === undefined) {
@@ -316,7 +316,15 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
       try {
         const before = await backend.invoke(input.root, { operation: 'stat', path: input.path });
         if (before.kind !== 'directory' || before.rootIdentity !== nativeIdentities.get(input.root) || !before.identity) throw deny();
+        const projectGuard = root.kind === 'windows-drive' ? { path: input.path, identity: before.identity } : undefined;
         const verify = async () => {
+          if (projectGuard) {
+            // Native reads also compare this project's identity while its non-delete-shared ancestor handle is held.
+            const current = directory(target, false);
+            try {if (current.identity !== pinned.identity || realpathSync(`/proc/self/fd/${pinned.fd}`) !== target) throw deny();}
+            finally {closeSync(current.fd);}
+            return;
+          }
           const current = await backend.invoke(input.root, { operation: 'stat', path: input.path });
           if (current.kind !== 'directory' || current.identity !== before.identity || current.rootIdentity !== before.rootIdentity) throw deny();
         };
@@ -328,7 +336,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
           gitSnapshotSource: {
             verify,
             list: async relative => {
-              const reply = await backend.invoke(input.root, { operation: 'list', path: scoped(relative) });
+              const reply = await backend.invoke(input.root, { operation: 'list', path: scoped(relative) }, projectGuard);
               if (!reply.entries || reply.omitted !== false) throw deny();return reply.entries;
             },
             read: async relative => {
@@ -336,7 +344,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
               // The snapshot checks project identity around every read. Native read
               // already pins and bounds ordinary files; avoid a separate stat.
               if (!GIT_CHUNK_PATH.test(relative)) {
-                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath });
+                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath }, projectGuard);
                 if (reply.kind !== 'file' || typeof reply.base64 !== 'string' || !reply.identity ||
                     !Number.isSafeInteger(reply.bytes) || Number(reply.bytes) < 0 || Number(reply.bytes) > 1024 * 1024) throw deny();
                 const bytes = Buffer.from(reply.base64, 'base64');
@@ -345,7 +353,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
                 return { bytes, executable: (mode & 0o111) !== 0 };
               }
               await verify();
-              const entry = await backend.invoke(input.root, { operation: 'stat', path: relativePath });await verify();
+              const entry = await backend.invoke(input.root, { operation: 'stat', path: relativePath }, projectGuard);await verify();
               if (entry.kind !== 'file' || typeof entry.bytes !== 'number' ||
                   !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) throw deny();
               let bytes: Buffer;
@@ -361,7 +369,7 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
                   const length = Math.min(256 * 1024, entry.bytes - offset);
                   const chunk = await backend.invoke(input.root, {
                     operation: 'readGitChunk', path: relativePath, offset, length,
-                  });
+                  }, projectGuard);
                   await verify();
                   if (chunk.kind !== 'file' || chunk.identity !== entry.identity ||
                       chunk.totalBytes !== entry.bytes || typeof chunk.gitStamp !== 'string' ||
@@ -372,12 +380,12 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
                   stamp = chunk.gitStamp;received += decoded.length;parts.push(decoded);
                 }
                 if (received !== entry.bytes) throw deny();
-                const final = await backend.invoke(input.root, { operation: 'stat', path: relativePath });
+                const final = await backend.invoke(input.root, { operation: 'stat', path: relativePath }, projectGuard);
                 await verify();
                 if (final.identity !== entry.identity || final.bytes !== entry.bytes) throw deny();
                 bytes = Buffer.concat(parts, received);
               } else {
-                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath });await verify();
+                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath }, projectGuard);await verify();
                 if (reply.base64 === undefined || reply.kind !== 'file' || reply.identity !== entry.identity) throw deny();
                 bytes = Buffer.from(reply.base64, 'base64');
                 if (bytes.length !== entry.bytes || bytes.toString('base64') !== reply.base64) throw deny();

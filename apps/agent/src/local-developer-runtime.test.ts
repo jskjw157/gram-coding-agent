@@ -1,4 +1,5 @@
-import { writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { assertTrustedRuntime, RUNTIME_ROOT } from '@gram/shell';
@@ -30,6 +31,24 @@ describe('local developer runtime with real temporary Git and SQLite', () => {
     const result = await f.runtime.diff({ root: 'fixture', path: '.', staged: false });
     expect(result.diff).not.toContain('fixture-private');expect(result.diff).not.toContain('fixture-updated');
     expect(result.diff).toContain('REDACTED');
+  });
+  it('screens credential fields beyond 1 MiB of a real diff before preview pagination', async () => {
+    const f = localDeveloperFixture();
+    const firstPath = join(f.base, 'a-prefix.txt'), tailPath = join(f.base, 'z-tail.txt');
+    writeFileSync(firstPath, 'baseline\n');writeFileSync(tailPath, 'baseline\n');
+    f.git(['add', '--', 'a-prefix.txt', 'z-tail.txt']);f.git(['commit', '-m', 'fixture large diff']);
+    const first = 'SAFE-FIRST-LINE\n' + 'a'.repeat(900 * 1024) + '\n';
+    const tail = 'b'.repeat(300 * 1024) + '\npassword=fixture-large-tail-canary\n';
+    writeFileSync(firstPath, first);writeFileSync(tailPath, tail);
+    const raw = execFileSync('/usr/bin/git', ['diff', '--no-ext-diff', '--no-textconv'], {
+      cwd: f.base, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+      env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+    });
+    expect(raw.indexOf('password=fixture-large-tail-canary')).toBeGreaterThan(1024 * 1024);
+    expect(raw.slice(0, 32_000)).toContain('SAFE-FIRST-LINE');
+    const result = await f.runtime.diff({ root: 'fixture', path: '.', staged: false });
+    expect(result).toEqual({ diff: '***REDACTED***', truncated: true });
+    expect(readFileSync(firstPath, 'utf8')).toBe(first);expect(readFileSync(tailPath, 'utf8')).toBe(tail);
   });
   it('preserves the registered profile when a live Task or lease blocks registration', async () => {
     const f = localDeveloperFixture();await f.runtime.register({ root: 'fixture', path: '.' });

@@ -9,7 +9,7 @@ import type { NativeWorkspaceRequest, NativeWorkspaceTransport } from './windows
 // Synthetic installed provenance and native replies test composition only. These
 // mocks provide no evidence of native containment or actual root provisioning.
 const fixture = vi.hoisted(() => ({ trustedConfig: '', configFds: new Set<number>(), calls: [] as string[],
-  windowsRoot: '',
+  windowsRoot: '', projectReads: [] as NativeWorkspaceRequest[],
   read: undefined as (() => Promise<void>) | undefined, mutation: undefined as (() => Promise<void>) | undefined,
   afterMutation: undefined as (() => void) | undefined, nativeMutationPaths: [] as string[],
   rootIdentity: '7:1', omitted: false as boolean | undefined, protectedPaths: [] as string[], protectedMutationPaths: [] as string[],
@@ -18,7 +18,7 @@ vi.mock('node:fs', async importOriginal => {
   const fs = await importOriginal<typeof import('node:fs')>();
   return { ...fs,
     openSync(...args: Parameters<typeof fs.openSync>) {
-      if (fixture.windowsRoot && args[0] === '/mnt/c') args[0] = fixture.windowsRoot;
+      if (fixture.windowsRoot && typeof args[0] === 'string' && (args[0] === '/mnt/c' || args[0].startsWith('/mnt/c/'))) args[0] = fixture.windowsRoot + args[0].slice(6);
       const fd = fs.openSync(...args);
       if (args[0] === fixture.trustedConfig || args[0] === join(fixture.trustedConfig, '..', 'owner-workspace-automation.json')) fixture.configFds.add(fd);
       return fd;
@@ -30,8 +30,9 @@ vi.mock('node:fs', async importOriginal => {
       return value;
     },
     realpathSync(path: string) {
-      const result = fs.realpathSync(fixture.windowsRoot && path === '/mnt/c' ? fixture.windowsRoot : path);
-      return fixture.windowsRoot && result === fixture.windowsRoot ? '/mnt/c' : result;
+      const mapped = fixture.windowsRoot && (path === '/mnt/c' || path.startsWith('/mnt/c/')) ? fixture.windowsRoot + path.slice(6) : path;
+      const result = fs.realpathSync(mapped);
+      return fixture.windowsRoot && (result === fixture.windowsRoot || result.startsWith(fixture.windowsRoot + '/')) ? '/mnt/c' + result.slice(fixture.windowsRoot.length) : result;
     },
     closeSync(fd: number) {fixture.configFds.delete(fd);return fs.closeSync(fd);},
     fstatSync(fd: number, options?: { bigint?: boolean }) {
@@ -39,7 +40,7 @@ vi.mock('node:fs', async importOriginal => {
       return fixture.configFds.has(fd) ? Object.assign(st, { uid: typeof st.uid === 'bigint' ? 0n : 0 }) : st;
     },
     lstatSync(path: string, options?: { bigint?: boolean }) {
-      const mapped = fixture.windowsRoot && path === '/mnt/c' ? fixture.windowsRoot :
+      const mapped = fixture.windowsRoot && (path === '/mnt/c' || path.startsWith('/mnt/c/')) ? fixture.windowsRoot + path.slice(6) :
         fixture.windowsRoot && path === '/mnt' ? join(fixture.windowsRoot, '..') : path;
       const st = fs.lstatSync(mapped, options as { bigint: true });
       if (fixture.trustedConfig.startsWith(path === '/' ? '/' : path + '/')) {
@@ -74,9 +75,12 @@ vi.mock('./posix-workspace-transport.js', () => ({
 vi.mock('./windows-workspace-transport.js', () => ({
   FixedWindowsWorkspaceTransport: class {
     async run(operation: NativeWorkspaceRequest) {
+      fixture.projectReads.push(operation);
       fixture.nativeMutationPaths = [...operation.protectedMutationPaths ?? []];
       fixture.calls.push(`${operation.operation}:${operation.path}`);
       if (operation.operation === 'stat') return { ok: true, rootIdentity: fixture.rootIdentity, kind: 'directory', identity: fixture.rootIdentity };
+      if (operation.operation === 'read') return { ok: true, rootIdentity: fixture.rootIdentity, kind: 'file', identity: '7:3', bytes: 2, base64: 'aGk=' };
+      if (operation.operation === 'list') return { ok: true, rootIdentity: fixture.rootIdentity, entries: [], omitted: false };
       return { ok: true, rootIdentity: fixture.rootIdentity };
     }
   },
@@ -131,7 +135,7 @@ describe('trusted owner workspace config', () => {
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-  fixture.trustedConfig = '';fixture.windowsRoot = '';fixture.calls.length = 0;fixture.read = undefined;fixture.mutation = undefined;fixture.afterMutation = undefined;fixture.rootIdentity = '7:1';
+  fixture.trustedConfig = '';fixture.windowsRoot = '';fixture.projectReads.length = 0;fixture.calls.length = 0;fixture.read = undefined;fixture.mutation = undefined;fixture.afterMutation = undefined;fixture.rootIdentity = '7:1';
   fixture.afterPolicyRead = undefined;
 });
 async function runtimeFixture(before?: (base: string) => void) {
@@ -362,5 +366,28 @@ it('uses one contained native read for an ordinary Git snapshot file, between sn
     expect((await source.read('file.ts')).bytes.toString()).toBe('hi');
     expect(fixture.calls.slice(before)).toEqual(['read:project/file.ts']);
     await source.verify();
+  });
+});
+
+it('checks Windows project identity within each contained native operation and keeps local pre/post pins without extra stat processes', async () => {
+  const { runtime } = await runtimeFixture(base => {
+    fixture.windowsRoot = join(base, 'synthetic-drive');mkdirSync(fixture.windowsRoot, { mode: 0o700 });
+    mkdirSync(join(fixture.windowsRoot, 'project'), { mode: 0o700 });
+    const native = { ...pin, path: '/usr/local/libexec/helper.exe', expectedOwnerSid: 'S-1-5-21-1' };
+    writeFileSync(fixture.trustedConfig, JSON.stringify({ version: 1,
+      roots: { home: { label: 'C', kind: 'windows-drive', wslPath: '/mnt/c', windowsPath: 'C:\\', writable: true } },
+      windows: { helper: { path: native.path, sha256: native.sha256 }, ownerPresence: native,
+        protectedPaths: [], protectedMutationPaths: [], recoveryRoots: { home: { windowsPath: 'C:\\Vault', identity: '1:2' } } } }));
+  });
+  await runtime.withProject({ root: 'home', path: 'project' }, async project => {
+    const source = project.gitSnapshotSource;if (!source) throw new Error('missing snapshot source');
+    const before = fixture.calls.length;
+    await source.verify();expect((await source.read('file.ts')).bytes.toString()).toBe('hi');await source.verify();
+    expect(await source.list('.')).toEqual([]);await source.verify();
+    expect(fixture.calls.slice(before)).toEqual(['read:project/file.ts', 'list:project']);
+    expect(fixture.projectReads.slice(-2)).toEqual([
+      expect.objectContaining({ projectPath: 'project', expectedProjectIdentity: '7:1', operation: 'read' }),
+      expect.objectContaining({ projectPath: 'project', expectedProjectIdentity: '7:1', operation: 'list' }),
+    ]);
   });
 });

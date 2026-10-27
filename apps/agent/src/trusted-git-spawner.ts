@@ -324,7 +324,8 @@ async function superviseFixedGit(
 ): Promise<SpawnResult> {
   const limit = options.maxOutputBytes ?? 1024 * 1024;
   const timeoutMs = options.timeoutMs ?? 30_000;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1024 * 1024 ||
+  const maximumOutputBytes = kind === 'read-only-namespace' ? 8 * 1024 * 1024 : 1024 * 1024;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > maximumOutputBytes ||
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000) reject();
   let reported = false;
   const quarantine = (): void => {
@@ -520,7 +521,7 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
       if (!Number.isSafeInteger(request.maxCount) || request.maxCount < 1 || request.maxCount > 100) reject();
       args = ['log', '--format=%H%x00%s%x00', `--max-count=${request.maxCount}`, '--no-show-signature', '--no-decorate', '--'];
     } else reject();
-    snapshot = await createLocalGitSnapshot(options.source, options.snapshotDirectory);
+    snapshot = await createLocalGitSnapshot(options.source, options.snapshotDirectory, { includeWorktree: request.operation === 'status' || request.operation === 'diff' });
     const env = environment();
     const execution = { strictUtf8: true, maxOutputBytes: 1024 * 1024, timeoutMs: 10_000 };
     // Parsing a private regular config with --no-includes does not execute it.
@@ -566,7 +567,9 @@ export async function readTrustedLocalGit(basePath: string, request: TrustedLoca
       namespace.push('--setenv', key, value);
     }
     namespace.push('--', '/gram-sandbox-entry', '/workspace', '/runtime', '--', '/usr/bin/git', '--no-pager', ...fixedConfig, ...args);
-    const result = await superviseFixedGit('read-only-namespace', '/', namespace, {}, execution);
+    const result = await superviseFixedGit('read-only-namespace', '/', namespace, {}, {
+      ...execution, maxOutputBytes: request.operation === 'diff' ? 8 * 1024 * 1024 : execution.maxOutputBytes,
+    });
     if (result.exitCode !== 0) reject();
     return { owner, name, ...result,
       ...(snapshot.skippedUntrackedDirectories.length > 0 ? { partialCapture: true } : {}) };

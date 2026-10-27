@@ -173,3 +173,20 @@ describe('native directory and recovery protocol', () => {
     expect(f.run).toHaveBeenCalledTimes(2);
   });
 });
+
+it('binds trusted project identity to readonly native requests without exposing guard fields in the operation API', async () => {
+  const f = fixture();
+  await f.client.invoke('windows-c', { operation: 'read', path: 'source/project/file' }, { path: 'source/project', identity: '1:9' });
+  expect(f.run).toHaveBeenCalledWith(expect.objectContaining({ projectPath: 'source/project', expectedProjectIdentity: '1:9' }));
+  await expect(f.client.invoke('windows-c', { operation: 'read', path: 'source/project/file', projectPath: 'source/project', expectedProjectIdentity: '1:9' } as never)).rejects.toThrow();
+  expect(f.run).toHaveBeenCalledTimes(1);
+});
+it('denies malformed, out-of-project and mutation project guards before transport dispatch', async () => {
+  const f = fixture();
+  for (const guard of [{ path: '../outside', identity: '1:9' }, { path: 'source/project', identity: 'bad' },
+    { path: 'source/project', identity: '1:9', extra: true }, { path: 'source/pro', identity: '1:9' }]) {
+    await expect(f.client.invoke('windows-c', { operation: 'read', path: 'source/project/file' }, guard)).rejects.toBeInstanceOf(NativeWorkspaceDeniedError);
+  }
+  await expect(f.client.invoke('windows-c', { operation: 'mkdir', path: 'source/project/new', expectedRootIdentity: '1:1' }, { path: 'source/project', identity: '1:9' })).rejects.toBeInstanceOf(NativeWorkspaceDeniedError);
+  expect(f.run).not.toHaveBeenCalled();
+});
