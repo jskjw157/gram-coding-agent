@@ -83,7 +83,7 @@ it('skips only checksum-verified untracked generated root directories while reta
   try {
     expect([...snapshot.skippedUntrackedDirectories].sort()).toEqual(['.pnpm-store', 'node_modules']);
     expect(readFileSync(join(snapshot.workspace, 'file.ts'), 'utf8')).toBe('source');
-    expect(readFileSync(join(snapshot.workspace, packPath))).toEqual(pack);
+    expect(readFileSync(join(snapshot.workspace, packPath)).equals(pack)).toBe(true);
     expect(() => readFileSync(join(snapshot.workspace, 'node_modules/a.js'))).toThrow();
   } finally {await snapshot.close();}
 });
