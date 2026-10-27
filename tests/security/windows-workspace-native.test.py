@@ -118,14 +118,200 @@ class WindowsWorkspace(unittest.TestCase):
                 fields.setdefault('expectedFileIdentity', None if fields.get('expectedBase64') is None else self.call('stat', path=fields['path']).get('identity', '0:0'))
         request = {"operation": operation, "root": str(self.root), "path": ".",
                    "protectedPaths": [str(self.recovery)], **fields}
-        result = subprocess.run([str(HELPER)], input=json.dumps(request), text=True,
+        result = subprocess.run([str(HELPER)], input=json.dumps(request), text=True, encoding="utf-8",
                                 capture_output=True, timeout=10, check=False)
-        self.assertLess(len(result.stdout), 1500000)
+        self.assertLessEqual(len(result.stdout.encode("utf-8")), 4 * 1024 * 1024 + 1)
         reply = json.loads(result.stdout)
         if operation in ('trash', 'restore') and not reply['ok']:
             reply['fixtureSecurity'] = dict(vault_security(self.recovery), currentSid=self.user_sid,
                                             rootVolume=self.root.stat().st_dev)
         return reply
+
+    def test_project_guard_allows_only_identity_pinned_project_reads(self):
+        project = self.root / 'project'
+        project.mkdir()
+        (project / 'file').write_bytes(b'guarded-fixture')
+        guard = dict(projectPath='PROJECT', expectedProjectIdentity=self.call('stat', path='project')['identity'])
+        for operation, path in [('stat', 'project'), ('list', 'project'),
+                                ('stat', 'project/file'), ('read', 'project/file')]:
+            self.assertEqual(self.call(operation, path=path, **guard), self.call(operation, path=path))
+        for operation in ['stat', 'read']:
+            items = [dict(operation=operation, path='project/file')] * 2
+            reply = self.call('readBatch', items=items, **guard)
+            self.assertTrue(reply['ok'], reply)
+            self.assertEqual(reply['results'], [self.call(operation, path='project/file')] * 2)
+        self.assertEqual(self.call('read', path='project/file', protectedPaths=[str(project)], **guard),
+                         dict(ok=False, code='DENIED_NO_CHANGE'))
+        root_guard = dict(projectPath='.', expectedProjectIdentity=self.call('stat')['identity'])
+        self.assertEqual(self.call('read', path='project/file', **root_guard),
+                         self.call('read', path='project/file'))
+        pack_dir = project / '.git/objects/pack'
+        pack_dir.mkdir(parents=True)
+        relative = 'project/.git/objects/pack/pack-' + 'd' * 40 + '.pack'
+        (self.root / relative).write_bytes(b'P' * (1024 * 1024 + 1))
+        item = dict(operation='readGitChunk', path=relative, offset=0, length=262144)
+        expected = self.call(**item)
+        self.assertEqual(self.call(**item, **guard), expected)
+        self.assertEqual(self.call('readBatch', items=[item, item], **guard),
+                         dict(ok=True, results=[expected, expected]))
+
+    def test_project_guard_rejects_incomplete_invalid_and_outside_context(self):
+        project = self.root / 'project'
+        project.mkdir()
+        (project / 'file').write_bytes(b'guarded-fixture')
+        (self.root / 'outside').write_bytes(b'outside-fixture')
+        guard = dict(projectPath='project', expectedProjectIdentity=self.call('stat', path='project')['identity'])
+        invalid = [dict(projectPath='project'), dict(expectedProjectIdentity=guard['expectedProjectIdentity']),
+                   dict(guard, projectPath='../project'), dict(guard, projectPath='project/file'),
+                   dict(guard, projectPath=1), dict(guard, expectedProjectIdentity=1),
+                   dict(guard, expectedProjectIdentity='0:0'), dict(guard, expectedProjectIdentity='a:b'),
+                   dict(guard, expectedProjectIdentity='1:2:3'), dict(guard, expectedProjectIdentity=':1'),
+                   dict(guard, expectedProjectIdentity='1:'), dict(guard, projectPath='')]
+        for fields in invalid:
+            for operation in ['read', 'stat']:
+                with self.subTest(fields=fields, operation=operation):
+                    item = dict(operation=operation, path='project/file')
+                    self.assertEqual(self.call(**item, **fields), dict(ok=False, code='DENIED_NO_CHANGE'))
+                    self.assertEqual(self.call('readBatch', items=[item, item], **fields),
+                                     dict(ok=False, code='DENIED_NO_CHANGE'))
+        for path in ['outside', '.', 'project-sibling/file']:
+            self.assertEqual(self.call('stat', path=path, **guard), dict(ok=False, code='DENIED_NO_CHANGE'))
+        self.assertEqual(self.call('readBatch', items=[dict(operation='stat', path='project/file'),
+                                                     dict(operation='stat', path='outside')], **guard),
+                         dict(ok=False, code='DENIED_NO_CHANGE'))
+        for fields in [guard, dict(projectPath='project'), dict(expectedProjectIdentity='0:0')]:
+            self.assertEqual(self.call('readBatch', items=[dict(operation='read', path='project/file', **fields)],
+                                       **guard), dict(ok=False, code='DENIED_NO_CHANGE'))
+
+    def test_project_guard_rejects_renamed_replaced_and_junction_projects(self):
+        project = self.root / 'project'
+        project.mkdir()
+        (project / 'file').write_bytes(b'original-fixture')
+        guard = dict(projectPath='project', expectedProjectIdentity=self.call('stat', path='project')['identity'])
+        project.rename(self.root / 'original')
+        project.mkdir()
+        (project / 'file').write_bytes(b'replacement-fixture')
+        for operation, path in [('read', 'project/file'), ('stat', 'project'), ('list', 'project')]:
+            self.assertEqual(self.call(operation, path=path, **guard), dict(ok=False, code='DENIED_NO_CHANGE'))
+        junction = self.root / 'junction'
+        made = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(junction), str(self.root / 'original')],
+                              capture_output=True)
+        self.assertEqual(made.returncode, 0)
+        try:
+            self.assertEqual(self.call('read', path='junction/file', **dict(guard, projectPath='junction')),
+                             dict(ok=False, code='DENIED_NO_CHANGE'))
+        finally:
+            junction.rmdir()
+        self.assertEqual((self.root / 'original/file').read_bytes(), b'original-fixture')
+
+    def test_project_guard_is_rejected_on_mutations(self):
+        (self.root / 'file').write_bytes(b'preserved')
+        guard = dict(projectPath='.', expectedProjectIdentity=self.call('stat')['identity'])
+        for fields in [guard, dict(projectPath='.'), dict(expectedProjectIdentity=guard['expectedProjectIdentity'])]:
+            self.assertFalse(self.call('write', path='file', expectedBase64=base64.b64encode(b'preserved').decode(),
+                                       base64=base64.b64encode(b'changed').decode(), **fields)['ok'])
+            self.assertFalse(self.call('mkdir', path='created', **fields)['ok'])
+        self.assertEqual((self.root / 'file').read_bytes(), b'preserved')
+        self.assertFalse((self.root / 'created').exists())
+        (self.root / 'tree').mkdir()
+        self.assertTrue(self.call('treeStat', path='tree')['ok'])
+        self.assertEqual(self.call('treeStat', path='tree', **guard), dict(ok=False, code='DENIED_NO_CHANGE'))
+
+    def test_read_batch_preserves_order_original_replies_and_shared_policy(self):
+        (self.root / 'one').write_bytes(b'first' + b'x' * (1024 * 1024 - 5))
+        (self.root / 'two').write_bytes(b'second' + b'y' * (1024 * 1024 - 6))
+        for operation, paths in [('stat', ['two', '.', 'one']), ('read', ['two', 'one'])]:
+            items = [dict(operation=operation, path=path) for path in paths]
+            reply = self.call('readBatch', items=items,
+                              protectedMutationPaths=[str(self.root)])
+            self.assertTrue(reply['ok'], reply)
+            self.assertEqual(reply['results'], [self.call(operation, path=path) for path in paths])
+        self.assertTrue(self.call('readBatch', items=[dict(operation='stat', path='.')] * 16)['ok'])
+
+    def test_read_batch_git_pack_chunks_keep_order_and_original_metadata(self):
+        pack_dir = self.root / '.git/objects/pack'
+        pack_dir.mkdir(parents=True)
+        relative = '.git/objects/pack/pack-' + 'b' * 40 + '.pack'
+        contents = bytes(range(256)) * 8192
+        (self.root / relative).write_bytes(contents)
+        items = [dict(operation='readGitChunk', path=relative, offset=i * 262144, length=262144)
+                 for i in reversed(range(8))]
+        reply = self.call('readBatch', items=items)
+        self.assertTrue(reply['ok'], reply)
+        self.assertEqual(reply['results'], [self.call(**item) for item in items])
+        self.assertEqual(base64.b64decode(reply['results'][0]['base64']), contents[-262144:])
+
+    def test_read_batch_rejects_invalid_envelopes_and_items_without_effects(self):
+        target = self.root / 'file'
+        target.write_bytes(b'preserved')
+        stat = dict(operation='stat', path='file')
+        bad_items = [[], [stat] * 17, [dict(operation='read', path='file')] * 3,
+                     [dict(operation='readGitChunk', path='file', offset=0, length=1)] * 9,
+                     [stat, dict(operation='read', path='file')],
+                     [dict(operation='list', path='.')],
+                     [dict(operation='readBatch', path='.', items=[stat])]]
+        for operation in ['write', 'mkdir', 'move', 'trash', 'restore', 'treeStat', 'exec']:
+            bad_items.append([stat, dict(operation=operation, path='file')])
+        for key, value in [('root', str(self.base)), ('protectedPaths', []),
+                           ('protectedMutationPaths', []), ('unknown', True),
+                           ('offset', 0), ('length', 1)]:
+            bad_items.append([dict(stat, **{key: value})])
+        bad_items += [[dict(operation='stat')], [dict(path='file')], [None], ['file']]
+        pack = '.git/objects/pack/pack-' + 'c' * 40 + '.pack'
+        for fields in [dict(offset=-1, length=1), dict(offset=0.5, length=1),
+                       dict(offset=0, length=262145), dict(offset=0, length=1.5),
+                       dict(offset='0', length=1), dict(offset=0)]:
+            bad_items.append([dict(operation='readGitChunk', path=pack, **fields)])
+        for items in bad_items:
+            with self.subTest(items=items):
+                self.assertEqual(self.call('readBatch', items=items),
+                                 dict(ok=False, code='DENIED_NO_CHANGE'))
+                self.assertEqual(target.read_bytes(), b'preserved')
+        for fields in [dict(path='file'), dict(unknown=True), dict(offset=0), dict(items=None)]:
+            with self.subTest(fields=fields):
+                self.assertEqual(self.call('readBatch', **dict(dict(items=[stat]), **fields)),
+                                 dict(ok=False, code='DENIED_NO_CHANGE'))
+
+    def test_read_batch_failure_omits_all_partial_results(self):
+        (self.root / 'file').write_bytes(b'fixture')
+        reply = self.call('readBatch', items=[dict(operation='read', path='file'),
+                                             dict(operation='read', path='missing')])
+        self.assertEqual(reply, dict(ok=False, code='DENIED_NO_CHANGE'))
+
+    def test_read_batch_keeps_protected_child_hardlink_traversal_and_alias_guards(self):
+        private = self.root / 'private'
+        private.mkdir()
+        secret = private / 'fixture'
+        secret.write_bytes(b'synthetic-private-fixture')
+        (self.root / 'ordinary').write_bytes(b'ordinary-fixture')
+        (self.root / 'hardlink').hardlink_to(secret)
+        junction = self.root / 'alias'
+        made = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(junction), str(private)],
+                              capture_output=True)
+        self.assertEqual(made.returncode, 0)
+        try:
+            for operation in ['stat', 'read']:
+                for path in ['private/fixture', 'PRIVATE/fixture', 'hardlink', '../private/fixture',
+                             'alias/fixture', 'ordinary:stream']:
+                    with self.subTest(operation=operation, path=path):
+                        self.assertEqual(self.call('readBatch', protectedPaths=[str(private)],
+                                                  items=[dict(operation=operation, path='ordinary'),
+                                                         dict(operation=operation, path=path)]),
+                                         dict(ok=False, code='DENIED_NO_CHANGE'))
+        finally:
+            junction.rmdir()
+        self.assertEqual(secret.read_bytes(), b'synthetic-private-fixture')
+
+    def test_native_response_utf8_budget_is_checked_before_any_stdout(self):
+        # NTFS filenames count UTF-16 units; UTF-8 output can be three times larger.
+        long_root = pathlib.Path('\\\\?\\' + str(self.root))
+        try:
+            for index in range(6100):
+                (long_root / (str(index) + '\u754c' * 240)).touch()
+            self.assertEqual(self.call('list'), dict(ok=False, code='DENIED_NO_CHANGE'))
+        finally:
+            for path in long_root.iterdir():
+                path.unlink()
 
     def test_git_pack_chunk_is_bounded_and_native_identity_is_stable(self):
         pack_dir = self.root / '.git' / 'objects' / 'pack'
@@ -263,6 +449,10 @@ class WindowsWorkspace(unittest.TestCase):
         try:
             result = self.call('read', root=drive + '\\', path='sentinel', protectedPaths=[str(private)])
             self.assertFalse(result['ok'])
+            for operation in ['stat', 'read']:
+                reply = self.call('readBatch', root=drive + '\\', protectedPaths=[str(private)],
+                                  items=[dict(operation=operation, path='sentinel')])
+                self.assertEqual(reply, dict(ok=False, code='DENIED_NO_CHANGE'))
         finally:
             # Remove only our exact definition, preserving any other mappings.
             self.assertTrue(kernel.DefineDosDeviceW(8 | 2 | 4, drive, target), ctypes.get_last_error())
