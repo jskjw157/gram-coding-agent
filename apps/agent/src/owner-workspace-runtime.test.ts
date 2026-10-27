@@ -56,6 +56,7 @@ vi.mock('./posix-workspace-transport.js', () => ({
       fixture.calls.push(`${operation.operation}:${operation.path}`);
       if (operation.operation === 'mkdir') {await fixture.mutation?.();fixture.afterMutation?.();}
       if (operation.operation === 'read') {await fixture.read?.();return { ok: true, rootIdentity: fixture.rootIdentity, kind: 'file', identity: '7:3', base64: 'aGk=', bytes: 2 };}
+      if (operation.operation === 'stat' && operation.path === 'project/file.ts') return { ok: true, rootIdentity: fixture.rootIdentity, kind: 'file', identity: '7:3', bytes: 2 };
       if (operation.operation === 'list') return { ok: true, rootIdentity: fixture.rootIdentity, entries: [], omitted: fixture.omitted };
       return { ok: true, rootIdentity: fixture.rootIdentity, kind: 'directory', identity: operation.path === '.' ? fixture.rootIdentity : '7:2' };
     }
@@ -349,5 +350,17 @@ describe('owner runtime composition with synthetic installed/native ports', () =
     release();await read;await close;expect(drained).toBe(true);
     expect(() => runtime.core.roots()).toThrow();
     await expect(runtime.withProject({ root: 'home', path: 'project' }, async () => 'no')).rejects.toThrow();
+  });
+});
+
+it('uses one contained native read for an ordinary Git snapshot file, between snapshot-owned project checks', async () => {
+  const { base, runtime } = await runtimeFixture();
+  writeFileSync(join(base, 'root/project/file.ts'), 'hi');
+  await runtime.withProject({ root: 'home', path: 'project' }, async project => {
+    const source = project.gitSnapshotSource;if (!source) throw new Error('missing snapshot source');
+    await source.verify();const before = fixture.calls.length;
+    expect((await source.read('file.ts')).bytes.toString()).toBe('hi');
+    expect(fixture.calls.slice(before)).toEqual(['read:project/file.ts']);
+    await source.verify();
   });
 });

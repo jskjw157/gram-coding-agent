@@ -5,14 +5,15 @@ import { lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 /** Trusted composition supplies only native policy-checked reads. No caller can
- * choose a host path, executable, source implementation or snapshot location. */
+ * choose a host path, executable, source implementation or snapshot location.
+ * The snapshot owns project verification around every source read/list. */
 export interface LocalGitSnapshotSource {
   verify(): Promise<void>;
   list(path: string): Promise<{ name: string; type: 'file' | 'directory' | 'symlink' }[]>;
   read(path: string): Promise<{ bytes: Buffer; executable: boolean }>;
 }
 let active = 0;
-// shortcut: complete captures cap native files at 1 MiB; use a bounded native streaming broker for larger Git packs.
+// Ordinary files remain capped at 1 MiB; only the fixed Git pack namespace admits larger bounded reads.
 const deny = () => new Error('Local Git snapshot denied');
 
 /** Read the checksum-bound v2/v3 Git index to decide which worktree
@@ -81,9 +82,11 @@ export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, dir
     // Fetch only a trusted native index. Never parse repository attribute rules
     // or execute helper commands in order to choose omitted worktree roots.
     let tracked: ReadonlySet<string> | undefined;
+    const check = async () => {if (Date.now() >= deadline) throw deny();await source.verify();};
+    await check();
     try {tracked = trackedIndexPaths((await source.read('.git/index')).bytes);}
     catch {tracked = undefined;}
-    const check = async () => {if (Date.now() >= deadline) throw deny();await source.verify();};
+    await check();
     const copy = async (relative: string) => {
       await check();const value = await source.read(relative);await check();
       if (!Buffer.isBuffer(value.bytes) || typeof value.executable !== 'boolean' ||
@@ -93,6 +96,8 @@ export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, dir
         value.executable ? 0o700 : 0o600);
       try {await file.writeFile(value.bytes);} finally {await file.close();}
     };
+    const pending: (() => Promise<void>)[] = [];
+    const packs: (() => Promise<void>)[] = [];
     const walk = async (relative: string, depth: number): Promise<void> => {
       if (depth > 32) throw deny();await check();
       const listing = await source.list(relative);await check();
@@ -121,11 +126,19 @@ export async function createLocalGitSnapshot(source: LocalGitSnapshotSource, dir
           continue;
         }
         if (entry.type === 'directory') {
-          await mkdir(join(workspace, child), { mode: 0o700 });await walk(child, depth + 1);
-        } else await copy(child);
+          pending.push(async () => {await mkdir(join(workspace, child), { mode: 0o700 });await walk(child, depth + 1);});
+        } else (GIT_CHUNK_PATH.test(child) ? packs : pending).push(() => copy(child));
       }
     };
-    await walk('.', 0);await check();
+    await walk('.', 0);
+    while (pending.length > 0) {
+      // Bound helper launches and drain every active read before removing a failed capture.
+      const results = await Promise.allSettled(pending.splice(0, 16).map(operation => operation()));
+      if (results.some(result => result.status === 'rejected')) throw deny();
+    }
+    // Large pack captures stay serial, bounding their memory independently of small-file concurrency.
+    for (const copyPack of packs) await copyPack();
+    await check();
     await mkdir(join(workspace, '.git/info'), { recursive: true, mode: 0o700 });
     await mkdir(join(workspace, '.git/objects'), { recursive: true, mode: 0o700 });
     return { workspace, skippedUntrackedDirectories, close };

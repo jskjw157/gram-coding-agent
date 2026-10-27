@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
+import { constants } from 'node:fs';
+import { open, realpath } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import type { NativeWorkspaceRequest, NativeWorkspaceTransport } from './windows-workspace-client.js';
 import { NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError } from './windows-workspace-client.js';
@@ -25,23 +26,23 @@ export class FixedWindowsWorkspaceTransport implements NativeWorkspaceTransport 
     this.helperPath = options.helperPath;this.expectedSha256 = options.expectedSha256;
   }
 
-  private assertHelper(): void {
-    let fd: number | undefined;
+  private async assertHelper(): Promise<void> {
+    let file: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      fd = openSync(this.helperPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      const before = fstatSync(fd, { bigint: true });
+      file = await open(this.helperPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const before = await file.stat({ bigint: true });
       if (!before.isFile() || before.nlink !== 1n || before.size > 16n * 1024n * 1024n ||
-          realpathSync(this.helperPath) !== this.helperPath) throw deny();
-      const digest = createHash('sha256').update(readFileSync(fd)).digest('hex');
-      const after = fstatSync(fd, { bigint: true });
+          await realpath(this.helperPath) !== this.helperPath) throw deny();
+      const digest = createHash('sha256').update(await file.readFile()).digest('hex');
+      const after = await file.stat({ bigint: true });
       if (digest !== this.expectedSha256 || before.dev !== after.dev || before.ino !== after.ino ||
           before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs || after.nlink !== 1n) throw deny();
-    } finally { if (fd !== undefined) closeSync(fd); }
+    } finally { await file?.close(); }
   }
 
   async run(request: NativeWorkspaceRequest): Promise<unknown> {
     try {
-      this.assertHelper();
+      await this.assertHelper();
       const input = JSON.stringify(request);
       if (Buffer.byteLength(input) > INPUT_LIMIT) throw deny();
       return await new Promise<unknown>((resolve, reject) => {

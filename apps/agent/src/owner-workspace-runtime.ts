@@ -328,11 +328,23 @@ export async function createOwnerWorkspaceRuntime(options: OwnerWorkspaceRuntime
           gitSnapshotSource: {
             verify,
             list: async relative => {
-              await verify();const reply = await backend.invoke(input.root, { operation: 'list', path: scoped(relative) });await verify();
+              const reply = await backend.invoke(input.root, { operation: 'list', path: scoped(relative) });
               if (!reply.entries || reply.omitted !== false) throw deny();return reply.entries;
             },
             read: async relative => {
-              await verify();const relativePath = scoped(relative);
+              const relativePath = scoped(relative);
+              // The snapshot checks project identity around every read. Native read
+              // already pins and bounds ordinary files; avoid a separate stat.
+              if (!GIT_CHUNK_PATH.test(relative)) {
+                const reply = await backend.invoke(input.root, { operation: 'read', path: relativePath });
+                if (reply.kind !== 'file' || typeof reply.base64 !== 'string' || !reply.identity ||
+                    !Number.isSafeInteger(reply.bytes) || Number(reply.bytes) < 0 || Number(reply.bytes) > 1024 * 1024) throw deny();
+                const bytes = Buffer.from(reply.base64, 'base64');
+                if (bytes.length !== reply.bytes || bytes.toString('base64') !== reply.base64) throw deny();
+                const mode = root.kind === 'windows-drive' ? 0 : lstatSync(posix.join(root.wslPath, relativePath)).mode;
+                return { bytes, executable: (mode & 0o111) !== 0 };
+              }
+              await verify();
               const entry = await backend.invoke(input.root, { operation: 'stat', path: relativePath });await verify();
               if (entry.kind !== 'file' || typeof entry.bytes !== 'number' ||
                   !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) throw deny();

@@ -4,6 +4,10 @@ import { PassThrough } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { NativeWorkspaceDeniedError, NativeWorkspaceUnresolvedError } from './windows-workspace-client.js';
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>();return { ...fs, open: vi.fn(fs.open) };
+});
+import { open } from 'node:fs/promises';
 import { mkdtempSync, rmSync, writeFileSync, linkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,6 +56,15 @@ describe('recovery transport outcome receipts', () => {
     });
     return child;
   }
+  it('yields helper integrity I/O and never spawns before its asynchronous digest verification finishes', async () => {
+    const native = transport();const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let release = () => {};const gate = new Promise<void>(resolve => {release = resolve;});
+    vi.mocked(open).mockImplementationOnce(async (...args) => {await gate;return fs.open(...args);});
+    receipt('{"ok":true,"rootIdentity":"1:1"}', 0);
+    const before = vi.mocked(spawn).mock.calls.length;const result = native.run(request);
+    try {expect(open).toHaveBeenCalled();expect(vi.mocked(spawn).mock.calls.length).toBe(before);}
+    finally {release();await result;}
+  });
   for (const operation of ['trash', 'restore'] as const) {
     it(`preserves unknown ${operation} outcomes and trusts only an exact rollback receipt`, async () => {
       const native = transport();
