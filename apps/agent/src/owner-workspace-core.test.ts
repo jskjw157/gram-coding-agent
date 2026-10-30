@@ -428,6 +428,19 @@ describe('OwnerWorkspaceCore state-machine-only coordination', () => {
     expect((await f.core.stat({ root: 'main', path: '.settings' })).version).toMatch(/^[a-f0-9]{64}$/u);
   });
 
+  it('keeps ordinary React/TypeScript sources readable through owner workspace tools', async () => {
+    const f = await fixture();
+    const source = 'import type { Column } from "antd";\n' +
+      'export const columns = [{ key: "documentName", dataIndex: "documentName" }];\n';
+    f.backend.seed('ColumnsReference.tsx', source);
+    const read = await f.core.read({ root: 'main', path: 'ColumnsReference.tsx' });
+    expect(read.content).toBe(source);
+    expect(read.masked).toBe(false);
+    expect(read.sha256).not.toBeNull();
+    const search = await f.core.search({ root: 'main', path: '.', term: 'documentName' });
+    expect(search.matches.some(match => match.path === 'ColumnsReference.tsx')).toBe(true);
+  });
+
   it.each([
     'service: {username: alice, password: flow-private-fixture}\n',
     'users:\n  - {username: alice, password: flow-private-fixture}\n',

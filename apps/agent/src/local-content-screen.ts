@@ -1,12 +1,22 @@
 import type { SecretRedactor } from '@gram/secrets';
 
 const sensitiveKey = /(?:token|secret|password|passwd|credential|key|authorization|cookie|connection[_-]?string|^_?auths?$)/iu;
+// A plain "key", "rowKey", "queryKey", etc. commonly describes React/UI
+// structure rather than stored credentials. Keep high-confidence secret names
+// (apiKey, refreshToken, privateKey, password, ...) sensitive in source code.
+// Ordinary configuration formats still use the conservative sensitiveKey rule.
+const sourceCredentialKey = /(?:token|secret|password|passwd|credential|authorization|cookie|connection[_-]?string|(?:api|private|client|access|encrypt(?:ion)?|sign(?:ing)?|session|master|jwt)[_-]?key|^_?auths?$)/iu;
+const sourceLike = (text: string) =>
+  /(?:^|[\r\n\u2028\u2029])\s*(?:import|export|interface|type|class|function|const|let|var)\b/u.test(text);
+const sensitiveMember = (name: string, source: boolean) =>
+  sensitiveKey.test(name) && (!source || sourceCredentialKey.test(name));
 const MASK = '***REDACTED***';
 
 /** A preview filter, not a claim to identify every unknown credential. Screen the
  * complete document before pagination/search. Raw reveal uses a separate local UI. */
 export function screenLocalText(original: string, redactor: SecretRedactor): { content: string; masked: boolean } {
   let content = redactor.redact(original);
+  const source = sourceLike(content);
   let parsedJson = false;
   try {
     const parsed: unknown = JSON.parse(content);
@@ -52,15 +62,16 @@ export function screenLocalText(original: string, redactor: SecretRedactor): { c
   // Flow-style YAML can hide a credential after an ordinary outer key. Unlike
   // parsed JSON, its complete graph has not been validated and scrubbed.
   if (!parsedJson && Array.from(content.matchAll(/[{[,]\s*["']?([\w.-]+)["']?\s*:/gu))
-    .some(field => sensitiveKey.test(field[1] ?? ''))) {
+    .some(field => sensitiveMember(field[1] ?? '', source))) {
     return { content: MASK, masked: true };
   }
   // JavaScript configuration is not evaluated. A credential assignment or
   // object member may contain arbitrary expressions and multiline templates;
   // withhold that document rather than guess where the expression ends.
   if (/\b(?:const|let|var|module\.exports|export\s+default)\b/u.test(content)) {
-    const fields = content.matchAll(/(?:^|[\s{,;])(?:export\s+)?(?:(?:const|let|var)\s+)?["']?([\w.-]+)["']?\s*[:=]/gu);
-    if (Array.from(fields).some(field => sensitiveKey.test(field[1] ?? ''))) {
+    const fields = content.matchAll(/(?:^|[\s{,;])(?:export\s+)?(?:(const|let|var)\s+)?["']?([\w.-]+)["']?\s*[:=]/gu);
+    if (Array.from(fields).some(field => sensitiveMember(field[2] ?? '', source) ||
+      (field[1] !== undefined && /^key$/iu.test(field[2] ?? '')))) {
       return { content: MASK, masked: true };
     }
   }
