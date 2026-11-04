@@ -87,8 +87,11 @@ print(json.dumps(public),flush=True)
 PY
 if [[ $prepare_only == true ]]; then exit 0; fi
 cd "$repo"
-GRAM_DB_FIXTURE_FILE="$fixture/fixture.json" node node_modules/vitest/vitest.mjs run --config tests/security/database-mysql.vitest.config.ts --configLoader runner >"$fixture/vitest.log" 2>&1 || {
-  echo "Database integration tests failed; evidence retained at $fixture/vitest.log" >&2
+python3 -B scripts/test_report_database_test_results.py >"$fixture/reporter-selftest.log" 2>&1
+GRAM_DB_FIXTURE_FILE="$fixture/fixture.json" node node_modules/vitest/vitest.mjs run --config tests/security/database-mysql.vitest.config.ts --configLoader runner --reporter=json --outputFile="$fixture/vitest-private.json" >"$fixture/vitest.log" 2>&1 || {
+  python3 -B scripts/report_database_test_results.py "$fixture/vitest-private.json"
+  echo "Database integration tests failed; private evidence retained at $fixture" >&2
   exit 1
 }
-echo "Database integration tests passed; evidence retained at $fixture/vitest.log"
+python3 -B scripts/report_database_test_results.py "$fixture/vitest-private.json"
+echo "Database integration tests passed; private evidence retained at $fixture"
