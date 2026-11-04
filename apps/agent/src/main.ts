@@ -50,6 +50,7 @@ import { TrustedGitSpawner } from './trusted-git-spawner.js';
 import { createOwnerWorkspaceRuntime, type OwnerWorkspaceRuntime } from './owner-workspace-runtime.js';
 import { createLocalDeveloperRuntime } from './local-developer-runtime.js';
 import { createEgoPublicReader } from './ego-browser-readonly.js';
+import type { DatabaseRuntime } from './database-runtime.js';
 
 export interface StartAgentOptions {
   stateDirectory: string;
@@ -137,6 +138,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   let mcpReady = false;
   let closed = false;
   let ownerWorkspace: OwnerWorkspaceRuntime | undefined;
+  let databaseRuntime: DatabaseRuntime | undefined;
   const healthService = new HealthService({
     databaseReady: () => database.open,
     mcpReady: () => mcpReady,
@@ -244,6 +246,13 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
   try {
     const composed = await secretLease.withValue(async (internalSecret) => {
       const redactor = new SecretRedactor([internalSecret]);
+      const databaseConfigPath = process.env.GRAM_AGENT_DATABASE_CONFIG;
+      if (databaseConfigPath !== undefined) {
+        const { loadDatabaseConfig } = await import('./database-config.js');
+        const config = loadDatabaseConfig(databaseConfigPath);
+        const { createDatabaseRuntime } = await import('./database-runtime.js');
+        databaseRuntime = createDatabaseRuntime({ config, secrets: secretProvider, redactor });
+      }
       const logger = new StructuredLogger({ redactor });
       const gitContext = (taskId: string) => {
         const task = taskRepository.get(taskId);
@@ -473,6 +482,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         ...(owner === undefined ? {} : { ownerWorkspace: owner.core }),
         ...(localDeveloper === undefined ? {} : { localDeveloper }),
         ...(egoBrowser === undefined ? {} : { egoBrowser }),
+        ...(databaseRuntime === undefined ? {} : { database: databaseRuntime.tools }),
       });
       mcpReady = true;
       logger.info('agent started', { host: mcp.host, port: mcp.port });
@@ -513,12 +523,16 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       composed.codingCapability.close();
       composed.verificationReviews.close();
       mcpReady = false;
-      await composed.mcp.close();
+      const stoppingMcp = composed.mcp.close();
+      const stoppingDatabase = databaseRuntime?.close().then(() => false, () => true);
+      await stoppingMcp;
       await drained;
+      const databaseShutdownFailed = await stoppingDatabase;
       await ownerWorkspace?.close();
       await quiesceHeldLeases();
       smokeObserver?.close();
       database.close();
+      if (databaseShutdownFailed) throw new Error('Database shutdown failed');
       composed.logger.info('agent stopped');
     };
 
@@ -541,9 +555,12 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
       close,
     };
   } catch (error) {
-    await ownerWorkspace?.close();
-    smokeObserver?.close();
-    database.close();
+    try { await databaseRuntime?.close(); }
+    finally {
+      await ownerWorkspace?.close();
+      smokeObserver?.close();
+      database.close();
+    }
     throw error;
   } finally {
     secretLease.dispose();
