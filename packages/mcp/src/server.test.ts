@@ -7,6 +7,7 @@ import {
 import type { ApprovalToolsPort } from './tools/approval-tools.js';
 import type { OwnerWorkspaceToolsPort } from './tools/owner-workspace-tools.js';
 import type { LocalDeveloperToolsPort } from './tools/local-developer-tools.js';
+import type { ReadOnlyDatabaseToolsPort } from './tools/database-tools.js';
 
 const running: RunningMcpServer[] = [];
 
@@ -401,6 +402,106 @@ describe('owner-approved multi-root filesystem MCP catalog', () => {
       'local_fs_move', 'local_fs_copy', 'local_fs_trash',
     ]) {
       expect(names).toContain(method);
+    }
+  });
+});
+
+
+describe('optional read-only database MCP catalog', () => {
+  it('adds only the two database tools when the trusted database port is supplied', async () => {
+    const without = await advertisedNames(fullOptions('database-disabled-secret'));
+    const options = {
+      ...fullOptions('database-enabled-secret'),
+      database: {
+        connections: async () => [{ connectionId: 'reporting', engine: 'fixture' }],
+        select: async () => ({ columns: ['value'], rows: [[1]], truncated: false }),
+      },
+    };
+    const withDatabase = await advertisedNames(options);
+    expect(without).not.toContain('database_connections');
+    expect(without).not.toContain('database_select');
+    expect(withDatabase.sort()).toEqual([...without, 'database_connections', 'database_select'].sort());
+  });
+});
+
+
+describe('authenticated read-only database MCP dispatch', () => {
+  it('returns connection IDs and SELECT results while preserving positional binds', async () => {
+    const select = vi.fn(async () => ({ columns: ['value', 'value'], rows: [[1, 'one']], truncated: false }));
+    const database: ReadOnlyDatabaseToolsPort = {
+      connections: vi.fn(async () => [{ connectionId: 'reporting', engine: 'fixture' }]), select,
+    };
+    const server = await createMcpHttpServer({ ...fullOptions('database-query-secret'), database });running.push(server);
+    const connections = (await rpc(server.url, 'database-query-secret', 'tools/call', {
+      name: 'database_connections', arguments: {},
+    }, 1)).result as ToolsCallResult;
+    expect(JSON.parse(connections.content[0]?.text ?? '')).toEqual([{ connectionId: 'reporting', engine: 'fixture' }]);
+    const input = { connectionId: 'reporting', sql: 'SELECT ? AS value', parameters: ["O'Reilly; --", 2, false, null] };
+    const result = (await rpc(server.url, 'database-query-secret', 'tools/call', {
+      name: 'database_select', arguments: input,
+    }, 2)).result as ToolsCallResult;
+    expect(select).toHaveBeenCalledExactlyOnceWith(input, expect.any(AbortSignal));
+    expect(JSON.parse(result.content[0]?.text ?? '')).toEqual({ columns: ['value', 'value'], rows: [[1, 'one']], truncated: false });
+  });
+
+  it('rejects invalid query/list payloads before either database port method runs', async () => {
+    const select = vi.fn(async () => ({ columns: [], rows: [], truncated: false }));
+    const connections = vi.fn(async () => []);
+    const server = await createMcpHttpServer({ ...fullOptions('database-schema-secret'), database: { connections, select } });
+    running.push(server);
+    const invalid = [
+      { connectionId: 'reporting', sql: 'SELECT 1', connectionString: 'private-request-marker' },
+      { connectionId: '../private', sql: 'SELECT 1' },
+      { connectionId: 'reporting', sql: '\u00e9'.repeat(8193) },
+      { connectionId: 'reporting', sql: 'SELECT ?', parameters: ['\u00e9'.repeat(4097)] },
+      { connectionId: 'reporting', sql: 'SELECT ?', parameters: [{ nested: 'private-request-marker' }] },
+      { connectionId: 'reporting', sql: 'SELECT ?', parameters: Array(101).fill(1) },
+    ];
+    for (const input of invalid) {
+      const result = (await rpc(server.url, 'database-schema-secret', 'tools/call', {
+        name: 'database_select', arguments: input,
+      }, 1)).result as ToolsCallResult & { isError?: boolean };
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain('private-request-marker');
+    }
+    const result = (await rpc(server.url, 'database-schema-secret', 'tools/call', {
+      name: 'database_connections', arguments: { host: 'private-request-marker' },
+    }, 2)).result as ToolsCallResult & { isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('private-request-marker');
+    expect(select).not.toHaveBeenCalled();expect(connections).not.toHaveBeenCalled();
+  });
+
+  it('requires MCP authentication before connection discovery or SQL dispatch', async () => {
+    const select = vi.fn(async () => ({ columns: [], rows: [], truncated: false }));
+    const connections = vi.fn(async () => []);
+    const server = await createMcpHttpServer({ ...fullOptions('database-auth-secret'), database: { connections, select } });
+    running.push(server);
+    for (const name of ['database_connections', 'database_select']) {
+      for (const auth of [undefined, 'wrong-secret']) {
+        const response = await fetch(`${server.url}/mcp`, { method: 'POST',
+          headers: { 'content-type': 'application/json', ...(auth === undefined ? {} : { 'x-gram-agent-auth': auth }) },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+            name, arguments: name === 'database_connections' ? {} : { connectionId: 'reporting', sql: 'SELECT 1' },
+          } }),
+        });
+        expect(response.status).toBe(401);
+      }
+    }
+    expect(select).not.toHaveBeenCalled();expect(connections).not.toHaveBeenCalled();
+  });
+
+  it('does not forward driver errors, SQL, credentials or connection strings', async () => {
+    const fail = vi.fn(async () => { throw new Error('private-driver-error private-password private-sql private-connection'); });
+    const server = await createMcpHttpServer({ ...fullOptions('database-error-secret'), database: { connections: fail, select: fail } });
+    running.push(server);
+    for (const name of ['database_connections', 'database_select']) {
+      const result = (await rpc(server.url, 'database-error-secret', 'tools/call', {
+        name, arguments: name === 'database_connections' ? {} : { connectionId: 'reporting', sql: 'SELECT 1' },
+      }, 1)).result as ToolsCallResult & { isError?: boolean };
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('Database operation denied or failed');
+      expect(JSON.stringify(result)).not.toMatch(/private-(driver-error|password|sql|connection)/u);
     }
   });
 });
