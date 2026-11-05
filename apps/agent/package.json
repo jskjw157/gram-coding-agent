@@ -25,7 +25,9 @@
     "@gram/task-engine": "workspace:*",
     "@gram/verification": "workspace:*",
     "@gram/workspace": "workspace:*",
-    "@gram/filesystem": "workspace:*"
+    "@gram/filesystem": "workspace:*",
+    "mariadb": "3.5.4",
+    "node-sql-parser": "5.4.0"
   },
   "devDependencies": {
     "typescript": "^6.0.0",

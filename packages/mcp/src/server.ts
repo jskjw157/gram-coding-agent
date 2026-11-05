@@ -1,3 +1,4 @@
+import { registerReadOnlyDatabaseTools, type ReadOnlyDatabaseToolsPort } from './tools/database-tools.js';
 import { registerVerificationReviewTools, type VerificationReviewPort } from './tools/verification-review-tools.js';
 import { registerLocalProjectTools, type LocalProjectToolsPort } from './tools/local-project-tools.js';
 import { registerLocalFsTools, type LocalFsToolsPort } from './tools/local-fs-tools.js';
@@ -51,6 +52,7 @@ export interface CreateMcpHttpServerOptions {
   ownerWorkspace?: OwnerWorkspaceToolsPort;
   localDeveloper?: LocalDeveloperToolsPort;
   egoBrowser?: EgoBrowserToolsPort;
+  database?: ReadOnlyDatabaseToolsPort;
 }
 
 export interface RunningMcpServer {
@@ -120,6 +122,7 @@ export async function createMcpHttpServer(options: CreateMcpHttpServerOptions): 
     if (options.ownerWorkspace !== undefined) registerOwnerWorkspaceTools(server, options.ownerWorkspace);
     if (options.localDeveloper !== undefined) registerLocalDeveloperTools(server, options.localDeveloper);
     if (options.egoBrowser !== undefined) registerEgoBrowserTools(server, options.egoBrowser);
+    if (options.database !== undefined) registerReadOnlyDatabaseTools(server, options.database);
 
     return server;
   });
