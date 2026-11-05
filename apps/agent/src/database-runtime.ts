@@ -27,6 +27,7 @@ async function metadata(connection: Connection, sql: string, failTransport: () =
     const finish = (error?: Error) => { if (!settled) { settled = true; if (error) reject(error); else resolve(rows); } };
     stream.on('error', () => finish(denied()));
     stream.on('end', () => {
+      if (settled) return;
       if (command && !okSeen) { failTransport(); finish(denied()); } else finish();
     });
     stream.on('fields', () => { fieldsSeen = true; if (command) { failTransport(); finish(denied()); } });

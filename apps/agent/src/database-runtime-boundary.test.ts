@@ -36,7 +36,7 @@ const input = { connectionId: 'business', sql: 'SELECT 42 AS answer' };
 let runtime: DatabaseRuntime | undefined;
 let releaseHangs = () => {};
 
-function fixture(settings: { identityHang?: boolean; targetEndFails?: boolean; grantRows?: number; grantBytes?: number; verifiedControlHang?: boolean; rollbackHang?: boolean; userStreamError?: boolean; killKeepsBusy?: boolean } = {}) {
+function fixture(settings: { identityHang?: boolean; targetEndFails?: boolean; grantRows?: number; grantBytes?: number; verifiedControlHang?: boolean; rollbackHang?: boolean; userStreamError?: boolean; killKeepsBusy?: boolean; invalidCommandEndsAfterError?: boolean } = {}) {
   const buffered = vi.fn();
   const pending: (() => void)[] = [];
   const state = { identitySeen: false, prepared: false, killSeen: false, rollbackSeen: false, processListSeen: 0,
@@ -101,6 +101,12 @@ function fixture(settings: { identityHang?: boolean; targetEndFails?: boolean; g
         return values;
       }),
       queryStream: vi.fn((value: unknown) => {
+        if (invalid && settings.invalidCommandEndsAfterError) {
+          const result = new Readable({ objectMode: true, read() {} });
+          result.on('error', () => {});
+          void Promise.resolve().then(() => { result.emit('error', new Error('Fixture closed command'));result.emit('end'); });
+          return result;
+        }
         if (socket?.destroyed || invalid) return stream([], []);
         const sql = text(value);const values = rows(sql);
         const command = sql.startsWith('SET SESSION ') || sql === 'START TRANSACTION READ ONLY' ||
@@ -235,9 +241,11 @@ describe('database driver resource boundaries (mocked protocol, not SQL authorit
   it.each([
     { command: 'Sleep', killKeepsBusy: false },
     { command: 'Query', killKeepsBusy: true },
+    { command: 'Sleep after a failed command emits error then end', killKeepsBusy: false, invalidCommandEndsAfterError: true },
   ])('retains the lease through unexpected stream failure and inspects $command proof', async settings => {
     vi.useFakeTimers();
-    const { runtime: current, dispose, state } = fixture({ userStreamError: true, killKeepsBusy: settings.killKeepsBusy });
+    const { runtime: current, dispose, state } = fixture({ userStreamError: true, killKeepsBusy: settings.killKeepsBusy,
+      invalidCommandEndsAfterError: settings.invalidCommandEndsAfterError === true });
     let outcome = 'pending';
     const operation = current.tools.select(input, new AbortController().signal).then(
       () => { outcome = 'resolved'; }, () => { outcome = 'rejected'; },
