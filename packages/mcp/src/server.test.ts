@@ -4,6 +4,7 @@ import {
   type CreateMcpHttpServerOptions,
   type RunningMcpServer,
 } from './server.js';
+import { createMcpToolServer } from './tool-catalog.js';
 import type { ApprovalToolsPort } from './tools/approval-tools.js';
 import type { OwnerWorkspaceToolsPort } from './tools/owner-workspace-tools.js';
 import type { LocalDeveloperToolsPort } from './tools/local-developer-tools.js';
@@ -402,5 +403,14 @@ describe('owner-approved multi-root filesystem MCP catalog', () => {
     ]) {
       expect(names).toContain(method);
     }
+  });
+  it('rejects mixed owner and legacy authority at the direct catalog factory boundary', () => {
+    const owner = {} as never;
+    expect(() => createMcpToolServer({ ownerWorkspace: owner, localFs: {} as never })).toThrow(
+      'Owner workspace cannot share legacy filesystem authority',
+    );
+    expect(() => createMcpToolServer({ ownerWorkspace: owner, localProject: {} as never })).toThrow(
+      'Owner workspace cannot share legacy filesystem authority',
+    );
   });
 });

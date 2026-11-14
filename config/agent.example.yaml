@@ -1,3 +1,5 @@
+# Illustrative configuration template only. The current agent does not load this
+# file; the runtime reads its configuration from environment variables.
 mcp:
   host: 127.0.0.1
   port: 3847

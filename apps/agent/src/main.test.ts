@@ -365,7 +365,9 @@ function readTaskStatus(stateDirectory: string, taskId: string): string | null {
   }
 }
 
-it('registers authenticated production coding tools without controller credentials or network calls', async () => {
+it('advertises exactly the tools wired by the production composition', async () => {
+  vi.stubEnv('GRAM_AGENT_OWNER_WORKSPACE_CONFIG', undefined);
+  vi.stubEnv('GRAM_AGENT_EGO_BROWSER_MODE', undefined);
   const app = await startAgent({ ...fixture(), port: 0, installSignalHandlers: false });
   running.push(app);
   const response = await fetch(`${app.url}/mcp`, {
@@ -378,12 +380,44 @@ it('registers authenticated production coding tools without controller credentia
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
   });
   expect(response.status).toBe(200);
-  const tools = await response.text();
-  expect(tools).toContain('coding_step_get');
-  expect(tools).toContain('coding_step_submit');
-  expect(tools).toContain('verification_review_get');
-  expect(tools).toContain('verification_review_submit');
+  const payload = parseMcpJsonRpcBody(await response.text()) as {
+    result?: { tools?: { name: string }[] };
+  };
+  const names = (payload.result?.tools ?? []).map((tool) => tool.name).sort();
+  expect(names).toEqual([
+    'agent_health',
+    'approval_approve',
+    'approval_deny',
+    'approval_list',
+    'coding_step_fail',
+    'coding_step_get',
+    'coding_step_read',
+    'coding_step_submit',
+    'task_create',
+    'task_get',
+    'task_list',
+    'task_logs',
+    'task_result',
+    'verification_review_fail',
+    'verification_review_get',
+    'verification_review_read',
+    'verification_review_submit',
+  ]);
 });
+
+function parseMcpJsonRpcBody(body: string): unknown {
+  const trimmed = body.trim();
+  if (trimmed.startsWith('{')) return JSON.parse(trimmed) as unknown;
+  // The SDK may stream responses as Server-Sent Events; use the last data frame.
+  const lastDataLine = trimmed
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice('data:'.length).trim())
+    .filter((line) => line.length > 0)
+    .at(-1);
+  if (lastDataLine === undefined) throw new Error(`Unrecognized MCP response body: ${body}`);
+  return JSON.parse(lastDataLine) as unknown;
+}
 
 it('composes fail-closed production GitHub services without acquiring a credential at startup', async () => {
   const factory = vi.spyOn(githubServices, 'createProductionGitHubServices');

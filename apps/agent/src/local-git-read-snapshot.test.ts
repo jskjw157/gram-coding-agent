@@ -72,6 +72,9 @@ function validGitIndex(paths: string[]): Buffer {
   return Buffer.concat([content, createHash('sha1').update(content).digest()]);
 }
 
+// Observed: the 1 MiB pack test exceeded Vitest's 5 s default once in the
+// full suite; isolated runs were ~2 s. The root cause is unproven. This is a
+// bounded 10 s timeout; the fixture size and every assertion are unchanged.
 it('skips only checksum-verified untracked generated root directories while retaining source and Git pack bytes', async () => {
   const f = fixture();const packPath = '.git/objects/pack/pack-' + 'a'.repeat(40) + '.pack';
   const pack = Buffer.alloc(1024 * 1024 + 100, 42);
@@ -86,7 +89,7 @@ it('skips only checksum-verified untracked generated root directories while reta
     expect(readFileSync(join(snapshot.workspace, packPath))).toEqual(pack);
     expect(() => readFileSync(join(snapshot.workspace, 'node_modules/a.js'))).toThrow();
   } finally {await snapshot.close();}
-});
+}, 10_000);
 
 it('does not discard untracked folders when Git index checksum is invalid', async () => {
   const f = fixture();
