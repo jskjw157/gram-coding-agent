@@ -49,15 +49,61 @@ ChatGPT / MCP 클라이언트의 코드 수정·검증·PR 게시 요청을 **�
 | 명령 실행 격리 설계 | [`docs/security/command-isolation-design.md`](docs/security/command-isolation-design.md) |
 | 보안 · E2E 테스트 스위트 | [`tests/security/`](tests/security/), [`tests/e2e/`](tests/e2e/) |
 
-## 실행 및 테스트
+## 사용 방법
+
+### 1. 사전 준비 및 시크릿 설정
 
 - **요구 환경**: Node.js `>=24 <25`, `pnpm@10.34.5`
+- 실행 시 상태 디렉터리(`GRAM_AGENT_STATE_DIR`)와 시크릿 디렉터리(`GRAM_AGENT_SECRET_DIR`) 두 환경변수가 필수입니다.
+- 시크릿 디렉터리 안에 MCP 내부 인증 키 파일 `mcp-internal-secret`을 준비합니다(`FileSecretProvider`가 기동 시 읽습니다).
 
 ```bash
-# 의존성 설치 및 전체 빌드
+# 1) 의존성 설치 및 빌드
 pnpm install
 pnpm build
 
+# 2) 상태·시크릿 디렉터리 및 MCP 내부 인증 시크릿 준비
+mkdir -p ~/.gram-agent/state ~/.gram-agent/secrets
+chmod 700 ~/.gram-agent/secrets
+openssl rand -hex 32 > ~/.gram-agent/secrets/mcp-internal-secret
+chmod 600 ~/.gram-agent/secrets/mcp-internal-secret
+```
+
+설정 구조 예시는 [`config/agent.example.yaml`](config/agent.example.yaml)과 [`config/tunnel-client.example.yaml`](config/tunnel-client.example.yaml)을 참고합니다.
+
+### 2. 에이전트 서버 실행
+
+```bash
+# 로컬 실행 (기본 바인딩: http://127.0.0.1:3847/mcp)
+GRAM_AGENT_STATE_DIR=~/.gram-agent/state \
+GRAM_AGENT_SECRET_DIR=~/.gram-agent/secrets \
+node apps/agent/dist/main.js
+```
+
+- **Linux 상시 운영 (`systemd`)**: [`systemd/gram-coding-agent.service`](systemd/gram-coding-agent.service)와 [`systemd/openai-mcp-tunnel.service`](systemd/openai-mcp-tunnel.service)를 사용합니다(`UMask=0077`).
+- **외부 ChatGPT / MCP 터널 연결**: OpenAI MCP Tunnel이 로컬 `http://127.0.0.1:3847/mcp`로 요청을 전달하며, `X-Gram-Agent-Auth` 헤더에 `mcp-internal-secret` 값을 담아 인증합니다. 상세 설정은 [`docs/operations/tunnel-setup.md`](docs/operations/tunnel-setup.md)를 참고합니다.
+
+### 3. 기본 작업 흐름 (MCP 도구 호출 순서)
+
+1. **상태 확인 · 저장소 등록**: `agent_health`로 기동 상태를 확인하고 `repo_register` / `repo_list`로 대상 저장소를 등록·조회합니다.
+2. **태스크 생성 · 작업 격리**: `task_create`로 작업을 시작하면 독립 `git worktree`와 저장소 변이 락이 할당됩니다(`task_get`, `task_logs`, `task_result`로 진행 추적).
+3. **코드 조회 · 시점 검증 수정**: `coding_step_get` → `coding_step_read`로 대상 파일과 현재 해시를 읽고, `coding_step_submit`으로 변경안을 제출합니다(`expectedSha256` 불일치 시 오래된 수정안 자동 거절).
+4. **위험 명령 1회성 승인**: 정책상 승인이 필요한 명령은 대기 상태가 되며, `approval_list`에서 확인한 뒤 `approval_approve` / `approval_deny`로 처리합니다(`operationHash` 일치 승인 1회만 소비).
+5. **검증 리뷰 · PR 게시**: `verification_review_get` → `verification_review_read` → `verification_review_submit`으로 변경 diff·시크릿 스캔 리뷰를 완료한 뒤, `github_pr_ensure` / `github_pr_checks`로 PR 생성과 CI 상태를 확인합니다(원격 푸시 SHA 확인 후 락 해제).
+
+### 4. 주요 MCP 도구 요약
+
+| 영역 | 주요 도구 |
+|---|---|
+| **에이전트 · 저장소** | `agent_status`, `agent_health`, `agent_logs`, `repo_register`, `repo_list`, `repo_inspect` |
+| **태스크 · 코딩 단계** | `task_create`, `task_get`, `task_list`, `task_result`, `coding_step_get`, `coding_step_read`, `coding_step_submit`, `coding_step_fail` |
+| **승인 · 검증 리뷰** | `approval_list`, `approval_approve`, `approval_deny`, `verification_plan`, `verification_run`, `verification_review_get`, `verification_review_read`, `verification_review_submit` |
+| **코드 · Git · PR** | `code_search`, `file_read`, `file_write`, `file_patch`, `git_status`, `git_diff`, `github_pr_ensure`, `github_pr_checks` |
+| **로컬 파일·프로젝트 (선택)** | `local_fs_*`, `local_project_list`, `local_project_read`, `local_dev_run` ([로컬 FS 가이드](docs/operations/local-filesystem-mcp.md) · [읽기 전용 프로젝트 가이드](docs/operations/local-project-readonly-mcp.md)) |
+
+## 개발 및 테스트
+
+```bash
 # 정적 검사 (Lint + Typecheck)
 pnpm lint
 pnpm typecheck
